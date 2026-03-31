@@ -61,7 +61,7 @@ function setupHappyPath() {
   mockSelect
     .mockResolvedValueOnce("aicers") // owner
     .mockResolvedValueOnce("opus") // agent A model
-    .mockResolvedValueOnce("o3") // agent B model
+    .mockResolvedValueOnce("gpt-5.4") // agent B model
     .mockResolvedValueOnce("auto") // execution mode
     .mockResolvedValueOnce("auto") // permission mode
     .mockResolvedValueOnce("en"); // language
@@ -90,7 +90,7 @@ describe("runStartup — happy path", () => {
     expect(result.repo).toBe("agentcoop");
     expect(result.issue).toEqual(defaultIssue());
     expect(result.agentA).toEqual({ model: "opus" });
-    expect(result.agentB).toEqual({ model: "o3" });
+    expect(result.agentB).toEqual({ model: "gpt-5.4" });
     expect(result.executionMode).toBe("auto");
     expect(result.claudePermissionMode).toBe("auto");
     expect(result.language).toBe("en");
@@ -114,7 +114,7 @@ describe("runStartup — happy path", () => {
     expect(mockGetIssue).toHaveBeenCalledWith("aicers", "agentcoop", 42);
   });
 
-  test("does not save config when language unchanged", async () => {
+  test("does not save config when nothing changed", async () => {
     setupHappyPath();
     await runStartup();
     expect(mockSaveConfig).not.toHaveBeenCalled();
@@ -137,7 +137,7 @@ describe("runStartup — owner selection", () => {
       .mockResolvedValueOnce("1"); // issue number
     mockSelect
       .mockResolvedValueOnce("sonnet") // agent A
-      .mockResolvedValueOnce("o4-mini") // agent B
+      .mockResolvedValueOnce("gpt-5.3-codex") // agent B
       .mockResolvedValueOnce("step") // execution mode
       .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("ko"); // language
@@ -149,8 +149,14 @@ describe("runStartup — owner selection", () => {
     const result = await runStartup();
     expect(result.owner).toBe("new-org");
     expect(config.owners).toContain("new-org");
-    // saveConfig called twice: once for new owner, once for language change (en → ko)
-    expect(mockSaveConfig).toHaveBeenCalledTimes(2);
+    // Config is saved once at the end with both owner and language changes
+    expect(mockSaveConfig).toHaveBeenCalledOnce();
+    expect(mockSaveConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owners: ["new-org"],
+        language: "ko",
+      }),
+    );
   });
 
   test("rejects empty owner input via validate", async () => {
@@ -182,7 +188,7 @@ describe("runStartup — owner selection", () => {
     );
     mockSelect
       .mockResolvedValueOnce("opus")
-      .mockResolvedValueOnce("o3")
+      .mockResolvedValueOnce("gpt-5.4")
       .mockResolvedValueOnce("auto")
       .mockResolvedValueOnce("auto")
       .mockResolvedValueOnce("en");
@@ -206,7 +212,7 @@ describe("runStartup — owner selection", () => {
       .mockResolvedValueOnce("42");
     mockSelect
       .mockResolvedValueOnce("opus")
-      .mockResolvedValueOnce("o3")
+      .mockResolvedValueOnce("gpt-5.4")
       .mockResolvedValueOnce("auto")
       .mockResolvedValueOnce("auto")
       .mockResolvedValueOnce("en");
@@ -453,8 +459,8 @@ describe("runStartup — model selection", () => {
     const values = agentACall.choices.map((c: { value: string }) => c.value);
     expect(values).toContain("opus");
     expect(values).toContain("sonnet");
-    expect(values).toContain("o3");
-    expect(values).toContain("o4-mini");
+    expect(values).toContain("gpt-5.4");
+    expect(values).toContain("gpt-5.3-codex");
     expect(values).toHaveLength(4);
   });
 
@@ -464,7 +470,7 @@ describe("runStartup — model selection", () => {
       .mockReset()
       .mockResolvedValueOnce("aicers") // owner
       .mockResolvedValueOnce("sonnet") // agent A
-      .mockResolvedValueOnce("o4-mini") // agent B
+      .mockResolvedValueOnce("gpt-5.3-codex") // agent B
       .mockResolvedValueOnce("step") // execution mode
       .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("en"); // language
@@ -472,7 +478,7 @@ describe("runStartup — model selection", () => {
 
     const result = await runStartup();
     expect(result.agentA.model).toBe("sonnet");
-    expect(result.agentB.model).toBe("o4-mini");
+    expect(result.agentB.model).toBe("gpt-5.3-codex");
   });
 });
 
@@ -486,7 +492,7 @@ describe("runStartup — language selection", () => {
     mockSelect
       .mockResolvedValueOnce("aicers")
       .mockResolvedValueOnce("opus")
-      .mockResolvedValueOnce("o3")
+      .mockResolvedValueOnce("gpt-5.4")
       .mockResolvedValueOnce("auto")
       .mockResolvedValueOnce("auto")
       .mockResolvedValueOnce("ko"); // changed from "en" to "ko"
@@ -515,7 +521,7 @@ describe("runStartup — language selection", () => {
     mockSelect
       .mockResolvedValueOnce("aicers")
       .mockResolvedValueOnce("opus")
-      .mockResolvedValueOnce("o3")
+      .mockResolvedValueOnce("gpt-5.4")
       .mockResolvedValueOnce("auto")
       .mockResolvedValueOnce("auto")
       .mockResolvedValueOnce("ko"); // same as config, no save
@@ -532,6 +538,65 @@ describe("runStartup — language selection", () => {
     // Language select is the 6th select call (owner, agentA, agentB, exec, perm, lang)
     const langCall = mockSelect.mock.calls[5][0];
     expect(langCall.default).toBe("ko");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Config persistence — dirty tracking
+// ---------------------------------------------------------------------------
+describe("runStartup — config dirty tracking", () => {
+  test("does not save when existing owner selected and language unchanged", async () => {
+    setupHappyPath();
+    await runStartup();
+    expect(mockSaveConfig).not.toHaveBeenCalled();
+  });
+
+  test("saves once when new owner entered and language unchanged", async () => {
+    const config = {
+      owners: [],
+      cloneBaseDir: "~/projects",
+      language: "en" as const,
+    };
+    mockLoadConfig.mockReturnValue(config);
+    mockInput.mockResolvedValueOnce("new-org").mockResolvedValueOnce("1");
+    mockSelect
+      .mockResolvedValueOnce("opus")
+      .mockResolvedValueOnce("gpt-5.4")
+      .mockResolvedValueOnce("auto")
+      .mockResolvedValueOnce("auto")
+      .mockResolvedValueOnce("en"); // same language
+    mockSearch.mockResolvedValueOnce("repo1");
+    mockListRepositories.mockReturnValue([{ name: "repo1", description: "" }]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    await runStartup();
+    expect(mockSaveConfig).toHaveBeenCalledOnce();
+  });
+
+  test("saves once when language changed but owner already existed", async () => {
+    const config = defaultConfig();
+    mockLoadConfig.mockReturnValue(config);
+    mockSelect
+      .mockResolvedValueOnce("aicers")
+      .mockResolvedValueOnce("opus")
+      .mockResolvedValueOnce("gpt-5.4")
+      .mockResolvedValueOnce("auto")
+      .mockResolvedValueOnce("auto")
+      .mockResolvedValueOnce("ko"); // changed
+    mockSearch.mockResolvedValueOnce("agentcoop");
+    mockInput.mockResolvedValueOnce("42");
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    await runStartup();
+    expect(mockSaveConfig).toHaveBeenCalledOnce();
+    expect(mockSaveConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ language: "ko" }),
+    );
   });
 });
 
@@ -556,6 +621,30 @@ describe("runStartup — error propagation", () => {
     });
 
     await expect(runStartup()).rejects.toThrow("gh: command not found");
+  });
+
+  test("does not save config when listRepositories fails after owner input", async () => {
+    const config = {
+      owners: [],
+      cloneBaseDir: "~/projects",
+      language: "en" as const,
+    };
+    mockLoadConfig.mockReturnValue(config);
+    mockInput.mockResolvedValueOnce("bad-org");
+    mockListRepositories.mockImplementation(() => {
+      throw new Error("HTTP 404");
+    });
+
+    await expect(runStartup()).rejects.toThrow("HTTP 404");
+    expect(mockSaveConfig).not.toHaveBeenCalled();
+  });
+
+  test("does not save config when user declines issue confirmation", async () => {
+    setupHappyPath();
+    mockConfirm.mockReset().mockResolvedValueOnce(false);
+
+    await expect(runStartup()).rejects.toThrow("Issue not confirmed");
+    expect(mockSaveConfig).not.toHaveBeenCalled();
   });
 });
 
@@ -702,7 +791,7 @@ describe("runStartup — alternate selections", () => {
     mockSelect
       .mockResolvedValueOnce("my-org")
       .mockResolvedValueOnce("sonnet")
-      .mockResolvedValueOnce("o4-mini")
+      .mockResolvedValueOnce("gpt-5.3-codex")
       .mockResolvedValueOnce("step")
       .mockResolvedValueOnce("bypass")
       .mockResolvedValueOnce("ko");
@@ -725,7 +814,7 @@ describe("runStartup — alternate selections", () => {
     expect(result.repo).toBe("my-repo");
     expect(result.issue.number).toBe(99);
     expect(result.agentA.model).toBe("sonnet");
-    expect(result.agentB.model).toBe("o4-mini");
+    expect(result.agentB.model).toBe("gpt-5.3-codex");
     expect(result.executionMode).toBe("step");
     expect(result.claudePermissionMode).toBe("bypass");
     expect(result.language).toBe("ko");

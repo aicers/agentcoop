@@ -25,28 +25,39 @@ const CLAUDE_MODELS = [
 ];
 
 const CODEX_MODELS = [
-  { name: "Codex o3", value: "o3" },
-  { name: "Codex o4-mini", value: "o4-mini" },
+  { name: "GPT-5.4", value: "gpt-5.4" },
+  { name: "GPT-5.3-Codex", value: "gpt-5.3-codex" },
 ];
 
 const ALL_MODELS = [...CLAUDE_MODELS, ...CODEX_MODELS];
 
 export async function runStartup(): Promise<StartupResult> {
   const config = loadConfig();
+  let configDirty = false;
 
-  const owner = await selectOwner(config);
+  const { owner, dirty: ownerDirty } = await selectOwner(config);
+  configDirty ||= ownerDirty;
+
   const repo = await selectRepository(owner);
   const issueNumber = await inputIssueNumber();
   const agentA = await selectAgentModel("Agent A (implementer)");
   const agentB = await selectAgentModel("Agent B (reviewer)");
   const executionMode = await selectExecutionMode();
   const claudePermissionMode = await selectClaudePermissionMode();
-  const language = await selectLanguage(config);
+
+  const { language, dirty: langDirty } = await selectLanguage(config);
+  configDirty ||= langDirty;
 
   const issue = getIssue(owner, repo, issueNumber);
   const confirmed = await confirmIssue(owner, repo, issue);
   if (!confirmed) {
     throw new Error("Issue not confirmed. Aborting.");
+  }
+
+  // Only write config when something actually changed, to avoid
+  // dropping unknown keys that loadConfig() normalizes away.
+  if (configDirty) {
+    saveConfig(config);
   }
 
   return {
@@ -61,7 +72,9 @@ export async function runStartup(): Promise<StartupResult> {
   };
 }
 
-async function selectOwner(config: Config): Promise<string> {
+async function selectOwner(
+  config: Config,
+): Promise<{ owner: string; dirty: boolean }> {
   if (config.owners.length === 0) {
     const raw = await input({
       message: "Enter GitHub owner:",
@@ -72,14 +85,14 @@ async function selectOwner(config: Config): Promise<string> {
     });
     const owner = raw.trim();
     config.owners.push(owner);
-    saveConfig(config);
-    return owner;
+    return { owner, dirty: true };
   }
 
-  return select({
+  const owner = await select({
     message: "Select organization:",
     choices: config.owners.map((o) => ({ name: o, value: o })),
   });
+  return { owner, dirty: false };
 }
 
 async function selectRepository(owner: string): Promise<string> {
@@ -146,7 +159,9 @@ async function selectClaudePermissionMode(): Promise<"auto" | "bypass"> {
   });
 }
 
-async function selectLanguage(config: Config): Promise<"en" | "ko"> {
+async function selectLanguage(
+  config: Config,
+): Promise<{ language: "en" | "ko"; dirty: boolean }> {
   const language = await select({
     message: "Language:",
     choices: [
@@ -155,11 +170,9 @@ async function selectLanguage(config: Config): Promise<"en" | "ko"> {
     ],
     default: config.language,
   });
-  if (language !== config.language) {
-    config.language = language;
-    saveConfig(config);
-  }
-  return language;
+  const dirty = language !== config.language;
+  config.language = language;
+  return { language, dirty };
 }
 
 async function confirmIssue(

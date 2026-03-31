@@ -113,10 +113,77 @@ describe("loadConfig", () => {
     expect(config.owners).toEqual([]);
   });
 
+  test("filters out non-string elements from owners array", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ owners: ["valid", 42, null, true, "also-valid"] }),
+    );
+    const config = loadConfig();
+    expect(config.owners).toEqual(["valid", "also-valid"]);
+  });
+
   test("falls back to default when cloneBaseDir is not a string", () => {
     writeFileSync(configPath(), JSON.stringify({ cloneBaseDir: 42 }));
     const config = loadConfig();
     expect(config.cloneBaseDir).toBe("~/projects");
+  });
+
+  test("falls back to default when root value is null", () => {
+    writeFileSync(configPath(), "null");
+    const config = loadConfig();
+    expect(config).toEqual({
+      owners: [],
+      cloneBaseDir: "~/projects",
+      language: "en",
+    });
+  });
+
+  test("falls back to default when root value is a number", () => {
+    writeFileSync(configPath(), "42");
+    const config = loadConfig();
+    expect(config).toEqual({
+      owners: [],
+      cloneBaseDir: "~/projects",
+      language: "en",
+    });
+  });
+
+  test("falls back to default when root value is a string", () => {
+    writeFileSync(configPath(), JSON.stringify("hello"));
+    const config = loadConfig();
+    expect(config).toEqual({
+      owners: [],
+      cloneBaseDir: "~/projects",
+      language: "en",
+    });
+  });
+
+  test("falls back to default when root value is an array", () => {
+    writeFileSync(configPath(), JSON.stringify([1, 2, 3]));
+    const config = loadConfig();
+    expect(config).toEqual({
+      owners: [],
+      cloneBaseDir: "~/projects",
+      language: "en",
+    });
+  });
+
+  test("filters out whitespace-only strings from owners array", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ owners: ["valid", "   ", "", "\t", "also-valid"] }),
+    );
+    const config = loadConfig();
+    expect(config.owners).toEqual(["valid", "also-valid"]);
+  });
+
+  test("trims leading and trailing whitespace from owner strings", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ owners: ["  aicers  ", "my-org\t"] }),
+    );
+    const config = loadConfig();
+    expect(config.owners).toEqual(["aicers", "my-org"]);
   });
 
   test("throws on malformed JSON", () => {

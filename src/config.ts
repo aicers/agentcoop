@@ -27,11 +27,18 @@ export function loadConfig(): Config {
     return { ...DEFAULT_CONFIG, owners: [...DEFAULT_CONFIG.owners] };
   }
   const raw = JSON.parse(readFileSync(path, "utf-8"));
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ...DEFAULT_CONFIG, owners: [...DEFAULT_CONFIG.owners] };
+  }
   const language = VALID_LANGUAGES.has(raw.language)
     ? raw.language
     : DEFAULT_CONFIG.language;
   return {
-    owners: Array.isArray(raw.owners) ? raw.owners : DEFAULT_CONFIG.owners,
+    owners: Array.isArray(raw.owners)
+      ? raw.owners
+          .filter((o: unknown) => typeof o === "string" && o.trim() !== "")
+          .map((o: string) => o.trim())
+      : DEFAULT_CONFIG.owners,
     cloneBaseDir:
       typeof raw.cloneBaseDir === "string"
         ? raw.cloneBaseDir

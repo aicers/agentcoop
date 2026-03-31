@@ -202,18 +202,18 @@ describe("CLI E2E", () => {
     rmSync(tmpHome, { recursive: true, force: true });
   });
 
-  test("exits with non-zero code when run non-interactively", () => {
+  test("exits with code 1 and clean error when run non-interactively", () => {
     try {
       execFileSync("node", [resolve(distDir, "index.js")], {
         encoding: "utf-8",
         env: { ...process.env, HOME: tmpHome },
         stdio: ["pipe", "pipe", "pipe"],
       });
-      // If it somehow succeeds, fail the test
       expect.unreachable("CLI should have exited with non-zero code");
     } catch (error) {
-      const e = error as { status: number };
-      expect(e.status).toBeGreaterThan(0);
+      const e = error as { status: number; stderr: string };
+      expect(e.status).toBe(1);
+      expect(e.stderr).toContain("interactive terminal");
     }
   });
 });

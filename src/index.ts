@@ -2,6 +2,11 @@
 
 import { runStartup } from "./startup.js";
 
+if (!process.stdin.isTTY) {
+  console.error("agentcoop requires an interactive terminal.");
+  process.exit(1);
+}
+
 try {
   const result = await runStartup();
 
