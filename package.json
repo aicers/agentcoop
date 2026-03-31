@@ -1,0 +1,28 @@
+{
+  "name": "agentcoop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.12.1",
+  "engines": {
+    "node": ">=24.0.0 <25.0.0"
+  },
+  "bin": {
+    "agentcoop": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "check": "biome ci --error-on-warnings .",
+    "fix": "biome check --write src",
+    "format": "biome format --write",
+    "lint": "biome check",
+    "test": "tsc && vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.7",
+    "@types/node": "^24",
+    "typescript": "^5",
+    "vitest": "^4.1.2"
+  }
+}
