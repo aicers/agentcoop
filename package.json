@@ -22,7 +22,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.7",
     "@types/node": "^24",
-    "typescript": "^5",
+    "typescript": "^6",
     "vitest": "^4.1.2"
   },
   "dependencies": {
