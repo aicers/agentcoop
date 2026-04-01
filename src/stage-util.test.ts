@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
 import {
   mapAgentError,
+  mapFixOrDoneResponse,
   mapParsedStepToResult,
   mapResponseToResult,
   sendFollowUp,
@@ -184,6 +185,57 @@ describe("mapResponseToResult", () => {
   test("preserves full response text in message", () => {
     const text = "Long response.\n\nCOMPLETED";
     const result = mapResponseToResult(text);
+    expect(result.message).toBe(text);
+  });
+});
+
+// ---- mapFixOrDoneResponse ---------------------------------------------------
+
+describe("mapFixOrDoneResponse", () => {
+  test("maps DONE to completed (pipeline advances)", () => {
+    // DONE and FIXED both parse to status "fixed" in the step parser,
+    // but the keyword-level check ensures only FIXED loops.
+    const result = mapFixOrDoneResponse("Everything looks good.\n\nDONE");
+    expect(result.outcome).toBe("completed");
+  });
+
+  test("maps FIXED to not_approved (pipeline loops)", () => {
+    const result = mapFixOrDoneResponse("Patched the issue.\n\nFIXED");
+    expect(result.outcome).toBe("not_approved");
+  });
+
+  test("distinguishes DONE from FIXED despite both having 'fixed' status", () => {
+    // Both DONE and FIXED map to StepStatus "fixed" in the parser.
+    // mapFixOrDoneResponse must check the keyword to differentiate.
+    const done = mapFixOrDoneResponse("All verified.\n\nDONE");
+    const fixed = mapFixOrDoneResponse("Patched one item.\n\nFIXED");
+    expect(done.outcome).toBe("completed");
+    expect(fixed.outcome).toBe("not_approved");
+  });
+
+  test("maps COMPLETED to completed", () => {
+    const result = mapFixOrDoneResponse("All set.\n\nCOMPLETED");
+    expect(result.outcome).toBe("completed");
+  });
+
+  test("maps BLOCKED to blocked", () => {
+    const result = mapFixOrDoneResponse("Cannot fix.\n\nBLOCKED");
+    expect(result.outcome).toBe("blocked");
+  });
+
+  test("maps NOT_APPROVED to not_approved", () => {
+    const result = mapFixOrDoneResponse("Not right.\n\nNOT_APPROVED");
+    expect(result.outcome).toBe("not_approved");
+  });
+
+  test("maps ambiguous to needs_clarification", () => {
+    const result = mapFixOrDoneResponse("I looked at things.");
+    expect(result.outcome).toBe("needs_clarification");
+  });
+
+  test("preserves response text in message", () => {
+    const text = "Fixed several items.\n\nFIXED";
+    const result = mapFixOrDoneResponse(text);
     expect(result.message).toBe(text);
   });
 });

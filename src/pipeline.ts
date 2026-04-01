@@ -67,6 +67,16 @@ export interface StageDefinition {
    * When omitted the engine uses its built-in default (3).
    */
   autoBudget?: number;
+  /**
+   * When set, a `"not_approved"` outcome causes the pipeline to jump
+   * back to the given stage number instead of looping within this
+   * stage.  The target must be an earlier stage (backward jump only).
+   *
+   * Example: stage 6 (test plan verification) sets
+   * `restartFromStage: 5` so that code changes are re-validated by
+   * the CI check before re-entering verification.
+   */
+  restartFromStage?: number;
 }
 
 /**
@@ -221,7 +231,34 @@ export async function runPipeline(
   // Sort stages by number to guarantee order.
   const sorted = [...stages].sort((a, b) => a.number - b.number);
 
+  // Validate restartFromStage references at startup.
+  const stageNumbers = new Set(sorted.map((s) => s.number));
   for (const stage of sorted) {
+    if (stage.restartFromStage !== undefined) {
+      if (!stageNumbers.has(stage.restartFromStage)) {
+        throw new Error(
+          `Stage ${stage.number} (${stage.name}) has invalid ` +
+            `restartFromStage: stage ${stage.restartFromStage} does not exist.`,
+        );
+      }
+      if (stage.restartFromStage >= stage.number) {
+        throw new Error(
+          `Stage ${stage.number} (${stage.name}) has invalid ` +
+            `restartFromStage: ${stage.restartFromStage} is not an earlier stage.`,
+        );
+      }
+    }
+  }
+
+  // Pipeline-level restart budget: tracks consecutive restarts per
+  // originating stage so the "3 auto / 4th asks user" contract holds
+  // across backward jumps.
+  const restartCounts = new Map<number, LoopControl>();
+
+  let i = 0;
+  while (i < sorted.length) {
+    const stage = sorted[i];
+
     // In step mode, ask the user before entering each stage.
     if (mode === "step") {
       const ok = await prompt.confirmNextStage(stage.name);
@@ -244,7 +281,50 @@ export async function runPipeline(
       };
     }
 
-    // "skip" and "done" both advance to the next stage.
+    if (result.action === "restart_from") {
+      const targetIdx = sorted.findIndex(
+        (s) => s.number === result.restartFromStage,
+      );
+
+      if (targetIdx === -1 || targetIdx >= i) {
+        return {
+          success: false,
+          stoppedAt: stage.number,
+          message: `Invalid restart target: stage ${result.restartFromStage}.`,
+        };
+      }
+
+      // Pipeline-level budget for restarts originating from this stage.
+      let lc = restartCounts.get(stage.number);
+      if (!lc) {
+        lc = createLoopControl(stage.autoBudget);
+        restartCounts.set(stage.number, lc);
+      }
+
+      const canContinue = advanceLoop(lc);
+      if (!canContinue) {
+        const approved = await prompt.confirmContinueLoop(
+          stage.name,
+          lc.iteration,
+        );
+        if (!approved) {
+          return {
+            success: false,
+            stoppedAt: stage.number,
+            message: `User declined to continue restart loop at iteration ${lc.iteration}.`,
+          };
+        }
+        grantLoopBudget(lc);
+      }
+
+      i = targetIdx;
+      continue;
+    }
+
+    // "done" and "skip" advance to the next stage.
+    // Clear restart budget when a stage completes normally.
+    restartCounts.delete(stage.number);
+    i++;
   }
 
   return {
@@ -257,8 +337,10 @@ export async function runPipeline(
 // ---- single-stage runner -------------------------------------------------
 
 interface StageRunResult {
-  action: "done" | "skip" | "abort";
+  action: "done" | "skip" | "abort" | "restart_from";
   message: string;
+  /** Target stage number — only set when action is `"restart_from"`. */
+  restartFromStage?: number;
 }
 
 /**
@@ -312,6 +394,14 @@ async function runStage(
     }
 
     if (result.outcome === "not_approved") {
+      if (stage.restartFromStage !== undefined) {
+        // Bubble up to the pipeline for a backward stage transition.
+        return {
+          action: "restart_from",
+          message: result.message,
+          restartFromStage: stage.restartFromStage,
+        };
+      }
       // Treat as needing another loop iteration with feedback.
       userInstruction = result.message;
       clarificationAttempted = false;

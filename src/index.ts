@@ -5,8 +5,11 @@ import { createClaudeAdapter } from "./claude-adapter.js";
 import { createCodexAdapter } from "./codex-adapter.js";
 import type { PipelineOptions } from "./pipeline.js";
 import { createDoneStageHandler, runPipeline } from "./pipeline.js";
+import { createCiCheckStageHandler } from "./stage-cicheck.js";
+import { createCreatePrStageHandler } from "./stage-createpr.js";
 import { createImplementStageHandler } from "./stage-implement.js";
 import { createSelfCheckStageHandler } from "./stage-selfcheck.js";
+import { createTestPlanStageHandler } from "./stage-testplan.js";
 import type { AgentConfig } from "./startup.js";
 import { runStartup } from "./startup.js";
 import {
@@ -98,6 +101,24 @@ try {
     autoBudget: result.pipelineSettings.selfCheckAutoIterations,
   };
 
+  const createPrStage = createCreatePrStageHandler({
+    agent: agentA,
+    ...issueCtx,
+  });
+
+  const ciCheckStage = createCiCheckStageHandler({
+    agent: agentA,
+    ...issueCtx,
+  });
+
+  const testPlanStage = {
+    ...createTestPlanStageHandler({
+      agent: agentA,
+      ...issueCtx,
+    }),
+    restartFromStage: 5,
+  };
+
   const doneStage = createDoneStageHandler({
     reportCompletion: async (msg) => console.log(msg),
     confirmMerge: async () => true, // placeholder until real prompts
@@ -107,7 +128,14 @@ try {
 
   const pipelineOpts: PipelineOptions = {
     mode: result.executionMode,
-    stages: [implementStage, selfCheckStage, doneStage],
+    stages: [
+      implementStage,
+      selfCheckStage,
+      createPrStage,
+      ciCheckStage,
+      testPlanStage,
+      doneStage,
+    ],
     prompt: {
       confirmContinueLoop: async () => false,
       confirmNextStage: async () => true,

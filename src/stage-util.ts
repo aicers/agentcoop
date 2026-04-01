@@ -96,3 +96,26 @@ export function mapResponseToResult(
     overrides,
   );
 }
+
+/**
+ * Map a fix-or-done / verify-or-done response to a `StageResult`.
+ *
+ * The step parser maps both FIXED and DONE to `"fixed"` status.  We
+ * distinguish by keyword:
+ *   - DONE  → `"completed"` (stage done, pipeline advances)
+ *   - FIXED → `"not_approved"` (pipeline loops back)
+ *
+ * Shared by the self-check (stage 3) and test-plan verification
+ * (stage 6) handlers.
+ */
+export function mapFixOrDoneResponse(responseText: string): StageResult {
+  const parsed = parseStepStatus(responseText);
+
+  if (parsed.status === "fixed" && parsed.keyword === "FIXED") {
+    return mapParsedStepToResult(parsed, responseText, {
+      fixed: "not_approved",
+    });
+  }
+
+  return mapParsedStepToResult(parsed, responseText);
+}

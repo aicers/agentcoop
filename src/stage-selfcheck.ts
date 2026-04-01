@@ -15,10 +15,9 @@ import type { AgentAdapter } from "./agent.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
   mapAgentError,
-  mapParsedStepToResult,
+  mapFixOrDoneResponse,
   sendFollowUp,
 } from "./stage-util.js";
-import { parseStepStatus } from "./step-parser.js";
 
 export interface SelfCheckStageOptions {
   agent: AgentAdapter;
@@ -108,27 +107,7 @@ export function createSelfCheckStageHandler(
         return mapAgentError(fixResult, "during fix");
       }
 
-      return mapFixResponse(fixResult.responseText);
+      return mapFixOrDoneResponse(fixResult.responseText);
     },
   };
-}
-
-/**
- * Map the fix-or-done response to a StageResult.
- *
- * The parser maps both FIXED and DONE to `"fixed"` status.  We
- * distinguish by keyword:
- *   - DONE  → `"completed"` (stage done, pipeline advances)
- *   - FIXED → `"not_approved"` (pipeline loops back)
- */
-function mapFixResponse(responseText: string): StageResult {
-  const parsed = parseStepStatus(responseText);
-
-  if (parsed.status === "fixed" && parsed.keyword === "FIXED") {
-    return mapParsedStepToResult(parsed, responseText, {
-      fixed: "not_approved",
-    });
-  }
-
-  return mapParsedStepToResult(parsed, responseText);
 }
