@@ -60,9 +60,11 @@ export function mapParsedStepToResult(
 }
 
 /**
- * Send a follow-up prompt to the agent, resuming the session if a
- * `sessionId` is available and falling back to a fresh `invoke`
- * otherwise.
+ * Send a follow-up prompt to the agent by resuming the session.
+ *
+ * Throws if `sessionId` is undefined — a follow-up without session
+ * context would produce an ungrounded response because the agent has
+ * never seen the preceding conversation.
  */
 export async function sendFollowUp(
   agent: AgentAdapter,
@@ -70,9 +72,13 @@ export async function sendFollowUp(
   prompt: string,
   cwd: string,
 ): Promise<AgentResult> {
-  const stream = sessionId
-    ? agent.resume(sessionId, prompt, { cwd })
-    : agent.invoke(prompt, { cwd });
+  if (sessionId === undefined) {
+    throw new Error(
+      "Cannot send follow-up: no session ID from the previous turn. " +
+        "The agent CLI may have failed to return a session.",
+    );
+  }
+  const stream = agent.resume(sessionId, prompt, { cwd });
   return stream.result;
 }
 

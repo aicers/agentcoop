@@ -138,24 +138,15 @@ describe("createImplementStageHandler", () => {
     });
   });
 
-  test("falls back to invoke when sessionId is undefined", async () => {
+  test("throws when implementation returns no sessionId", async () => {
     const implResult = makeResult({
       sessionId: undefined,
       responseText: "Code written.",
     });
     const agent = makeAgent(implResult);
-    // Second invoke returns COMPLETED
-    const checkStream = makeStream(makeResult({ responseText: "COMPLETED" }));
-    (agent.invoke as ReturnType<typeof vi.fn>)
-      .mockReturnValueOnce(makeStream(implResult))
-      .mockReturnValueOnce(checkStream);
 
     const stage = createImplementStageHandler(makeOpts({ agent }));
-    const result = await stage.handler(BASE_CTX);
-
-    expect(agent.invoke).toHaveBeenCalledTimes(2);
-    expect(agent.resume).not.toHaveBeenCalled();
-    expect(result.outcome).toBe("completed");
+    await expect(stage.handler(BASE_CTX)).rejects.toThrow("no session ID");
   });
 
   // -- outcome mapping -------------------------------------------------------
@@ -231,26 +222,6 @@ describe("createImplementStageHandler", () => {
 
     expect(result.outcome).toBe("error");
     expect(result.message).toContain("crash");
-    expect(result.message).toContain("completion check");
-  });
-
-  test("returns error with context when check fails via invoke fallback", async () => {
-    const implResult = makeResult({ sessionId: undefined });
-    const checkResult = makeResult({
-      status: "error",
-      errorType: "unknown",
-      stderrText: "",
-      responseText: "",
-    });
-    const agent = makeAgent(implResult);
-    (agent.invoke as ReturnType<typeof vi.fn>)
-      .mockReturnValueOnce(makeStream(implResult))
-      .mockReturnValueOnce(makeStream(checkResult));
-
-    const stage = createImplementStageHandler(makeOpts({ agent }));
-    const result = await stage.handler(BASE_CTX);
-
-    expect(result.outcome).toBe("error");
     expect(result.message).toContain("completion check");
   });
 

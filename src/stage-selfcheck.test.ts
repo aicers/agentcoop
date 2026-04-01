@@ -139,22 +139,12 @@ describe("createSelfCheckStageHandler", () => {
     );
   });
 
-  test("falls back to invoke when sessionId is undefined", async () => {
+  test("throws when self-check returns no sessionId", async () => {
     const checkResult = makeResult({ sessionId: undefined });
-    const fixResult = makeResult({ responseText: "OK.\n\nDONE" });
-    const agent = makeAgent(checkResult, fixResult);
-    const invokeResults = [makeStream(checkResult), makeStream(fixResult)];
-    let invokeCalls = 0;
-    (agent.invoke as ReturnType<typeof vi.fn>).mockImplementation(() => {
-      return invokeResults[invokeCalls++];
-    });
+    const agent = makeAgent(checkResult);
 
     const stage = createSelfCheckStageHandler(makeOpts({ agent }));
-    const result = await stage.handler(BASE_CTX);
-
-    expect(agent.invoke).toHaveBeenCalledTimes(2);
-    expect(agent.resume).not.toHaveBeenCalled();
-    expect(result.outcome).toBe("completed");
+    await expect(stage.handler(BASE_CTX)).rejects.toThrow("no session ID");
   });
 
   // -- outcome mapping: DONE vs FIXED ---------------------------------------
@@ -264,25 +254,6 @@ describe("createSelfCheckStageHandler", () => {
 
     expect(result.outcome).toBe("error");
     expect(result.message).toContain("crash");
-    expect(result.message).toContain("during fix");
-  });
-
-  test("returns error when fix fails via invoke fallback", async () => {
-    const checkResult = makeResult({ sessionId: undefined });
-    const fixResult = makeResult({
-      status: "error",
-      errorType: "max_turns",
-      responseText: "",
-    });
-    const agent = makeAgent(checkResult);
-    (agent.invoke as ReturnType<typeof vi.fn>)
-      .mockReturnValueOnce(makeStream(checkResult))
-      .mockReturnValueOnce(makeStream(fixResult));
-
-    const stage = createSelfCheckStageHandler(makeOpts({ agent }));
-    const result = await stage.handler(BASE_CTX);
-
-    expect(result.outcome).toBe("error");
     expect(result.message).toContain("during fix");
   });
 

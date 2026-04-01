@@ -207,28 +207,16 @@ describe("sendFollowUp", () => {
     expect(result.responseText).toBe("resumed");
   });
 
-  test("invokes fresh when sessionId is undefined", async () => {
-    const expected = makeResult({ responseText: "invoked" });
+  test("throws when sessionId is undefined", async () => {
     const agent: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(makeStream(expected)),
+      invoke: vi.fn(),
       resume: vi.fn(),
     };
 
-    const result = await sendFollowUp(agent, undefined, "prompt", "/cwd");
-
-    expect(agent.invoke).toHaveBeenCalledWith("prompt", { cwd: "/cwd" });
+    await expect(
+      sendFollowUp(agent, undefined, "prompt", "/cwd"),
+    ).rejects.toThrow("no session ID");
+    expect(agent.invoke).not.toHaveBeenCalled();
     expect(agent.resume).not.toHaveBeenCalled();
-    expect(result.responseText).toBe("invoked");
-  });
-
-  test("passes cwd correctly", async () => {
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
-      resume: vi.fn(),
-    };
-
-    await sendFollowUp(agent, undefined, "p", "/my/worktree");
-
-    expect(agent.invoke).toHaveBeenCalledWith("p", { cwd: "/my/worktree" });
   });
 });
