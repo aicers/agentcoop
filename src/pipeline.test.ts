@@ -720,6 +720,271 @@ describe("runPipeline — edge cases", () => {
 });
 
 // ---------------------------------------------------------------------------
+// runPipeline — backward stage transition (restartFromStage)
+// ---------------------------------------------------------------------------
+describe("runPipeline — backward stage transition", () => {
+  test("restartFromStage causes pipeline to jump back to earlier stage", async () => {
+    const order: number[] = [];
+    let s2calls = 0;
+    const stages = [
+      makeStage(1, async () => {
+        order.push(1);
+        return { outcome: "completed", message: "" };
+      }),
+      makeStage(
+        2,
+        async () => {
+          order.push(2);
+          s2calls++;
+          if (s2calls === 1) {
+            return { outcome: "not_approved", message: "need restart" };
+          }
+          return { outcome: "completed", message: "" };
+        },
+        { restartFromStage: 1 },
+      ),
+    ];
+    const result = await runPipeline(makePipelineOpts({ stages }));
+    expect(result.success).toBe(true);
+    // Stage 1 → Stage 2 (not_approved → restart from 1) → Stage 1 → Stage 2 (completed)
+    expect(order).toEqual([1, 2, 1, 2]);
+  });
+
+  test("restart budget: 3 auto restarts then asks user", async () => {
+    let s2calls = 0;
+    const prompt = makePrompt({
+      confirmContinueLoop: vi.fn().mockResolvedValue(false),
+    });
+    const stages = [
+      makeStage(1, async () => ({ outcome: "completed", message: "" })),
+      makeStage(
+        2,
+        async () => {
+          s2calls++;
+          return { outcome: "not_approved", message: "restart" };
+        },
+        { restartFromStage: 1 },
+      ),
+    ];
+    const result = await runPipeline(makePipelineOpts({ stages, prompt }));
+    expect(result.success).toBe(false);
+    expect(result.stoppedAt).toBe(2);
+    // 3 auto restarts, then user asked and declines
+    expect(prompt.confirmContinueLoop).toHaveBeenCalledTimes(1);
+    // Stage 1 runs 3 times (once initial + re-entered on each restart),
+    // Stage 2 runs 3 times (initial + 2 re-entries before budget check)
+    // Actually: initial run = stage1 + stage2(restart). Then stage1 + stage2(restart).
+    // Then stage1 + stage2(restart, budget=0, ask user, decline).
+    // So s2calls = 3.
+    expect(s2calls).toBe(3);
+  });
+
+  test("restart budget: user approves then 3 more auto restarts", async () => {
+    let s2calls = 0;
+    const prompt = makePrompt({
+      confirmContinueLoop: vi
+        .fn()
+        .mockResolvedValueOnce(true)
+        .mockResolvedValue(false),
+    });
+    const stages = [
+      makeStage(1, async () => ({ outcome: "completed", message: "" })),
+      makeStage(
+        2,
+        async () => {
+          s2calls++;
+          return { outcome: "not_approved", message: "restart" };
+        },
+        { restartFromStage: 1 },
+      ),
+    ];
+    const result = await runPipeline(makePipelineOpts({ stages, prompt }));
+    expect(result.success).toBe(false);
+    // 3 auto + user approves + 3 more + user declines = 6
+    expect(s2calls).toBe(6);
+    expect(prompt.confirmContinueLoop).toHaveBeenCalledTimes(2);
+  });
+
+  test("restart budget uses stage autoBudget override", async () => {
+    let s2calls = 0;
+    const prompt = makePrompt({
+      confirmContinueLoop: vi.fn().mockResolvedValue(false),
+    });
+    const stages = [
+      makeStage(1, async () => ({ outcome: "completed", message: "" })),
+      makeStage(
+        2,
+        async () => {
+          s2calls++;
+          return { outcome: "not_approved", message: "restart" };
+        },
+        { restartFromStage: 1, autoBudget: 2 },
+      ),
+    ];
+    await runPipeline(makePipelineOpts({ stages, prompt }));
+    expect(s2calls).toBe(2);
+  });
+
+  test("restart budget clears when stage completes normally", async () => {
+    // Run pipeline twice (two stages that restart).
+    // Second restart stage should get a fresh budget.
+    let s2calls = 0;
+    let s3calls = 0;
+    const stages = [
+      makeStage(1, async () => ({ outcome: "completed", message: "" })),
+      makeStage(
+        2,
+        async () => {
+          s2calls++;
+          if (s2calls <= 2) {
+            return { outcome: "not_approved", message: "restart" };
+          }
+          return { outcome: "completed", message: "" };
+        },
+        { restartFromStage: 1 },
+      ),
+      makeStage(
+        3,
+        async () => {
+          s3calls++;
+          if (s3calls === 1) {
+            return { outcome: "not_approved", message: "restart" };
+          }
+          return { outcome: "completed", message: "" };
+        },
+        { restartFromStage: 2 },
+      ),
+    ];
+    const result = await runPipeline(makePipelineOpts({ stages }));
+    expect(result.success).toBe(true);
+    expect(s2calls).toBe(4); // 3 from own restarts + 1 from stage 3's restart
+    expect(s3calls).toBe(2);
+  });
+
+  test("invalid restart target (forward jump) throws at startup", async () => {
+    const stages = [
+      makeStage(1, async () => ({ outcome: "completed", message: "" })),
+      makeStage(
+        2,
+        async () => ({ outcome: "not_approved", message: "bad" }),
+        { restartFromStage: 3 }, // forward jump — invalid
+      ),
+      makeStage(3, async () => ({ outcome: "completed", message: "" })),
+    ];
+    await expect(runPipeline(makePipelineOpts({ stages }))).rejects.toThrow(
+      "not an earlier stage",
+    );
+  });
+
+  test("invalid restart target (nonexistent stage) throws at startup", async () => {
+    const stages = [
+      makeStage(1, async () => ({ outcome: "completed", message: "" })),
+      makeStage(2, async () => ({ outcome: "not_approved", message: "bad" }), {
+        restartFromStage: 99,
+      }),
+    ];
+    await expect(runPipeline(makePipelineOpts({ stages }))).rejects.toThrow(
+      "does not exist",
+    );
+  });
+
+  test("self-jump (restartFromStage = own number) throws at startup", async () => {
+    const stages = [
+      makeStage(1, async () => ({ outcome: "not_approved", message: "loop" }), {
+        restartFromStage: 1,
+      }),
+    ];
+    await expect(runPipeline(makePipelineOpts({ stages }))).rejects.toThrow(
+      "not an earlier stage",
+    );
+  });
+
+  test("blocked in stage with restartFromStage does NOT restart", async () => {
+    let s1calls = 0;
+    const prompt = makePrompt({
+      handleBlocked: vi.fn().mockResolvedValue({ action: "halt" }),
+    });
+    const stages = [
+      makeStage(1, async () => {
+        s1calls++;
+        return { outcome: "completed", message: "" };
+      }),
+      makeStage(2, async () => ({ outcome: "blocked", message: "stuck" }), {
+        restartFromStage: 1,
+      }),
+    ];
+    const result = await runPipeline(makePipelineOpts({ stages, prompt }));
+    expect(result.success).toBe(false);
+    expect(s1calls).toBe(1); // stage 1 NOT re-entered
+    expect(prompt.handleBlocked).toHaveBeenCalledOnce();
+  });
+
+  test("error in stage with restartFromStage does NOT restart", async () => {
+    let s1calls = 0;
+    const prompt = makePrompt({
+      handleError: vi.fn().mockResolvedValue({ action: "abort" }),
+    });
+    const stages = [
+      makeStage(1, async () => {
+        s1calls++;
+        return { outcome: "completed", message: "" };
+      }),
+      makeStage(2, async () => ({ outcome: "error", message: "crash" }), {
+        restartFromStage: 1,
+      }),
+    ];
+    const result = await runPipeline(makePipelineOpts({ stages, prompt }));
+    expect(result.success).toBe(false);
+    expect(s1calls).toBe(1);
+    expect(prompt.handleError).toHaveBeenCalledOnce();
+  });
+
+  test("needs_clarification in stage with restartFromStage does NOT restart", async () => {
+    let s1calls = 0;
+    const prompt = makePrompt({
+      handleAmbiguous: vi.fn().mockResolvedValue({ action: "halt" }),
+    });
+    const stages = [
+      makeStage(1, async () => {
+        s1calls++;
+        return { outcome: "completed", message: "" };
+      }),
+      makeStage(
+        2,
+        async () => ({ outcome: "needs_clarification", message: "unclear" }),
+        { restartFromStage: 1 },
+      ),
+    ];
+    const result = await runPipeline(makePipelineOpts({ stages, prompt }));
+    expect(result.success).toBe(false);
+    expect(s1calls).toBe(1);
+  });
+
+  test("step mode asks confirmNextStage on every entry including restart re-entry", async () => {
+    let s2calls = 0;
+    const prompt = makePrompt();
+    const stages = [
+      makeStage(1, async () => ({ outcome: "completed", message: "" })),
+      makeStage(
+        2,
+        async () => {
+          s2calls++;
+          if (s2calls === 1) {
+            return { outcome: "not_approved", message: "restart" };
+          }
+          return { outcome: "completed", message: "" };
+        },
+        { restartFromStage: 1 },
+      ),
+    ];
+    await runPipeline(makePipelineOpts({ mode: "step", stages, prompt }));
+    // Initial: confirm stage 1, confirm stage 2.
+    // After restart: confirm stage 1 again, confirm stage 2 again.
+    expect(prompt.confirmNextStage).toHaveBeenCalledTimes(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // createDoneStageHandler
 // ---------------------------------------------------------------------------
 function makeDoneOpts(
