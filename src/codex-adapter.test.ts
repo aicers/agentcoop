@@ -1,0 +1,486 @@
+import { describe, expect, test } from "vitest";
+import {
+  buildCodexInvokeArgs,
+  buildCodexResumeArgs,
+  extractCodexResumeResponse,
+  parseCodexJsonl,
+  parseCodexPlainText,
+} from "./codex-adapter.js";
+
+// ---------------------------------------------------------------------------
+// parseCodexJsonl — real `codex exec --json` JSONL format
+// ---------------------------------------------------------------------------
+describe("parseCodexJsonl", () => {
+  test("extracts thread_id and agent_message from JSONL events", () => {
+    const lines = [
+      JSON.stringify({
+        type: "thread.started",
+        thread_id: "019d46a1-d07f-7bc3-b96d-d50d44001c82",
+      }),
+      JSON.stringify({ type: "turn.started" }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item_0", type: "reasoning", text: "Thinking..." },
+      }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item_1", type: "agent_message", text: "4" },
+      }),
+      JSON.stringify({
+        type: "turn.completed",
+        usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 5 },
+      }),
+    ].join("\n");
+
+    expect(parseCodexJsonl(lines)).toEqual({
+      sessionId: "019d46a1-d07f-7bc3-b96d-d50d44001c82",
+      responseText: "4",
+      status: "success",
+      errorType: undefined,
+      stderrText: "",
+    });
+  });
+
+  test("uses last agent_message when multiple are present", () => {
+    const lines = [
+      JSON.stringify({ type: "thread.started", thread_id: "sess-2" }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item_0", type: "agent_message", text: "first" },
+      }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item_1", type: "agent_message", text: "final answer" },
+      }),
+    ].join("\n");
+
+    expect(parseCodexJsonl(lines).responseText).toBe("final answer");
+  });
+
+  test("ignores reasoning items for responseText", () => {
+    const lines = [
+      JSON.stringify({ type: "thread.started", thread_id: "sess-3" }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item_0", type: "reasoning", text: "Let me think..." },
+      }),
+    ].join("\n");
+
+    expect(parseCodexJsonl(lines).responseText).toBe("");
+  });
+
+  test("detects turn.failed and returns error", () => {
+    const lines = [
+      JSON.stringify({ type: "thread.started", thread_id: "sess-fail" }),
+      JSON.stringify({ type: "turn.started" }),
+      JSON.stringify({
+        type: "turn.failed",
+        error: { message: "unexpected status 400" },
+      }),
+    ].join("\n");
+
+    const result = parseCodexJsonl(lines);
+    expect(result.status).toBe("error");
+    expect(result.responseText).toBe("unexpected status 400");
+    expect(result.sessionId).toBe("sess-fail");
+  });
+
+  test("handles JSONL with only thread.started (no items)", () => {
+    const lines = JSON.stringify({
+      type: "thread.started",
+      thread_id: "sess-4",
+    });
+
+    const result = parseCodexJsonl(lines);
+    expect(result.sessionId).toBe("sess-4");
+    expect(result.responseText).toBe("");
+    expect(result.status).toBe("success");
+  });
+
+  test("ignores blank lines in input", () => {
+    const lines = [
+      JSON.stringify({ type: "thread.started", thread_id: "sess-6" }),
+      "",
+      "  ",
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item_0", type: "agent_message", text: "ok" },
+      }),
+    ].join("\n");
+
+    const result = parseCodexJsonl(lines);
+    expect(result.sessionId).toBe("sess-6");
+    expect(result.responseText).toBe("ok");
+  });
+
+  test("throws on invalid JSON line", () => {
+    expect(() => parseCodexJsonl("not json")).toThrow();
+  });
+
+  test("handles missing thread.started (sessionId is undefined)", () => {
+    const lines = JSON.stringify({
+      type: "item.completed",
+      item: { id: "item_0", type: "agent_message", text: "no thread" },
+    });
+
+    const result = parseCodexJsonl(lines);
+    expect(result.sessionId).toBeUndefined();
+    expect(result.responseText).toBe("no thread");
+  });
+
+  test("captures first thread_id only", () => {
+    const lines = [
+      JSON.stringify({ type: "thread.started", thread_id: "first-id" }),
+      JSON.stringify({ type: "thread.started", thread_id: "second-id" }),
+    ].join("\n");
+
+    expect(parseCodexJsonl(lines).sessionId).toBe("first-id");
+  });
+
+  test("ignores unknown event types gracefully", () => {
+    const lines = [
+      JSON.stringify({ type: "thread.started", thread_id: "sess-unk" }),
+      JSON.stringify({ type: "some.future.event", data: 123 }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item_0", type: "agent_message", text: "hello" },
+      }),
+    ].join("\n");
+
+    const result = parseCodexJsonl(lines);
+    expect(result.responseText).toBe("hello");
+    expect(result.status).toBe("success");
+  });
+
+  test("detects error events with retry messages", () => {
+    const lines = [
+      JSON.stringify({ type: "thread.started", thread_id: "sess-retry" }),
+      JSON.stringify({ type: "turn.started" }),
+      JSON.stringify({
+        type: "error",
+        message: "stream error: unexpected status 400; retrying 1/5",
+      }),
+      JSON.stringify({
+        type: "turn.failed",
+        error: { message: "unexpected status 400" },
+      }),
+    ].join("\n");
+
+    const result = parseCodexJsonl(lines);
+    expect(result.status).toBe("error");
+    expect(result.sessionId).toBe("sess-retry");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractCodexResumeResponse
+// ---------------------------------------------------------------------------
+describe("extractCodexResumeResponse", () => {
+  const BANNER = [
+    "OpenAI Codex v0.46.0 (research preview)",
+    "--------",
+    "workdir: /some/path",
+    "model: gpt-5.4",
+    "provider: openai",
+    "approval: never",
+    "sandbox: read-only",
+    "reasoning effort: high",
+    "reasoning summaries: auto",
+    "session id: 019d46a1-d07f-7bc3-b96d-d50d44001c82",
+    "--------",
+  ].join("\n");
+
+  test("extracts response from full resume output", () => {
+    const text = [
+      BANNER,
+      "user",
+      "What is 2+2?",
+      "codex",
+      "4",
+      "tokens used",
+      "229",
+    ].join("\n");
+
+    expect(extractCodexResumeResponse(text)).toBe("4");
+  });
+
+  test("extracts multiline response", () => {
+    const text = [
+      BANNER,
+      "user",
+      "Explain briefly",
+      "codex",
+      "Line 1",
+      "Line 2",
+      "Line 3",
+      "tokens used",
+      "500",
+    ].join("\n");
+
+    expect(extractCodexResumeResponse(text)).toBe("Line 1\nLine 2\nLine 3");
+  });
+
+  test("returns trimmed text when no codex marker found", () => {
+    expect(extractCodexResumeResponse("  raw output  ")).toBe("raw output");
+  });
+
+  test("handles missing tokens used footer", () => {
+    const text = [BANNER, "user", "prompt", "codex", "answer only"].join("\n");
+
+    expect(extractCodexResumeResponse(text)).toBe("answer only");
+  });
+
+  test("handles empty response between markers", () => {
+    const text = [
+      BANNER,
+      "user",
+      "prompt",
+      "codex",
+      "",
+      "tokens used",
+      "100",
+    ].join("\n");
+
+    expect(extractCodexResumeResponse(text)).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseCodexPlainText
+// ---------------------------------------------------------------------------
+describe("parseCodexPlainText", () => {
+  test("parses successful plain text response with banner stripping", () => {
+    const text = [
+      "OpenAI Codex v0.46.0 (research preview)",
+      "--------",
+      "workdir: /path",
+      "model: gpt-5.4",
+      "session id: sess-1",
+      "--------",
+      "user",
+      "Question",
+      "codex",
+      "Answer",
+      "tokens used",
+      "100",
+    ].join("\n");
+
+    const result = parseCodexPlainText(text, 0, "");
+    expect(result.responseText).toBe("Answer");
+    expect(result.status).toBe("success");
+  });
+
+  test("returns raw text on failure (no banner stripping)", () => {
+    const result = parseCodexPlainText("Error: something broke", 1, "");
+    expect(result.responseText).toBe("Error: something broke");
+    expect(result.status).toBe("error");
+  });
+
+  test("detects 'max turns' keyword as max_turns error", () => {
+    const result = parseCodexPlainText("Error: max turns reached", 1, "");
+    expect(result.status).toBe("error");
+    expect(result.errorType).toBe("max_turns");
+  });
+
+  test("detects 'turn limit' keyword as max_turns error", () => {
+    const result = parseCodexPlainText("Stopped: turn limit exceeded", 1, "");
+    expect(result.errorType).toBe("max_turns");
+  });
+
+  test("detects 'error during execution' keyword", () => {
+    const result = parseCodexPlainText(
+      "error during execution of command",
+      1,
+      "",
+    );
+    expect(result.status).toBe("error");
+    expect(result.errorType).toBe("execution_error");
+  });
+
+  test("detects 'execution error' keyword", () => {
+    const result = parseCodexPlainText("An execution error occurred", 1, "");
+    expect(result.errorType).toBe("execution_error");
+  });
+
+  test("keyword detection is case-insensitive", () => {
+    expect(parseCodexPlainText("MAX TURNS reached", 1, "").errorType).toBe(
+      "max_turns",
+    );
+    expect(parseCodexPlainText("Error During Execution", 1, "").errorType).toBe(
+      "execution_error",
+    );
+  });
+
+  test("detects error keywords from stderr when stdout is clean", () => {
+    const result = parseCodexPlainText(
+      "no keywords here",
+      1,
+      "error during execution",
+    );
+    expect(result.errorType).toBe("execution_error");
+  });
+
+  test("returns unknown error for non-zero exit without keywords", () => {
+    const result = parseCodexPlainText("something failed", 1, "");
+    expect(result.status).toBe("error");
+    expect(result.errorType).toBe("unknown");
+  });
+
+  test("handles null exit code as error", () => {
+    const result = parseCodexPlainText("killed", null, "");
+    expect(result.status).toBe("error");
+    expect(result.errorType).toBe("unknown");
+  });
+
+  test("handles empty output on success", () => {
+    const result = parseCodexPlainText("", 0, "");
+    expect(result.responseText).toBe("");
+    expect(result.status).toBe("success");
+  });
+
+  test("handles empty output on failure", () => {
+    const result = parseCodexPlainText("", 1, "");
+    expect(result.status).toBe("error");
+    expect(result.errorType).toBe("unknown");
+  });
+
+  test("sessionId is always undefined for plain text", () => {
+    expect(parseCodexPlainText("response", 0, "").sessionId).toBeUndefined();
+    expect(parseCodexPlainText("error", 1, "").sessionId).toBeUndefined();
+  });
+
+  test("includes stderrText in result", () => {
+    const result = parseCodexPlainText("output", 0, "some warning");
+    expect(result.stderrText).toBe("some warning");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildCodexInvokeArgs
+// ---------------------------------------------------------------------------
+describe("buildCodexInvokeArgs", () => {
+  test("builds invoke args with default options", () => {
+    const args = buildCodexInvokeArgs("do something", {});
+
+    expect(args).toEqual([
+      "exec",
+      "-s",
+      "danger-full-access",
+      "--json",
+      "do something",
+    ]);
+  });
+
+  test("includes -m when model is specified", () => {
+    const args = buildCodexInvokeArgs("prompt", { model: "gpt-5.4" });
+
+    expect(args).toContain("-m");
+    expect(args).toContain("gpt-5.4");
+    // prompt comes after model
+    expect(args.indexOf("gpt-5.4")).toBeLessThan(args.indexOf("prompt"));
+  });
+
+  test("omits -m when model is undefined", () => {
+    const args = buildCodexInvokeArgs("prompt", {});
+    expect(args).not.toContain("-m");
+    expect(args).not.toContain("--model");
+  });
+
+  test("does not include -a flag (not supported by CLI)", () => {
+    const args = buildCodexInvokeArgs("prompt", {});
+    expect(args).not.toContain("-a");
+    expect(args).not.toContain("never");
+  });
+
+  test("includes -c reasoning effort when specified", () => {
+    const args = buildCodexInvokeArgs("prompt", {
+      reasoningEffort: "high",
+    });
+
+    expect(args).toContain("-c");
+    expect(args).toContain("model_reasoning_effort=high");
+    // -c value comes before the prompt
+    expect(args.indexOf("model_reasoning_effort=high")).toBeLessThan(
+      args.indexOf("prompt"),
+    );
+  });
+
+  test("omits reasoning effort when undefined", () => {
+    const args = buildCodexInvokeArgs("prompt", {});
+    const reArgs = args.filter((a) => a.includes("model_reasoning_effort"));
+    expect(reArgs).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildCodexResumeArgs
+// ---------------------------------------------------------------------------
+describe("buildCodexResumeArgs", () => {
+  test("always includes -c sandbox_mode=danger-full-access", () => {
+    const args = buildCodexResumeArgs("sess-abc", "continue", {});
+
+    expect(args).toContain("-c");
+    expect(args).toContain("sandbox_mode=danger-full-access");
+  });
+
+  test("includes -c model override when model is specified", () => {
+    const args = buildCodexResumeArgs("sess-abc", "continue", {
+      model: "gpt-5.3-codex",
+    });
+
+    expect(args).toContain("-c");
+    expect(args).toContain('model="gpt-5.3-codex"');
+  });
+
+  test("omits model override when model is undefined", () => {
+    const args = buildCodexResumeArgs("sess-abc", "continue", {});
+
+    const modelArgs = args.filter((a) => a.startsWith('model="'));
+    expect(modelArgs).toHaveLength(0);
+  });
+
+  test("places session ID and prompt after config flags", () => {
+    const args = buildCodexResumeArgs("sess-abc", "continue", {
+      model: "gpt-5.4",
+    });
+
+    const sessIdx = args.indexOf("sess-abc");
+    const promptIdx = args.indexOf("continue");
+    expect(sessIdx).toBeGreaterThan(0);
+    expect(promptIdx).toBe(sessIdx + 1);
+    // Both should come after all -c flags
+    const lastCIdx = args.lastIndexOf("-c");
+    expect(sessIdx).toBeGreaterThan(lastCIdx + 1);
+  });
+
+  test("does not include --json (resume outputs plain text)", () => {
+    const args = buildCodexResumeArgs("sess-abc", "continue", {});
+    expect(args).not.toContain("--json");
+  });
+
+  test("does not include -s flag (uses -c for sandbox instead)", () => {
+    const args = buildCodexResumeArgs("sess-1", "prompt", {});
+    expect(args).not.toContain("-s");
+  });
+
+  test("does not include -m flag (uses -c for model instead)", () => {
+    const args = buildCodexResumeArgs("sess-1", "prompt", {
+      model: "gpt-5.4",
+    });
+    expect(args).not.toContain("-m");
+  });
+
+  test("includes -c reasoning effort when specified", () => {
+    const args = buildCodexResumeArgs("sess-1", "prompt", {
+      reasoningEffort: "medium",
+    });
+
+    expect(args).toContain("model_reasoning_effort=medium");
+  });
+
+  test("omits reasoning effort when undefined", () => {
+    const args = buildCodexResumeArgs("sess-1", "prompt", {});
+    const reArgs = args.filter((a) => a.includes("model_reasoning_effort"));
+    expect(reArgs).toHaveLength(0);
+  });
+});
