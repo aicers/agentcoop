@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 
+import type { AgentAdapter } from "./agent.js";
+import { createClaudeAdapter } from "./claude-adapter.js";
+import { createCodexAdapter } from "./codex-adapter.js";
 import type { PipelineOptions } from "./pipeline.js";
 import { createDoneStageHandler, runPipeline } from "./pipeline.js";
+import { createImplementStageHandler } from "./stage-implement.js";
+import { createSelfCheckStageHandler } from "./stage-selfcheck.js";
+import type { AgentConfig } from "./startup.js";
 import { runStartup } from "./startup.js";
 import {
   bootstrapRepo,
@@ -9,6 +15,18 @@ import {
   detectDefaultBranch,
   removeWorktree,
 } from "./worktree.js";
+
+const CLAUDE_MODELS = new Set(["opus", "sonnet"]);
+
+function createAdapter(
+  agentConfig: AgentConfig,
+  permissionMode: "auto" | "bypass",
+): AgentAdapter {
+  if (CLAUDE_MODELS.has(agentConfig.model)) {
+    return createClaudeAdapter({ model: agentConfig.model, permissionMode });
+  }
+  return createCodexAdapter({ model: agentConfig.model });
+}
 
 if (!process.stdin.isTTY) {
   console.error("agentcoop requires an interactive terminal.");
@@ -49,8 +67,24 @@ try {
     );
   }
 
-  // Stage 9 (Done) is always present.  Stages 1–8 come from handler
-  // modules that are not yet implemented (see issues #6, #7, #8).
+  // Create agent adapters.
+  const agentA = createAdapter(result.agentA, result.claudePermissionMode);
+
+  const issueCtx = {
+    issueTitle: result.issue.title,
+    issueBody: result.issue.body,
+  };
+
+  const implementStage = createImplementStageHandler({
+    agent: agentA,
+    ...issueCtx,
+  });
+
+  const selfCheckStage = createSelfCheckStageHandler({
+    agent: agentA,
+    ...issueCtx,
+  });
+
   const doneStage = createDoneStageHandler({
     reportCompletion: async (msg) => console.log(msg),
     confirmMerge: async () => true, // placeholder until real prompts
@@ -60,7 +94,7 @@ try {
 
   const pipelineOpts: PipelineOptions = {
     mode: result.executionMode,
-    stages: [doneStage],
+    stages: [implementStage, selfCheckStage, doneStage],
     prompt: {
       confirmContinueLoop: async () => false,
       confirmNextStage: async () => true,
