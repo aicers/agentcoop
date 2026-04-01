@@ -37,6 +37,12 @@ describe("loadConfig", () => {
       owners: [],
       cloneBaseDir: "~/projects",
       language: "en",
+      pipelineSettings: {
+        selfCheckAutoIterations: 3,
+        reviewAutoRounds: 3,
+        inactivityTimeoutMinutes: 15,
+        autoResumeAttempts: 3,
+      },
     });
     expect(existsSync(configPath())).toBe(true);
   });
@@ -48,6 +54,12 @@ describe("loadConfig", () => {
       owners: [],
       cloneBaseDir: "~/projects",
       language: "en",
+      pipelineSettings: {
+        selfCheckAutoIterations: 3,
+        reviewAutoRounds: 3,
+        inactivityTimeoutMinutes: 15,
+        autoResumeAttempts: 3,
+      },
     });
   });
 
@@ -72,6 +84,12 @@ describe("loadConfig", () => {
     expect(config.owners).toEqual(["foo"]);
     expect(config.cloneBaseDir).toBe("~/projects");
     expect(config.language).toBe("en");
+    expect(config.pipelineSettings).toEqual({
+      selfCheckAutoIterations: 3,
+      reviewAutoRounds: 3,
+      inactivityTimeoutMinutes: 15,
+      autoResumeAttempts: 3,
+    });
   });
 
   test("ignores unknown extra fields", () => {
@@ -86,11 +104,9 @@ describe("loadConfig", () => {
       }),
     );
     const config = loadConfig();
-    expect(config).toEqual({
-      owners: ["bar"],
-      cloneBaseDir: "~/code",
-      language: "en",
-    });
+    expect(config.owners).toEqual(["bar"]);
+    expect(config.cloneBaseDir).toBe("~/code");
+    expect(config.language).toBe("en");
     expect("unknownField" in config).toBe(false);
     expect("nested" in config).toBe(false);
   });
@@ -131,41 +147,33 @@ describe("loadConfig", () => {
   test("falls back to default when root value is null", () => {
     writeFileSync(configPath(), "null");
     const config = loadConfig();
-    expect(config).toEqual({
-      owners: [],
-      cloneBaseDir: "~/projects",
-      language: "en",
-    });
+    expect(config.owners).toEqual([]);
+    expect(config.cloneBaseDir).toBe("~/projects");
+    expect(config.language).toBe("en");
   });
 
   test("falls back to default when root value is a number", () => {
     writeFileSync(configPath(), "42");
     const config = loadConfig();
-    expect(config).toEqual({
-      owners: [],
-      cloneBaseDir: "~/projects",
-      language: "en",
-    });
+    expect(config.owners).toEqual([]);
+    expect(config.cloneBaseDir).toBe("~/projects");
+    expect(config.language).toBe("en");
   });
 
   test("falls back to default when root value is a string", () => {
     writeFileSync(configPath(), JSON.stringify("hello"));
     const config = loadConfig();
-    expect(config).toEqual({
-      owners: [],
-      cloneBaseDir: "~/projects",
-      language: "en",
-    });
+    expect(config.owners).toEqual([]);
+    expect(config.cloneBaseDir).toBe("~/projects");
+    expect(config.language).toBe("en");
   });
 
   test("falls back to default when root value is an array", () => {
     writeFileSync(configPath(), JSON.stringify([1, 2, 3]));
     const config = loadConfig();
-    expect(config).toEqual({
-      owners: [],
-      cloneBaseDir: "~/projects",
-      language: "en",
-    });
+    expect(config.owners).toEqual([]);
+    expect(config.cloneBaseDir).toBe("~/projects");
+    expect(config.language).toBe("en");
   });
 
   test("filters out whitespace-only strings from owners array", () => {
@@ -217,6 +225,122 @@ describe("loadConfig", () => {
     a.owners.push("mutated");
     expect(b.owners).not.toContain("mutated");
   });
+
+  test("reads saved pipelineSettings from config", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        pipelineSettings: {
+          selfCheckAutoIterations: 5,
+          reviewAutoRounds: 2,
+          inactivityTimeoutMinutes: 30,
+          autoResumeAttempts: 1,
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.pipelineSettings).toEqual({
+      selfCheckAutoIterations: 5,
+      reviewAutoRounds: 2,
+      inactivityTimeoutMinutes: 30,
+      autoResumeAttempts: 1,
+    });
+  });
+
+  test("falls back to defaults for invalid pipelineSettings values", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        pipelineSettings: {
+          selfCheckAutoIterations: -1,
+          reviewAutoRounds: "abc",
+          inactivityTimeoutMinutes: 0,
+          autoResumeAttempts: 3.5,
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.pipelineSettings).toEqual({
+      selfCheckAutoIterations: 3,
+      reviewAutoRounds: 3,
+      inactivityTimeoutMinutes: 15,
+      autoResumeAttempts: 3,
+    });
+  });
+
+  test("falls back to defaults when pipelineSettings is not an object", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ owners: [], pipelineSettings: "invalid" }),
+    );
+    const config = loadConfig();
+    expect(config.pipelineSettings).toEqual({
+      selfCheckAutoIterations: 3,
+      reviewAutoRounds: 3,
+      inactivityTimeoutMinutes: 15,
+      autoResumeAttempts: 3,
+    });
+  });
+
+  test("pipelineSettings defaults are isolated from mutations", () => {
+    const config1 = loadConfig();
+    config1.pipelineSettings.selfCheckAutoIterations = 99;
+
+    rmSync(configPath());
+
+    const config2 = loadConfig();
+    expect(config2.pipelineSettings.selfCheckAutoIterations).toBe(3);
+  });
+
+  test("partially valid pipelineSettings keeps valid values", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        pipelineSettings: {
+          selfCheckAutoIterations: 10,
+          reviewAutoRounds: -1,
+          inactivityTimeoutMinutes: "bad",
+          autoResumeAttempts: 5,
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.pipelineSettings.selfCheckAutoIterations).toBe(10);
+    expect(config.pipelineSettings.reviewAutoRounds).toBe(3);
+    expect(config.pipelineSettings.inactivityTimeoutMinutes).toBe(15);
+    expect(config.pipelineSettings.autoResumeAttempts).toBe(5);
+  });
+
+  test("pipelineSettings null falls back to defaults", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ owners: [], pipelineSettings: null }),
+    );
+    const config = loadConfig();
+    expect(config.pipelineSettings).toEqual({
+      selfCheckAutoIterations: 3,
+      reviewAutoRounds: 3,
+      inactivityTimeoutMinutes: 15,
+      autoResumeAttempts: 3,
+    });
+  });
+
+  test("pipelineSettings array falls back to defaults", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ owners: [], pipelineSettings: [1, 2, 3] }),
+    );
+    const config = loadConfig();
+    expect(config.pipelineSettings).toEqual({
+      selfCheckAutoIterations: 3,
+      reviewAutoRounds: 3,
+      inactivityTimeoutMinutes: 15,
+      autoResumeAttempts: 3,
+    });
+  });
 });
 
 describe("saveConfig", () => {
@@ -224,11 +348,19 @@ describe("saveConfig", () => {
     rmSync(tmpHome, { recursive: true, force: true });
   });
 
+  const defaultPS = {
+    selfCheckAutoIterations: 3,
+    reviewAutoRounds: 3,
+    inactivityTimeoutMinutes: 15,
+    autoResumeAttempts: 3,
+  };
+
   test("creates directories and writes config", () => {
     const config = {
       owners: ["org1"],
       cloneBaseDir: "~/code",
       language: "ko" as const,
+      pipelineSettings: { ...defaultPS },
     };
     saveConfig(config);
     const raw = JSON.parse(readFileSync(configPath(), "utf-8"));
@@ -236,18 +368,34 @@ describe("saveConfig", () => {
   });
 
   test("written file ends with newline", () => {
-    saveConfig({ owners: [], cloneBaseDir: "~/x", language: "en" });
+    saveConfig({
+      owners: [],
+      cloneBaseDir: "~/x",
+      language: "en",
+      pipelineSettings: { ...defaultPS },
+    });
     const content = readFileSync(configPath(), "utf-8");
     expect(content.endsWith("\n")).toBe(true);
   });
 
   test("overwrites existing config", () => {
-    saveConfig({ owners: ["a"], cloneBaseDir: "~/x", language: "en" });
-    saveConfig({ owners: ["b"], cloneBaseDir: "~/y", language: "ko" });
+    saveConfig({
+      owners: ["a"],
+      cloneBaseDir: "~/x",
+      language: "en",
+      pipelineSettings: { ...defaultPS },
+    });
+    saveConfig({
+      owners: ["b"],
+      cloneBaseDir: "~/y",
+      language: "ko",
+      pipelineSettings: { ...defaultPS, reviewAutoRounds: 5 },
+    });
     const raw = JSON.parse(readFileSync(configPath(), "utf-8"));
     expect(raw.owners).toEqual(["b"]);
     expect(raw.cloneBaseDir).toBe("~/y");
     expect(raw.language).toBe("ko");
+    expect(raw.pipelineSettings.reviewAutoRounds).toBe(5);
   });
 
   test("roundtrips correctly with loadConfig", () => {
@@ -255,6 +403,7 @@ describe("saveConfig", () => {
       owners: ["aicers", "my-org"],
       cloneBaseDir: "~/dev",
       language: "ko" as const,
+      pipelineSettings: { ...defaultPS, inactivityTimeoutMinutes: 30 },
     };
     saveConfig(original);
     const loaded = loadConfig();

@@ -45,6 +45,16 @@ try {
   console.log(`  Mode: ${result.executionMode}`);
   console.log(`  Permission: ${result.claudePermissionMode}`);
   console.log(`  Language: ${result.language}`);
+  console.log(
+    `  Self-check iterations: ${result.pipelineSettings.selfCheckAutoIterations}`,
+  );
+  console.log(`  Review rounds: ${result.pipelineSettings.reviewAutoRounds}`);
+  console.log(
+    `  Inactivity timeout: ${result.pipelineSettings.inactivityTimeoutMinutes} min`,
+  );
+  console.log(
+    `  Auto-resume attempts: ${result.pipelineSettings.autoResumeAttempts}`,
+  );
 
   // Bootstrap the repository and create a worktree.
   console.log();
@@ -80,10 +90,13 @@ try {
     ...issueCtx,
   });
 
-  const selfCheckStage = createSelfCheckStageHandler({
-    agent: agentA,
-    ...issueCtx,
-  });
+  const selfCheckStage = {
+    ...createSelfCheckStageHandler({
+      agent: agentA,
+      ...issueCtx,
+    }),
+    autoBudget: result.pipelineSettings.selfCheckAutoIterations,
+  };
 
   const doneStage = createDoneStageHandler({
     reportCompletion: async (msg) => console.log(msg),

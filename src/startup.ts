@@ -1,5 +1,5 @@
-import { confirm, input, search, select } from "@inquirer/prompts";
-import type { Config } from "./config.js";
+import { checkbox, confirm, input, search, select } from "@inquirer/prompts";
+import type { Config, PipelineSettings } from "./config.js";
 import { loadConfig, saveConfig } from "./config.js";
 import type { Issue } from "./github.js";
 import { getIssue, listRepositories } from "./github.js";
@@ -13,6 +13,7 @@ export interface StartupResult {
   executionMode: "auto" | "step";
   claudePermissionMode: "auto" | "bypass";
   language: "en" | "ko";
+  pipelineSettings: PipelineSettings;
 }
 
 export interface AgentConfig {
@@ -48,6 +49,13 @@ export async function runStartup(): Promise<StartupResult> {
   const { language, dirty: langDirty } = await selectLanguage(config);
   configDirty ||= langDirty;
 
+  const { pipelineSettings, dirty: settingsDirty } =
+    await adjustPipelineSettings(config.pipelineSettings);
+  if (settingsDirty) {
+    config.pipelineSettings = pipelineSettings;
+  }
+  configDirty ||= settingsDirty;
+
   const issue = getIssue(owner, repo, issueNumber);
   const confirmed = await confirmIssue(owner, repo, issue);
   if (!confirmed) {
@@ -69,6 +77,7 @@ export async function runStartup(): Promise<StartupResult> {
     executionMode,
     claudePermissionMode,
     language,
+    pipelineSettings,
   };
 }
 
@@ -173,6 +182,80 @@ async function selectLanguage(
   const dirty = language !== config.language;
   config.language = language;
   return { language, dirty };
+}
+
+type SettingKey = keyof PipelineSettings;
+
+const SETTING_LABELS: Record<SettingKey, string> = {
+  selfCheckAutoIterations: "Self-check auto iterations",
+  reviewAutoRounds: "Review auto rounds",
+  inactivityTimeoutMinutes: "Inactivity timeout",
+  autoResumeAttempts: "Auto-resume attempts",
+};
+
+const SETTING_SUFFIXES: Partial<Record<SettingKey, string>> = {
+  inactivityTimeoutMinutes: "min",
+};
+
+const SETTING_KEYS: SettingKey[] = [
+  "selfCheckAutoIterations",
+  "reviewAutoRounds",
+  "inactivityTimeoutMinutes",
+  "autoResumeAttempts",
+];
+
+function formatSettingValue(key: SettingKey, value: number): string {
+  const suffix = SETTING_SUFFIXES[key];
+  return suffix ? `${value} ${suffix}` : String(value);
+}
+
+function displayPipelineSettings(settings: PipelineSettings): void {
+  console.log();
+  console.log("  Pipeline settings (press Enter to keep defaults):");
+  for (const key of SETTING_KEYS) {
+    const label = SETTING_LABELS[key].padEnd(30);
+    console.log(`    ${label} ${formatSettingValue(key, settings[key])}`);
+  }
+  console.log();
+}
+
+async function adjustPipelineSettings(
+  current: PipelineSettings,
+): Promise<{ pipelineSettings: PipelineSettings; dirty: boolean }> {
+  displayPipelineSettings(current);
+
+  const toAdjust = await checkbox<SettingKey>({
+    message: "Adjust any settings?",
+    choices: SETTING_KEYS.map((key) => ({
+      name: `${SETTING_LABELS[key]}: ${formatSettingValue(key, current[key])}`,
+      value: key,
+    })),
+  });
+
+  if (toAdjust.length === 0) {
+    return { pipelineSettings: { ...current }, dirty: false };
+  }
+
+  const updated = { ...current };
+  for (const key of toAdjust) {
+    const raw = await input({
+      message: `${SETTING_LABELS[key]}:`,
+      default: String(current[key]),
+      validate: (v) => {
+        const n = Number(v);
+        if (!Number.isInteger(n) || n <= 0) return "Enter a positive integer";
+        return true;
+      },
+    });
+    updated[key] = Number(raw);
+  }
+
+  const save = await confirm({
+    message: "Save changes to config?",
+    default: false,
+  });
+
+  return { pipelineSettings: updated, dirty: save };
 }
 
 async function confirmIssue(
