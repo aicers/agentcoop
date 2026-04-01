@@ -176,6 +176,16 @@ describe("module exports", () => {
     expect(typeof config.configPath).toBe("function");
   });
 
+  test("config module exports DEFAULT_PIPELINE_SETTINGS", async () => {
+    const config = await import("../dist/config.js");
+    expect(config.DEFAULT_PIPELINE_SETTINGS).toEqual({
+      selfCheckAutoIterations: 3,
+      reviewAutoRounds: 3,
+      inactivityTimeoutMinutes: 15,
+      autoResumeAttempts: 3,
+    });
+  });
+
   test("github module exports listRepositories and getIssue", async () => {
     const github = await import("../dist/github.js");
     expect(typeof github.listRepositories).toBe("function");

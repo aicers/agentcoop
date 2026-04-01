@@ -79,6 +79,14 @@ describe("createLoopControl", () => {
     const lc = createLoopControl();
     expect(lc.iteration).toBe(0);
     expect(lc.autoRemaining).toBe(3);
+    expect(lc.budget).toBe(3);
+  });
+
+  test("accepts custom budget", () => {
+    const lc = createLoopControl(5);
+    expect(lc.iteration).toBe(0);
+    expect(lc.autoRemaining).toBe(5);
+    expect(lc.budget).toBe(5);
   });
 });
 
@@ -109,7 +117,7 @@ describe("advanceLoop", () => {
 });
 
 describe("grantLoopBudget", () => {
-  test("resets autoRemaining to 3", () => {
+  test("resets autoRemaining to budget", () => {
     const lc = createLoopControl();
     advanceLoop(lc);
     advanceLoop(lc);
@@ -117,6 +125,14 @@ describe("grantLoopBudget", () => {
     expect(lc.autoRemaining).toBe(0);
     grantLoopBudget(lc);
     expect(lc.autoRemaining).toBe(3);
+  });
+
+  test("resets autoRemaining to custom budget", () => {
+    const lc = createLoopControl(5);
+    for (let i = 0; i < 5; i++) advanceLoop(lc);
+    expect(lc.autoRemaining).toBe(0);
+    grantLoopBudget(lc);
+    expect(lc.autoRemaining).toBe(5);
   });
 
   test("preserves iteration count", () => {
@@ -252,6 +268,50 @@ describe("runPipeline — step mode", () => {
 // runPipeline — loop control
 // ---------------------------------------------------------------------------
 describe("runPipeline — loop control", () => {
+  test("uses custom per-stage autoBudget when provided", async () => {
+    let calls = 0;
+    const prompt = makePrompt({
+      confirmContinueLoop: vi.fn().mockResolvedValue(false),
+    });
+    const stages = [
+      makeStage(
+        1,
+        async () => {
+          calls++;
+          return { outcome: "not_approved", message: "try again" };
+        },
+        { autoBudget: 5 },
+      ),
+    ];
+    await runPipeline(makePipelineOpts({ stages, prompt }));
+    expect(calls).toBe(5);
+    expect(prompt.confirmContinueLoop).toHaveBeenCalledTimes(1);
+  });
+
+  test("custom per-stage autoBudget is preserved after grant", async () => {
+    let calls = 0;
+    const prompt = makePrompt({
+      confirmContinueLoop: vi
+        .fn()
+        .mockResolvedValueOnce(true)
+        .mockResolvedValue(false),
+    });
+    const stages = [
+      makeStage(
+        1,
+        async () => {
+          calls++;
+          return { outcome: "not_approved", message: "try again" };
+        },
+        { autoBudget: 2 },
+      ),
+    ];
+    await runPipeline(makePipelineOpts({ stages, prompt }));
+    // 2 auto + user approves + 2 more auto + user declines = 4
+    expect(calls).toBe(4);
+    expect(prompt.confirmContinueLoop).toHaveBeenCalledTimes(2);
+  });
+
   test("loops up to 3 times automatically then asks user", async () => {
     let calls = 0;
     const prompt = makePrompt({

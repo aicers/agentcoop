@@ -62,6 +62,11 @@ export interface StageDefinition {
    * reports BLOCKED — the artifact is mandatory (e.g. PR creation).
    */
   requiresArtifact?: boolean;
+  /**
+   * Override the default auto-iteration budget for this stage's loop.
+   * When omitted the engine uses its built-in default (3).
+   */
+  autoBudget?: number;
 }
 
 /**
@@ -134,21 +139,23 @@ export interface UserPrompt {
 
 // ---- loop control --------------------------------------------------------
 
-/** Number of automatic iterations before asking the user. */
-const AUTO_BUDGET = 3;
+/** Default number of automatic iterations before asking the user. */
+const DEFAULT_AUTO_BUDGET = 3;
 
 export interface LoopControl {
   /** Current iteration (0-based). */
   iteration: number;
   /** Number of auto-iterations remaining before the next user prompt. */
   autoRemaining: number;
+  /** Budget granted on each reset. */
+  budget: number;
 }
 
 /**
  * Create a fresh loop-control state.
  */
-export function createLoopControl(): LoopControl {
-  return { iteration: 0, autoRemaining: AUTO_BUDGET };
+export function createLoopControl(budget = DEFAULT_AUTO_BUDGET): LoopControl {
+  return { iteration: 0, autoRemaining: budget, budget };
 }
 
 /**
@@ -166,7 +173,7 @@ export function advanceLoop(lc: LoopControl): boolean {
  * approves continuing).
  */
 export function grantLoopBudget(lc: LoopControl): void {
-  lc.autoRemaining = AUTO_BUDGET;
+  lc.autoRemaining = lc.budget;
 }
 
 // ---- terminal outcomes ---------------------------------------------------
@@ -273,7 +280,7 @@ async function runStage(
   baseCtx: Omit<StageContext, "iteration" | "userInstruction">,
   prompt: UserPrompt,
 ): Promise<StageRunResult> {
-  const lc = createLoopControl();
+  const lc = createLoopControl(stage.autoBudget);
   let userInstruction: string | undefined;
   /** Tracks whether the last iteration was an auto-clarification retry. */
   let clarificationAttempted = false;
