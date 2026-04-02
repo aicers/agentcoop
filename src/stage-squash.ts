@@ -13,7 +13,7 @@
  */
 
 import type { AgentAdapter } from "./agent.js";
-import type { CiStatus } from "./ci.js";
+import type { GetCiStatusFn } from "./ci.js";
 import {
   collectFailureLogs as defaultCollectFailureLogs,
   getCiStatus as defaultGetCiStatus,
@@ -27,15 +27,6 @@ import {
 } from "./stage-util.js";
 import { buildClarificationPrompt } from "./step-parser.js";
 
-// ---- defaults ----------------------------------------------------------------
-
-const DEFAULT_POLL_INTERVAL_MS = 30_000;
-const DEFAULT_POLL_TIMEOUT_MS = 600_000;
-
-function defaultDelay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 // ---- public types ------------------------------------------------------------
 
 export interface SquashStageOptions {
@@ -43,11 +34,15 @@ export interface SquashStageOptions {
   issueTitle: string;
   issueBody: string;
   /** Injected for testability. */
-  getCiStatus?: (owner: string, repo: string, branch: string) => CiStatus;
+  getCiStatus?: GetCiStatusFn;
   /** Injected for testability. */
   collectFailureLogs?: (owner: string, repo: string, runId: number) => string;
+  /** Injected for testability. Defaults to `worktree.getHeadSha`. */
+  getHeadSha?: (cwd: string) => string;
   pollIntervalMs?: number;
   pollTimeoutMs?: number;
+  /** Grace period for empty SHA-filtered runs. Default 60 000. */
+  emptyRunsGracePeriodMs?: number;
   /** Max CI fix attempts. Default 3. */
   maxFixAttempts?: number;
   /** Injected for testability. */
@@ -176,10 +171,12 @@ export function createSquashStageHandler(
         getCiStatus: opts.getCiStatus ?? defaultGetCiStatus,
         collectFailureLogs:
           opts.collectFailureLogs ?? defaultCollectFailureLogs,
-        pollIntervalMs: opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
-        pollTimeoutMs: opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS,
+        getHeadSha: opts.getHeadSha,
+        emptyRunsGracePeriodMs: opts.emptyRunsGracePeriodMs,
+        pollIntervalMs: opts.pollIntervalMs,
+        pollTimeoutMs: opts.pollTimeoutMs,
         maxFixAttempts: opts.maxFixAttempts,
-        delay: opts.delay ?? defaultDelay,
+        delay: opts.delay,
       });
 
       if (!ciResult.passed) {

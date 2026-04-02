@@ -500,9 +500,12 @@ function makeCiRun(overrides: Partial<CiRun> = {}): CiRun {
     status: "completed",
     conclusion: "success",
     headBranch: "issue-5",
+    headSha: "abc123",
     ...overrides,
   };
 }
+
+const stubGetHeadSha = () => "abc123";
 
 function makeCiStatus(verdict: CiVerdict, runs: CiRun[] = []): CiStatus {
   return { verdict, runs };
@@ -657,6 +660,8 @@ describe("Stage 5 (CI check) through pipeline", () => {
       getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
       collectFailureLogs: vi.fn(),
       delay: vi.fn().mockResolvedValue(undefined),
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
     });
 
     const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
@@ -690,6 +695,8 @@ describe("Stage 5 (CI check) through pipeline", () => {
       getCiStatus,
       collectFailureLogs: vi.fn().mockReturnValue("test error"),
       delay: vi.fn().mockResolvedValue(undefined),
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
     });
 
     const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
@@ -725,6 +732,8 @@ describe("Stage 5 (CI check) through pipeline", () => {
       getCiStatus,
       collectFailureLogs: vi.fn().mockReturnValue("err"),
       delay: vi.fn().mockResolvedValue(undefined),
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
     });
 
     const result = await runPipeline(
@@ -759,6 +768,8 @@ describe("Stage 5 (CI check) through pipeline", () => {
       getCiStatus,
       collectFailureLogs: vi.fn().mockReturnValue("err"),
       delay: vi.fn().mockResolvedValue(undefined),
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
     });
 
     const result = await runPipeline(
@@ -767,6 +778,212 @@ describe("Stage 5 (CI check) through pipeline", () => {
 
     expect(result.success).toBe(false);
     expect(result.stoppedAt).toBe(5);
+  });
+});
+
+// ---- Stage 5 SHA filtering E2E ---------------------------------------------
+
+describe("Stage 5 (CI check) SHA filtering through pipeline", () => {
+  test("getHeadSha is called and SHA is forwarded to getCiStatus", async () => {
+    const getHeadSha = vi.fn().mockReturnValue("sha-after-push");
+    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pass"));
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn(),
+    };
+    const stage = createCiCheckStageHandler({
+      agent,
+      ...ISSUE_CTX,
+      getCiStatus,
+      getHeadSha,
+      collectFailureLogs: vi.fn(),
+      delay: vi.fn().mockResolvedValue(undefined),
+      emptyRunsGracePeriodMs: 0,
+    });
+
+    const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
+
+    expect(result.success).toBe(true);
+    expect(getHeadSha).toHaveBeenCalledWith("/tmp/wt");
+    expect(getCiStatus).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      "issue-5",
+      "sha-after-push",
+    );
+  });
+
+  test("SHA changes after fix push: new SHA used for re-poll", async () => {
+    let shaCall = 0;
+    const shas = ["sha-v1", "sha-v2"];
+    const getHeadSha = vi.fn().mockImplementation(() => shas[shaCall++]);
+
+    let pollCount = 0;
+    const getCiStatus = vi
+      .fn()
+      .mockImplementation(
+        (_o: string, _r: string, _b: string, sha?: string) => {
+          pollCount++;
+          if (pollCount === 1) {
+            expect(sha).toBe("sha-v1");
+            return makeCiStatus("fail", [
+              makeCiRun({ conclusion: "failure", databaseId: 200 }),
+            ]);
+          }
+          expect(sha).toBe("sha-v2");
+          return makeCiStatus("pass");
+        },
+      );
+
+    const agent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "Fixed CI." }))),
+      resume: vi.fn(),
+    };
+
+    const stage = createCiCheckStageHandler({
+      agent,
+      ...ISSUE_CTX,
+      getCiStatus,
+      getHeadSha,
+      collectFailureLogs: vi.fn().mockReturnValue("test error"),
+      delay: vi.fn().mockResolvedValue(undefined),
+      emptyRunsGracePeriodMs: 0,
+    });
+
+    const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
+
+    expect(result.success).toBe(true);
+    expect(getHeadSha).toHaveBeenCalledTimes(2);
+    expect(getCiStatus).toHaveBeenCalledTimes(2);
+  });
+
+  test("no runs for new SHA yet: grace period prevents false-pass", async () => {
+    // Key false-pass scenario from issue #24:
+    // After a push, the workflow hasn't been created yet.  getCiStatus
+    // returns pass with empty runs.  The grace period keeps polling
+    // until the run appears.
+    const getHeadSha = vi.fn().mockReturnValue("brand-new-sha");
+    let pollCount = 0;
+    const getCiStatus = vi.fn().mockImplementation(() => {
+      pollCount++;
+      if (pollCount <= 2) {
+        // No runs match the new SHA yet → empty pass (within grace)
+        return makeCiStatus("pass");
+      }
+      return makeCiStatus("pass", [
+        makeCiRun({ conclusion: "success", headSha: "brand-new-sha" }),
+      ]);
+    });
+
+    let elapsed = 0;
+    const startTime = Date.now();
+    const delay = vi.fn().mockImplementation(async () => {
+      elapsed += 100;
+    });
+    vi.spyOn(Date, "now").mockImplementation(() => startTime + elapsed);
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn(),
+    };
+
+    const stage = createCiCheckStageHandler({
+      agent,
+      ...ISSUE_CTX,
+      getCiStatus,
+      getHeadSha,
+      collectFailureLogs: vi.fn(),
+      delay,
+      emptyRunsGracePeriodMs: 500,
+    });
+
+    const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
+
+    expect(result.success).toBe(true);
+    expect(pollCount).toBe(3);
+    expect(agent.invoke).not.toHaveBeenCalled();
+
+    vi.restoreAllMocks();
+  });
+
+  test("no CI configured: accepts empty pass after grace period", async () => {
+    const getHeadSha = vi.fn().mockReturnValue("some-sha");
+    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pass"));
+
+    let elapsed = 0;
+    const startTime = Date.now();
+    const delay = vi.fn().mockImplementation(async () => {
+      elapsed += 300;
+    });
+    vi.spyOn(Date, "now").mockImplementation(() => startTime + elapsed);
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn(),
+    };
+
+    const stage = createCiCheckStageHandler({
+      agent,
+      ...ISSUE_CTX,
+      getCiStatus,
+      getHeadSha,
+      collectFailureLogs: vi.fn(),
+      delay,
+      emptyRunsGracePeriodMs: 500,
+    });
+
+    const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
+
+    expect(result.success).toBe(true);
+    expect(agent.invoke).not.toHaveBeenCalled();
+
+    vi.restoreAllMocks();
+  });
+
+  test("stale run with old SHA is ignored, new SHA run is pending then passes", async () => {
+    // Simulates the stale-failure scenario from issue #24:
+    // getHeadSha returns the new SHA, getCiStatus only sees runs
+    // matching that SHA (pending initially, then pass).
+    const getHeadSha = vi.fn().mockReturnValue("new-sha");
+    let pollCount = 0;
+    const getCiStatus = vi.fn().mockImplementation(() => {
+      pollCount++;
+      if (pollCount === 1) {
+        // Only the new-sha run is returned (pending), old success is filtered out
+        return makeCiStatus("pending", [
+          makeCiRun({
+            status: "in_progress",
+            conclusion: "",
+            headSha: "new-sha",
+          }),
+        ]);
+      }
+      return makeCiStatus("pass", [
+        makeCiRun({ conclusion: "success", headSha: "new-sha" }),
+      ]);
+    });
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn(),
+    };
+
+    const stage = createCiCheckStageHandler({
+      agent,
+      ...ISSUE_CTX,
+      getCiStatus,
+      getHeadSha,
+      collectFailureLogs: vi.fn(),
+      delay: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
+
+    expect(result.success).toBe(true);
+    expect(pollCount).toBe(2);
+    expect(agent.invoke).not.toHaveBeenCalled();
   });
 });
 
@@ -1047,6 +1264,8 @@ describe("Multi-stage E2E: Stage 4 → Stage 5 → Stage 6", () => {
       getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
       collectFailureLogs: vi.fn(),
       delay: vi.fn().mockResolvedValue(undefined),
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
     });
     const tpStage = createTestPlanStageHandler({ agent, ...ISSUE_CTX });
 
@@ -1097,6 +1316,8 @@ describe("Multi-stage E2E: Stage 4 → Stage 5 → Stage 6", () => {
       getCiStatus,
       collectFailureLogs: vi.fn(),
       delay: vi.fn().mockResolvedValue(undefined),
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
     });
     const tpStage = {
       ...createTestPlanStageHandler({ agent, ...ISSUE_CTX }),
@@ -1146,6 +1367,8 @@ describe("Multi-stage E2E: Stage 4 → Stage 5 → Stage 6", () => {
       getCiStatus,
       collectFailureLogs: vi.fn(),
       delay: vi.fn().mockResolvedValue(undefined),
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
     });
     const tpStage = {
       ...createTestPlanStageHandler({ agent, ...ISSUE_CTX }),
@@ -1368,6 +1591,8 @@ describe("Stage 7 (Squash) through pipeline", () => {
       delay: vi.fn().mockResolvedValue(undefined),
       pollIntervalMs: 100,
       pollTimeoutMs: 1000,
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
     });
 
     const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
@@ -1399,6 +1624,8 @@ describe("Stage 7 (Squash) through pipeline", () => {
       delay: vi.fn().mockResolvedValue(undefined),
       pollIntervalMs: 100,
       pollTimeoutMs: 1000,
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
     });
 
     const result = await runPipeline(
@@ -1441,6 +1668,8 @@ describe("Stage 8 (Review) through pipeline", () => {
       delay: vi.fn().mockResolvedValue(undefined),
       pollIntervalMs: 100,
       pollTimeoutMs: 1000,
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
     });
 
     const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
@@ -1496,6 +1725,8 @@ describe("Stage 8 (Review) through pipeline", () => {
       delay: vi.fn().mockResolvedValue(undefined),
       pollIntervalMs: 100,
       pollTimeoutMs: 1000,
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
     });
 
     const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
@@ -1544,6 +1775,8 @@ describe("Stage 8 (Review) through pipeline", () => {
         delay: vi.fn().mockResolvedValue(undefined),
         pollIntervalMs: 100,
         pollTimeoutMs: 1000,
+        getHeadSha: stubGetHeadSha,
+        emptyRunsGracePeriodMs: 0,
       }),
       autoBudget: 3,
     };
@@ -1608,6 +1841,8 @@ describe("Stage 8 (Review) through pipeline", () => {
         delay: vi.fn().mockResolvedValue(undefined),
         pollIntervalMs: 100,
         pollTimeoutMs: 1000,
+        getHeadSha: stubGetHeadSha,
+        emptyRunsGracePeriodMs: 0,
       }),
       autoBudget: 3,
     };
@@ -1668,6 +1903,8 @@ describe("Stage 8 (Review) through pipeline", () => {
       pollIntervalMs: 100,
       pollTimeoutMs: 1000,
       maxFixAttempts: 3,
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
     });
 
     const result = await runPipeline(
@@ -1723,6 +1960,8 @@ describe("Stages 7+8 (Squash + Review) through pipeline", () => {
       delay: vi.fn().mockResolvedValue(undefined),
       pollIntervalMs: 100,
       pollTimeoutMs: 1000,
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
     });
 
     const reviewStage = createReviewStageHandler({
@@ -1734,6 +1973,8 @@ describe("Stages 7+8 (Squash + Review) through pipeline", () => {
       delay: vi.fn().mockResolvedValue(undefined),
       pollIntervalMs: 100,
       pollTimeoutMs: 1000,
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
     });
 
     const result = await runPipeline(
@@ -1774,6 +2015,8 @@ describe("Stages 7+8 (Squash + Review) through pipeline", () => {
       delay: vi.fn().mockResolvedValue(undefined),
       pollIntervalMs: 100,
       pollTimeoutMs: 1000,
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
     });
 
     const reviewStage = createReviewStageHandler({
@@ -1785,6 +2028,8 @@ describe("Stages 7+8 (Squash + Review) through pipeline", () => {
       delay: vi.fn().mockResolvedValue(undefined),
       pollIntervalMs: 100,
       pollTimeoutMs: 1000,
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
     });
 
     const result = await runPipeline(

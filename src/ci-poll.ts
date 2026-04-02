@@ -8,7 +8,7 @@
  */
 
 import type { AgentAdapter } from "./agent.js";
-import type { CiStatus } from "./ci.js";
+import type { CiStatus, GetCiStatusFn } from "./ci.js";
 import {
   collectFailureLogs as defaultCollectFailureLogs,
   getCiStatus as defaultGetCiStatus,
@@ -16,12 +16,14 @@ import {
 } from "./ci.js";
 import type { StageContext } from "./pipeline.js";
 import { buildCiFixPrompt } from "./stage-cicheck.js";
+import { getHeadSha as defaultGetHeadSha } from "./worktree.js";
 
 // ---- defaults ----------------------------------------------------------------
 
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const DEFAULT_POLL_TIMEOUT_MS = 600_000; // 10 minutes
 const DEFAULT_MAX_FIX_ATTEMPTS = 3;
+const DEFAULT_EMPTY_RUNS_GRACE_PERIOD_MS = 60_000; // 1 minute
 
 function defaultDelay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -35,15 +37,28 @@ export interface CiPollOptions {
   issueTitle: string;
   issueBody: string;
   /** Injected for testability. Defaults to `ci.getCiStatus`. */
-  getCiStatus?: (owner: string, repo: string, branch: string) => CiStatus;
+  getCiStatus?: GetCiStatusFn;
   /** Injected for testability. Defaults to `ci.collectFailureLogs`. */
   collectFailureLogs?: (owner: string, repo: string, runId: number) => string;
+  /**
+   * Read the current HEAD SHA from the worktree.  Called before each
+   * CI poll so that fix pushes automatically target the new commit.
+   * Injected for testability.  Defaults to `worktree.getHeadSha`.
+   */
+  getHeadSha?: (cwd: string) => string;
   /** Delay in ms between polls when CI is pending. Default 30 000. */
   pollIntervalMs?: number;
   /** Max time in ms to wait for pending CI. Default 600 000 (10 min). */
   pollTimeoutMs?: number;
   /** Maximum number of fix attempts before giving up. Default 3. */
   maxFixAttempts?: number;
+  /**
+   * How long to keep polling when SHA filtering returns zero runs
+   * (workflow not yet created).  After this period, an empty "pass"
+   * is accepted (covers repos with no CI or skipped workflows).
+   * Default 60 000 (1 min).
+   */
+  emptyRunsGracePeriodMs?: number;
   /** Injected for testability. Defaults to a real delay function. */
   delay?: (ms: number) => Promise<void>;
 }
@@ -65,21 +80,35 @@ async function waitForCi(
   owner: string,
   repo: string,
   branch: string,
-  getCiStatus: (owner: string, repo: string, branch: string) => CiStatus,
+  getCiStatus: GetCiStatusFn,
   pollInterval: number,
   pollTimeout: number,
   delay: (ms: number) => Promise<void>,
+  commitSha?: string,
+  emptyRunsGracePeriod?: number,
 ): Promise<{ timedOut: boolean; ciStatus: CiStatus }> {
   const startTime = Date.now();
 
   while (true) {
-    const ciStatus = getCiStatus(owner, repo, branch);
+    const ciStatus = getCiStatus(owner, repo, branch, commitSha);
+    const elapsed = Date.now() - startTime;
 
     if (ciStatus.verdict !== "pending") {
-      return { timedOut: false, ciStatus };
+      // When SHA-filtering, an empty "pass" may mean the workflow
+      // hasn't been created yet.  Keep polling until the grace period
+      // elapses; after that, accept the verdict (no CI / skipped).
+      const withinGrace =
+        commitSha &&
+        emptyRunsGracePeriod !== undefined &&
+        ciStatus.runs.length === 0 &&
+        elapsed < emptyRunsGracePeriod;
+
+      if (!withinGrace) {
+        return { timedOut: false, ciStatus };
+      }
     }
 
-    if (Date.now() - startTime >= pollTimeout) {
+    if (elapsed >= pollTimeout) {
       return { timedOut: true, ciStatus };
     }
 
@@ -106,8 +135,15 @@ export async function pollCiAndFix(
   const delay = options.delay ?? defaultDelay;
 
   const { ctx, agent, issueTitle, issueBody } = options;
+  const readHeadSha = options.getHeadSha ?? defaultGetHeadSha;
+  const emptyGrace =
+    options.emptyRunsGracePeriodMs ?? DEFAULT_EMPTY_RUNS_GRACE_PERIOD_MS;
 
   for (let attempt = 0; attempt <= maxFix; attempt++) {
+    // Read HEAD SHA from the worktree so we only consider CI runs
+    // triggered by the most recent push (initial or fix).
+    const commitSha = readHeadSha(ctx.worktreePath);
+
     const { timedOut, ciStatus } = await waitForCi(
       ctx.owner,
       ctx.repo,
@@ -116,6 +152,8 @@ export async function pollCiAndFix(
       pollInterval,
       pollTimeout,
       delay,
+      commitSha,
+      emptyGrace,
     );
 
     if (timedOut) {

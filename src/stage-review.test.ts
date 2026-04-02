@@ -41,6 +41,7 @@ function makeCiRun(overrides: Partial<CiRun> = {}): CiRun {
     status: "completed",
     conclusion: "success",
     headBranch: "issue-42",
+    headSha: "abc123",
     ...overrides,
   };
 }
@@ -97,9 +98,11 @@ function makeOpts(
     issueBody: "The widget is broken.",
     getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
     collectFailureLogs: vi.fn().mockReturnValue(""),
+    getHeadSha: vi.fn().mockReturnValue("abc123"),
     delay: vi.fn().mockResolvedValue(undefined),
     pollIntervalMs: 100,
     pollTimeoutMs: 1000,
+    emptyRunsGracePeriodMs: 0,
     ...overrides,
   };
 }
@@ -819,6 +822,36 @@ describe("createReviewStageHandler", () => {
     await stage.handler(BASE_CTX);
 
     expect(opts.agentA.invoke).not.toHaveBeenCalled();
+  });
+
+  // -- getHeadSha forwarding ----------------------------------------------------
+
+  test("forwards getHeadSha to pollCiAndFix and uses SHA in getCiStatus", async () => {
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "NOT_APPROVED",
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+
+    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pass"));
+    const getHeadSha = vi.fn().mockReturnValue("deadbeef");
+    const opts = makeOpts({ agentB, getCiStatus, getHeadSha });
+    const stage = createReviewStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    expect(getHeadSha).toHaveBeenCalledWith("/tmp/wt");
+    expect(getCiStatus).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      "issue-42",
+      "deadbeef",
+    );
   });
 
   // -- CI timeout during NOT_APPROVED fix flow --------------------------------

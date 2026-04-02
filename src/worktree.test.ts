@@ -19,6 +19,7 @@ const {
   detectDefaultBranch,
   bootstrapRepo,
   hasUncommittedChanges,
+  getHeadSha,
   createWorktree,
   removeWorktree,
 } = await import("./worktree.js");
@@ -144,6 +145,28 @@ describe("hasUncommittedChanges", () => {
       throw new Error("not a git repo");
     });
     expect(hasUncommittedChanges("/some/path")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getHeadSha
+// ---------------------------------------------------------------------------
+describe("getHeadSha", () => {
+  test("returns trimmed HEAD SHA", () => {
+    mockExecFileSync.mockReturnValue("abc123def456\n");
+    expect(getHeadSha("/tmp/wt")).toBe("abc123def456");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["rev-parse", "HEAD"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  test("propagates error when git fails", () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error("not a git repo");
+    });
+    expect(() => getHeadSha("/tmp/bad")).toThrow("not a git repo");
   });
 });
 

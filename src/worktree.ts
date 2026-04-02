@@ -95,6 +95,23 @@ export function bootstrapRepo(owner: string, repo: string): string {
   return dest;
 }
 
+// ---- HEAD SHA capture ----------------------------------------------------
+
+/**
+ * Return the full commit SHA at HEAD in `cwd`.
+ *
+ * Used by CI-polling stages to target only workflow runs triggered by
+ * the most recent push, avoiding false-pass and stale-failure problems.
+ */
+export function getHeadSha(cwd: string): string {
+  return (
+    execFileSync("git", ["rev-parse", "HEAD"], {
+      ...EXEC_OPTS,
+      cwd,
+    }) as string
+  ).trim();
+}
+
 // ---- worktree management -------------------------------------------------
 
 /**

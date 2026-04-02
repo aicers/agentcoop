@@ -28,6 +28,7 @@ function run(
     status: string;
     conclusion: string;
     headBranch: string;
+    headSha: string;
   }> = {},
 ) {
   return {
@@ -36,6 +37,7 @@ function run(
     status: "completed",
     conclusion: "success",
     headBranch: "main",
+    headSha: "abc123",
     ...overrides,
   };
 }
@@ -173,7 +175,7 @@ describe("evaluateCiRuns", () => {
 // fetchCiRuns
 // ---------------------------------------------------------------------------
 describe("fetchCiRuns", () => {
-  test("calls gh with correct arguments", () => {
+  test("calls gh with correct arguments including headSha", () => {
     mockExecFileSync.mockReturnValue("[]");
     fetchCiRuns("org", "repo", "issue-5");
     expect(mockExecFileSync).toHaveBeenCalledWith(
@@ -186,9 +188,9 @@ describe("fetchCiRuns", () => {
         "--branch",
         "issue-5",
         "--json",
-        "databaseId,name,status,conclusion,headBranch",
+        "databaseId,name,status,conclusion,headBranch,headSha",
         "--limit",
-        "20",
+        "100",
       ],
       { encoding: "utf-8" },
     );
@@ -198,6 +200,36 @@ describe("fetchCiRuns", () => {
     const runs = [run({ databaseId: 100, name: "build" })];
     mockExecFileSync.mockReturnValue(JSON.stringify(runs));
     expect(fetchCiRuns("org", "repo", "main")).toEqual(runs);
+  });
+
+  test("passes --commit flag when commitSha is provided", () => {
+    mockExecFileSync.mockReturnValue("[]");
+    fetchCiRuns("org", "repo", "main", "abc123");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "gh",
+      [
+        "run",
+        "list",
+        "--repo",
+        "org/repo",
+        "--branch",
+        "main",
+        "--json",
+        "databaseId,name,status,conclusion,headBranch,headSha",
+        "--limit",
+        "100",
+        "--commit",
+        "abc123",
+      ],
+      { encoding: "utf-8" },
+    );
+  });
+
+  test("omits --commit flag when commitSha is not provided", () => {
+    mockExecFileSync.mockReturnValue("[]");
+    fetchCiRuns("org", "repo", "main");
+    const args = mockExecFileSync.mock.calls[0][1] as string[];
+    expect(args).not.toContain("--commit");
   });
 });
 
@@ -224,6 +256,27 @@ describe("getCiStatus", () => {
       JSON.stringify([run({ status: "in_progress" })]),
     );
     expect(getCiStatus("org", "repo", "main").verdict).toBe("pending");
+  });
+
+  test("passes commitSha to fetchCiRuns and evaluates filtered result", () => {
+    // Server returns only the matching run (via --commit flag).
+    mockExecFileSync.mockReturnValue(
+      JSON.stringify([run({ headSha: "aaa", conclusion: "success" })]),
+    );
+    const status = getCiStatus("org", "repo", "main", "aaa");
+    expect(status.verdict).toBe("pass");
+    expect(status.runs).toHaveLength(1);
+    // Verify --commit was passed to gh.
+    const args = mockExecFileSync.mock.calls[0][1] as string[];
+    expect(args).toContain("--commit");
+    expect(args).toContain("aaa");
+  });
+
+  test("returns pass when server returns no runs for commitSha", () => {
+    mockExecFileSync.mockReturnValue("[]");
+    const status = getCiStatus("org", "repo", "main", "zzz");
+    expect(status.verdict).toBe("pass");
+    expect(status.runs).toEqual([]);
   });
 });
 
