@@ -19,6 +19,7 @@
  */
 
 import type { AgentAdapter } from "./agent.js";
+import { t } from "./i18n/index.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
   invokeOrResume,
@@ -89,7 +90,7 @@ export function createCreatePrStageHandler(
   opts: CreatePrStageOptions,
 ): StageDefinition {
   return {
-    name: "Create PR",
+    name: t()["stage.createPr"],
     number: 4,
     requiresArtifact: true,
     handler: async (ctx: StageContext): Promise<StageResult> => {

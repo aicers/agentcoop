@@ -1,6 +1,7 @@
 import { Box, Text, useInput } from "ink";
 import TextInput from "ink-text-input";
 import { useState } from "react";
+import { t } from "../i18n/index.js";
 
 // ---- types -------------------------------------------------------------------
 
@@ -38,7 +39,7 @@ export function InputArea({ request, onSubmit }: InputAreaProps) {
   if (!request) {
     return (
       <Box paddingX={1}>
-        <Text dimColor>Pipeline running...</Text>
+        <Text dimColor>{t()["input.pipelineRunning"]}</Text>
       </Box>
     );
   }

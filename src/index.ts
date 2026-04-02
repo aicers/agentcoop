@@ -8,7 +8,9 @@ import type { AgentAdapter } from "./agent.js";
 import { createClaudeAdapter } from "./claude-adapter.js";
 import { createCodexAdapter } from "./codex-adapter.js";
 import type { PipelineSettings } from "./config.js";
+import { loadConfig } from "./config.js";
 import { getIssue } from "./github.js";
+import { initI18n, t } from "./i18n/index.js";
 import type {
   PipelineOptions,
   PipelineResult,
@@ -86,44 +88,54 @@ function cliForModel(model: string): string {
 
 // ---- stage name lookup (for display) -------------------------------------
 
-const STAGE_NAMES: Record<number, string> = {
-  2: "Implement",
-  3: "Self-check",
-  4: "Create PR",
-  5: "CI check",
-  6: "Test plan verification",
-  7: "Squash commits",
-  8: "Review",
-  9: "Done",
-};
+function stageNames(): Record<number, string> {
+  const m = t();
+  return {
+    2: m["stage.implement"],
+    3: m["stage.selfCheck"],
+    4: m["stage.createPr"],
+    5: m["stage.ciCheck"],
+    6: m["stage.testPlan"],
+    7: m["stage.squash"],
+    8: m["stage.review"],
+    9: m["stage.done"],
+  };
+}
 
 function formatStateSummary(state: RunState): string {
-  const stageName =
-    STAGE_NAMES[state.currentStage] ?? `Stage ${state.currentStage}`;
+  const m = t();
+  const names = stageNames();
+  const stageName = names[state.currentStage] ?? `Stage ${state.currentStage}`;
   const lines = [
-    `  Saved run state found:`,
-    `    Stage: ${state.currentStage} (${stageName})`,
-    `    Loop count: ${state.stageLoopCount}`,
-    `    Branch: ${state.branch}`,
+    m["resume.savedStateFound"],
+    m["resume.stage"](state.currentStage, stageName),
+    m["resume.loopCount"](state.stageLoopCount),
+    m["resume.branch"](state.branch),
   ];
   if (state.prNumber !== undefined) {
-    lines.push(`    PR: #${state.prNumber}`);
+    lines.push(m["resume.pr"](state.prNumber));
   }
   if (state.reviewRound > 0) {
-    lines.push(`    Review round: ${state.reviewRound}`);
+    lines.push(m["resume.reviewRound"](state.reviewRound));
   }
   lines.push(
-    `    Mode: ${state.executionMode}`,
-    `    Agent A: ${state.agentA.model}`,
-    `    Agent B: ${state.agentB.model}`,
+    m["resume.mode"](state.executionMode),
+    m["resume.agentA"](state.agentA.model),
+    m["resume.agentB"](state.agentB.model),
   );
   return lines.join("\n");
 }
 
 if (!process.stdin.isTTY) {
+  // i18n may not be initialised yet — use English directly for this
+  // pre-startup guard.
   console.error("agentcoop requires an interactive terminal.");
   process.exit(1);
 }
+
+// Initialise i18n from the persisted config before any user-facing output.
+const bootConfig = loadConfig();
+await initI18n(bootConfig.language);
 
 try {
   // Phase 1: select target (owner / repo / issue).
@@ -140,11 +152,12 @@ try {
     console.log(formatStateSummary(savedState));
     console.log();
 
+    const m = t();
     const choice = await select({
-      message: "Resume or start fresh?",
+      message: m["resume.resumeOrFresh"],
       choices: [
-        { name: "Resume", value: "resume" as const },
-        { name: "Start fresh", value: "fresh" as const },
+        { name: m["resume.resume"], value: "resume" as const },
+        { name: m["resume.startFresh"], value: "fresh" as const },
       ],
     });
 
@@ -167,15 +180,11 @@ try {
       const wtPath = worktreePath(owner, repo, issueNumber);
       if (hasUncommittedChanges(wtPath)) {
         const ok = await confirm({
-          message:
-            "The existing worktree has uncommitted changes. " +
-            "Starting fresh will discard them. Continue?",
+          message: m["resume.uncommittedWarning"],
           default: false,
         });
         if (!ok) {
-          throw new Error(
-            "Aborted: user declined to discard uncommitted changes.",
-          );
+          throw new Error(m["resume.abortedUncommitted"]);
         }
       }
       deleteRunState(owner, repo, issueNumber);
@@ -187,6 +196,8 @@ try {
   // full startup to collect remaining options.
   params ??= await (async () => {
     const result = await runStartup(target);
+    // Re-initialise i18n if the user changed language during startup.
+    await initI18n(result.language);
     return {
       agentAConfig: result.agentA,
       agentBConfig: result.agentB,
@@ -214,9 +225,11 @@ try {
     startFresh,
   } = params;
 
+  const m = t();
+
   // Bootstrap the repository and create a worktree.
   console.log();
-  console.log("Bootstrapping repository...");
+  console.log(m["boot.bootstrapping"]);
   bootstrapRepo(owner, repo);
 
   const defaultBranch = detectDefaultBranch(owner, repo);
@@ -227,12 +240,10 @@ try {
     baseBranch: defaultBranch,
     conflictChoice: startFresh ? "clean" : "reuse",
   });
-  console.log(`Worktree ready at ${wt.path} (branch: ${wt.branch})`);
+  console.log(m["boot.worktreeReady"](wt.path, wt.branch));
 
   if (wt.hadUncommittedChanges) {
-    console.warn(
-      "⚠ The existing worktree had uncommitted changes that were preserved.",
-    );
+    console.warn(m["boot.uncommittedPreserved"]);
   }
 
   // Skip stage 4 (PR creation) on resume when the PR already exists.
@@ -241,20 +252,18 @@ try {
   // completion check finished.
   let startFromStage = rawStartFromStage;
   if (startFromStage === 4 && findPrNumber(owner, repo, wt.branch)) {
-    console.log("  PR already exists — skipping to stage 5 (CI check).");
+    console.log(m["boot.prExistsSkip"]);
     startFromStage = 5;
   }
 
   console.log();
-  console.log(
-    `Starting pipeline for ${owner}/${repo}#${issueNumber}${resuming ? " (resuming)" : ""}`,
-  );
-  console.log(`  Agent A: ${agentAConfig.model}`);
-  console.log(`  Agent B: ${agentBConfig.model}`);
-  console.log(`  Mode: ${executionMode}`);
-  console.log(`  Permission: ${claudePermissionMode}`);
+  console.log(m["boot.startingPipeline"](owner, repo, issueNumber, resuming));
+  console.log(m["boot.agentA"](agentAConfig.model));
+  console.log(m["boot.agentB"](agentBConfig.model));
+  console.log(m["boot.mode"](executionMode));
+  console.log(m["boot.permission"](claudePermissionMode));
   if (startFromStage !== undefined) {
-    console.log(`  Resuming from stage: ${startFromStage}`);
+    console.log(m["boot.resumingFromStage"](startFromStage));
   }
 
   // Create agent adapters.

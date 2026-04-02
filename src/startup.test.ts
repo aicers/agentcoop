@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { Config } from "./config.js";
 import type { Issue } from "./github.js";
+import { initI18n } from "./i18n/index.js";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -83,8 +84,9 @@ function setupHappyPath() {
   mockConfirm.mockResolvedValueOnce(true); // confirm issue
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.resetAllMocks();
+  await initI18n("en");
 });
 
 // ---------------------------------------------------------------------------

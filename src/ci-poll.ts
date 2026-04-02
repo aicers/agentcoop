@@ -14,6 +14,7 @@ import {
   getCiStatus as defaultGetCiStatus,
   normaliseCiConclusion,
 } from "./ci.js";
+import { t } from "./i18n/index.js";
 import type { StageContext } from "./pipeline.js";
 import { buildCiFixPrompt } from "./stage-cicheck.js";
 import { drainToSink } from "./stage-util.js";
@@ -160,21 +161,19 @@ export async function pollCiAndFix(
     if (timedOut) {
       return {
         passed: false,
-        message:
-          `CI checks still pending after ${Math.round(pollTimeout / 1000)}s. ` +
-          `The pipeline cannot proceed until CI completes.`,
+        message: t()["ci.pendingTimeout"](Math.round(pollTimeout / 1000)),
       };
     }
 
     if (ciStatus.verdict === "pass") {
-      return { passed: true, message: "CI checks passed." };
+      return { passed: true, message: t()["ci.passed"] };
     }
 
     // CI failed — if we've exhausted fix attempts, give up.
     if (attempt >= maxFix) {
       return {
         passed: false,
-        message: `CI still failing after ${maxFix} fix attempt(s).`,
+        message: t()["ci.stillFailing"](maxFix),
       };
     }
 
@@ -217,7 +216,7 @@ export async function pollCiAndFix(
         fixResult.stderrText || fixResult.errorType || "unknown error";
       return {
         passed: false,
-        message: `Agent error during CI fix: ${detail}`,
+        message: t()["ci.agentError"](detail),
       };
     }
 
@@ -225,5 +224,5 @@ export async function pollCiAndFix(
   }
 
   // Should not reach here, but guard.
-  return { passed: false, message: "CI fix loop exhausted." };
+  return { passed: false, message: t()["ci.fixLoopExhausted"] };
 }

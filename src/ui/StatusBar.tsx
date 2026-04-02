@@ -1,5 +1,6 @@
 import { Box, Text } from "ink";
 import { useEffect, useState } from "react";
+import { t } from "../i18n/index.js";
 import type {
   PipelineEventEmitter,
   StageEnterEvent,
@@ -30,13 +31,20 @@ export function StatusBar({ emitter }: StatusBarProps) {
     };
   }, [emitter]);
 
+  const m = t();
+
   const stageText = stage
-    ? `Stage ${stage.stageNumber}: ${stage.stageName}`
-    : "Initialising...";
+    ? m["statusBar.stage"](stage.stageNumber, stage.stageName)
+    : m["statusBar.initialising"];
 
-  const iterText = stage ? `Loop: ${stage.iteration}` : "";
+  const iterText = stage ? m["statusBar.loop"](stage.iteration) : "";
 
-  const outcomeText = lastOutcome ? `Last: ${lastOutcome}` : "";
+  const outcomeKey = lastOutcome
+    ? (`outcome.${lastOutcome}` as keyof typeof m)
+    : undefined;
+  const outcomeLabel =
+    outcomeKey && outcomeKey in m ? (m[outcomeKey] as string) : lastOutcome;
+  const outcomeText = outcomeLabel ? m["statusBar.last"](outcomeLabel) : "";
 
   return (
     <Box borderStyle="single" borderColor="gray" paddingX={1}>

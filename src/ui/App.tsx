@@ -1,5 +1,6 @@
 import { Box } from "ink";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { t } from "../i18n/index.js";
 import type {
   PipelineOptions,
   PipelineResult,
@@ -73,8 +74,18 @@ export function App({
     <Box flexDirection="column" width="100%" height="100%">
       {/* Top row: two agent panes side by side */}
       <Box flexDirection="row" flexGrow={1}>
-        <AgentPane label="Agent A" agent="a" emitter={emitter} color="blue" />
-        <AgentPane label="Agent B" agent="b" emitter={emitter} color="green" />
+        <AgentPane
+          label={t()["agent.labelA"]}
+          agent="a"
+          emitter={emitter}
+          color="blue"
+        />
+        <AgentPane
+          label={t()["agent.labelB"]}
+          agent="b"
+          emitter={emitter}
+          color="green"
+        />
       </Box>
 
       {/* Bottom: status bar + input area */}

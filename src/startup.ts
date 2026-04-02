@@ -3,6 +3,7 @@ import type { Config, PipelineSettings } from "./config.js";
 import { loadConfig, saveConfig } from "./config.js";
 import type { Issue } from "./github.js";
 import { getIssue, listRepositories } from "./github.js";
+import { initI18n, t } from "./i18n/index.js";
 
 export interface TargetResult {
   owner: string;
@@ -74,8 +75,8 @@ export async function runStartup(
   } = target ?? (await selectTarget());
   let configDirty = initialDirty;
 
-  const agentA = await selectAgentModel("Agent A (implementer)");
-  const agentB = await selectAgentModel("Agent B (reviewer)");
+  const agentA = await selectAgentModel(t()["agent.labelARole"]);
+  const agentB = await selectAgentModel(t()["agent.labelBRole"]);
   const executionMode = await selectExecutionMode();
   const claudePermissionMode = await selectClaudePermissionMode();
 
@@ -92,7 +93,7 @@ export async function runStartup(
   const issue = getIssue(owner, repo, issueNumber);
   const confirmed = await confirmIssue(owner, repo, issue);
   if (!confirmed) {
-    throw new Error("Issue not confirmed. Aborting.");
+    throw new Error(t()["startup.issueNotConfirmed"]);
   }
 
   // Only write config when something actually changed, to avoid
@@ -119,9 +120,9 @@ async function selectOwner(
 ): Promise<{ owner: string; dirty: boolean }> {
   if (config.owners.length === 0) {
     const raw = await input({
-      message: "Enter GitHub owner:",
+      message: t()["startup.enterOwner"],
       validate: (v) => {
-        if (!v.trim()) return "Owner cannot be empty";
+        if (!v.trim()) return t()["startup.ownerEmpty"];
         return true;
       },
     });
@@ -131,7 +132,7 @@ async function selectOwner(
   }
 
   const owner = await select({
-    message: "Select organization:",
+    message: t()["startup.selectOrg"],
     choices: config.owners.map((o) => ({ name: o, value: o })),
   });
   return { owner, dirty: false };
@@ -140,11 +141,11 @@ async function selectOwner(
 async function selectRepository(owner: string): Promise<string> {
   const repos = listRepositories(owner);
   if (repos.length === 0) {
-    throw new Error(`No repositories found for ${owner}`);
+    throw new Error(t()["startup.noRepos"](owner));
   }
 
   return search({
-    message: "Select repository: (type to filter)",
+    message: t()["startup.selectRepo"],
     source: (term) => {
       const filtered = term
         ? repos.filter(
@@ -163,10 +164,11 @@ async function selectRepository(owner: string): Promise<string> {
 
 async function inputIssueNumber(): Promise<number> {
   const raw = await input({
-    message: "Issue number:",
+    message: t()["startup.issueNumber"],
     validate: (v) => {
       const n = Number(v);
-      if (!Number.isInteger(n) || n <= 0) return "Enter a valid issue number";
+      if (!Number.isInteger(n) || n <= 0)
+        return t()["startup.invalidIssueNumber"];
       return true;
     },
   });
@@ -175,7 +177,7 @@ async function inputIssueNumber(): Promise<number> {
 
 async function selectAgentModel(label: string): Promise<AgentConfig> {
   const model = await select({
-    message: `${label} model:`,
+    message: t()["startup.agentModel"](label),
     choices: ALL_MODELS,
   });
   return { model };
@@ -183,7 +185,7 @@ async function selectAgentModel(label: string): Promise<AgentConfig> {
 
 async function selectExecutionMode(): Promise<"auto" | "step"> {
   return select({
-    message: "Execution mode:",
+    message: t()["startup.executionMode"],
     choices: [
       { name: "auto", value: "auto" as const },
       { name: "step", value: "step" as const },
@@ -193,7 +195,7 @@ async function selectExecutionMode(): Promise<"auto" | "step"> {
 
 async function selectClaudePermissionMode(): Promise<"auto" | "bypass"> {
   return select({
-    message: "Claude permission mode:",
+    message: t()["startup.claudePermission"],
     choices: [
       { name: "auto", value: "auto" as const },
       { name: "bypass", value: "bypass" as const },
@@ -204,31 +206,40 @@ async function selectClaudePermissionMode(): Promise<"auto" | "bypass"> {
 async function selectLanguage(
   config: Config,
 ): Promise<{ language: "en" | "ko"; dirty: boolean }> {
+  const m = t();
   const language = await select({
-    message: "Language:",
+    message: m["startup.language"],
     choices: [
-      { name: "English", value: "en" as const },
-      { name: "Korean", value: "ko" as const },
+      { name: m["startup.languageEnglish"], value: "en" as const },
+      { name: m["startup.languageKorean"], value: "ko" as const },
     ],
     default: config.language,
   });
   const dirty = language !== config.language;
   config.language = language;
+  if (dirty) {
+    await initI18n(language);
+  }
   return { language, dirty };
 }
 
 type SettingKey = keyof PipelineSettings;
 
-const SETTING_LABELS: Record<SettingKey, string> = {
-  selfCheckAutoIterations: "Self-check auto iterations",
-  reviewAutoRounds: "Review auto rounds",
-  inactivityTimeoutMinutes: "Inactivity timeout",
-  autoResumeAttempts: "Auto-resume attempts",
-};
+function settingLabels(): Record<SettingKey, string> {
+  const m = t();
+  return {
+    selfCheckAutoIterations: m["startup.settingSelfCheck"],
+    reviewAutoRounds: m["startup.settingReviewRounds"],
+    inactivityTimeoutMinutes: m["startup.settingInactivityTimeout"],
+    autoResumeAttempts: m["startup.settingAutoResume"],
+  };
+}
 
-const SETTING_SUFFIXES: Partial<Record<SettingKey, string>> = {
-  inactivityTimeoutMinutes: "min",
-};
+function settingSuffixes(): Partial<Record<SettingKey, string>> {
+  return {
+    inactivityTimeoutMinutes: t()["startup.settingSuffixMin"],
+  };
+}
 
 const SETTING_KEYS: SettingKey[] = [
   "selfCheckAutoIterations",
@@ -238,15 +249,16 @@ const SETTING_KEYS: SettingKey[] = [
 ];
 
 function formatSettingValue(key: SettingKey, value: number): string {
-  const suffix = SETTING_SUFFIXES[key];
+  const suffix = settingSuffixes()[key];
   return suffix ? `${value} ${suffix}` : String(value);
 }
 
 function displayPipelineSettings(settings: PipelineSettings): void {
+  const labels = settingLabels();
   console.log();
-  console.log("  Pipeline settings (press Enter to keep defaults):");
+  console.log(t()["startup.pipelineSettingsHeader"]);
   for (const key of SETTING_KEYS) {
-    const label = SETTING_LABELS[key].padEnd(30);
+    const label = labels[key].padEnd(30);
     console.log(`    ${label} ${formatSettingValue(key, settings[key])}`);
   }
   console.log();
@@ -257,10 +269,11 @@ async function adjustPipelineSettings(
 ): Promise<{ pipelineSettings: PipelineSettings; dirty: boolean }> {
   displayPipelineSettings(current);
 
+  const labels = settingLabels();
   const toAdjust = await checkbox<SettingKey>({
-    message: "Adjust any settings?",
+    message: t()["startup.adjustSettings"],
     choices: SETTING_KEYS.map((key) => ({
-      name: `${SETTING_LABELS[key]}: ${formatSettingValue(key, current[key])}`,
+      name: `${labels[key]}: ${formatSettingValue(key, current[key])}`,
       value: key,
     })),
   });
@@ -272,11 +285,12 @@ async function adjustPipelineSettings(
   const updated = { ...current };
   for (const key of toAdjust) {
     const raw = await input({
-      message: `${SETTING_LABELS[key]}:`,
+      message: `${labels[key]}:`,
       default: String(current[key]),
       validate: (v) => {
         const n = Number(v);
-        if (!Number.isInteger(n) || n <= 0) return "Enter a positive integer";
+        if (!Number.isInteger(n) || n <= 0)
+          return t()["startup.positiveInteger"];
         return true;
       },
     });
@@ -284,7 +298,7 @@ async function adjustPipelineSettings(
   }
 
   const save = await confirm({
-    message: "Save changes to config?",
+    message: t()["startup.saveChanges"],
     default: false,
   });
 
@@ -296,11 +310,12 @@ async function confirmIssue(
   repo: string,
   issue: Issue,
 ): Promise<boolean> {
+  const m = t();
   console.log();
   console.log(`  ${owner}/${repo}#${issue.number}: ${issue.title}`);
-  console.log(`  State: ${issue.state}`);
+  console.log(m["startup.issueState"](issue.state));
   if (issue.labels.length > 0) {
-    console.log(`  Labels: ${issue.labels.join(", ")}`);
+    console.log(m["startup.issueLabels"](issue.labels.join(", ")));
   }
   if (issue.body) {
     console.log();
@@ -309,5 +324,5 @@ async function confirmIssue(
   }
   console.log();
 
-  return confirm({ message: "Proceed with this issue?" });
+  return confirm({ message: m["startup.proceedWithIssue"] });
 }
