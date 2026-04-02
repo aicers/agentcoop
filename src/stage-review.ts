@@ -32,7 +32,7 @@ import {
   mapResponseToResult,
   sendFollowUp,
 } from "./stage-util.js";
-import { parseStepStatus } from "./step-parser.js";
+import { buildClarificationPrompt, parseStepStatus } from "./step-parser.js";
 
 // ---- defaults ----------------------------------------------------------------
 
@@ -232,8 +232,9 @@ export function createReviewStageHandler(
         return mapAgentError(fixResult, "during author fix");
       }
 
-      // Completion check on Agent A.
-      const checkResult = await sendFollowUp(
+      // Completion check on Agent A (with clarification retry,
+      // same pattern as stage 4 / stage 7).
+      let checkResult = await sendFollowUp(
         opts.agentA,
         fixResult.sessionId,
         buildAuthorCompletionCheckPrompt(),
@@ -244,12 +245,44 @@ export function createReviewStageHandler(
         return mapAgentError(checkResult, "during author completion check");
       }
 
-      const checkParsed = parseStepStatus(checkResult.responseText);
-      if (checkParsed.status === "blocked") {
+      let checkMapped = mapResponseToResult(checkResult.responseText);
+
+      if (
+        checkMapped.outcome === "needs_clarification" &&
+        checkResult.sessionId
+      ) {
+        const retryResult = await sendFollowUp(
+          opts.agentA,
+          checkResult.sessionId,
+          buildClarificationPrompt(checkResult.responseText),
+          ctx.worktreePath,
+        );
+
+        if (retryResult.status === "error") {
+          return mapAgentError(
+            retryResult,
+            "during author completion clarification",
+          );
+        }
+
+        checkResult = retryResult;
+        checkMapped = mapResponseToResult(retryResult.responseText);
+      }
+
+      if (checkMapped.outcome === "blocked") {
         return {
           outcome: "blocked",
           message: `${fixResult.responseText}\n\n---\n\n${checkResult.responseText}`,
         };
+      }
+
+      // If still ambiguous or unexpected, bubble up to the engine.
+      if (
+        checkMapped.outcome !== "completed" &&
+        checkMapped.outcome !== "fixed" &&
+        checkMapped.outcome !== "approved"
+      ) {
+        return checkMapped;
       }
 
       // Step 4: Poll CI after Agent A pushes.

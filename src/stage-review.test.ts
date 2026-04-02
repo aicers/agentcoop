@@ -481,6 +481,145 @@ describe("createReviewStageHandler", () => {
     await expect(stage.handler(BASE_CTX)).rejects.toThrow("no session ID");
   });
 
+  // -- author completion check: ambiguous → clarification retry ----------------
+
+  test("retries with clarification when author completion check is ambiguous", async () => {
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "NOT_APPROVED",
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+
+    let resumeCall = 0;
+    const resumeResults = [
+      // First resume: ambiguous
+      makeStream(
+        makeResult({
+          sessionId: "sess-a2",
+          responseText: "I addressed the feedback.",
+        }),
+      ),
+      // Second resume: clarified
+      makeStream(makeResult({ responseText: "COMPLETED" })),
+    ];
+
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-a", responseText: "Fixed." }),
+          ),
+        ),
+      resume: vi.fn().mockImplementation(() => resumeResults[resumeCall++]),
+    };
+
+    const opts = makeOpts({ agentA, agentB });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("not_approved");
+    expect(agentA.resume).toHaveBeenCalledTimes(2);
+  });
+
+  test("returns needs_clarification when author check stays ambiguous after retry", async () => {
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "NOT_APPROVED",
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+
+    let resumeCall = 0;
+    const resumeResults = [
+      makeStream(
+        makeResult({
+          sessionId: "sess-a2",
+          responseText: "I addressed the feedback.",
+        }),
+      ),
+      makeStream(makeResult({ responseText: "All review items handled." })),
+    ];
+
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-a", responseText: "Fixed." }),
+          ),
+        ),
+      resume: vi.fn().mockImplementation(() => resumeResults[resumeCall++]),
+    };
+
+    const opts = makeOpts({ agentA, agentB });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("needs_clarification");
+  });
+
+  test("returns error when author clarification retry fails", async () => {
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "NOT_APPROVED",
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+
+    let resumeCall = 0;
+    const resumeResults = [
+      makeStream(
+        makeResult({
+          sessionId: "sess-a2",
+          responseText: "I addressed the feedback.",
+        }),
+      ),
+      makeStream(
+        makeResult({
+          status: "error",
+          errorType: "execution_error",
+          stderrText: "timeout",
+          responseText: "",
+        }),
+      ),
+    ];
+
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-a", responseText: "Fixed." }),
+          ),
+        ),
+      resume: vi.fn().mockImplementation(() => resumeResults[resumeCall++]),
+    };
+
+    const opts = makeOpts({ agentA, agentB });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("author completion clarification");
+  });
+
   // -- ambiguous review response -----------------------------------------------
 
   test("returns needs_clarification on ambiguous review response", async () => {
