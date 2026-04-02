@@ -4,6 +4,7 @@
  */
 
 import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
+import { t } from "./i18n/index.js";
 import type { StageOutcome, StageResult } from "./pipeline.js";
 import { type ParsedStep, parseStepStatus } from "./step-parser.js";
 
@@ -21,23 +22,24 @@ export function mapAgentError(
   result: AgentResult,
   context?: string,
 ): StageResult {
+  const m = t();
   const during = context ? ` ${context}` : "";
   if (result.errorType === "max_turns") {
     return {
       outcome: "error",
-      message: `Agent hit the maximum turn limit${during}.`,
+      message: m["stageError.maxTurns"](during),
     };
   }
   if (result.errorType === "inactivity_timeout") {
     return {
       outcome: "error",
-      message: `Agent process timed out due to inactivity${during}.`,
+      message: m["stageError.inactivityTimeout"](during),
     };
   }
   const detail = result.stderrText || result.errorType || "unknown";
   return {
     outcome: "error",
-    message: `Agent error${during}: ${detail}`,
+    message: m["stageError.agentError"](during, detail),
   };
 }
 

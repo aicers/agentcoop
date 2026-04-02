@@ -9,6 +9,7 @@
  * modules (issues #6, #7, #8).
  */
 
+import { t } from "./i18n/index.js";
 import type { PipelineEventEmitter } from "./pipeline-events.js";
 import type { StreamSink } from "./stage-util.js";
 import { buildClarificationPrompt } from "./step-parser.js";
@@ -361,7 +362,7 @@ export async function runPipeline(
         return {
           success: false,
           stoppedAt: stage.number,
-          message: `User skipped stage ${stage.number} (${stage.name}).`,
+          message: t()["pipeline.userSkipped"](stage.number, stage.name),
         };
       }
     }
@@ -406,7 +407,9 @@ export async function runPipeline(
         return {
           success: false,
           stoppedAt: stage.number,
-          message: `Invalid restart target: stage ${result.restartFromStage}.`,
+          message: t()["pipeline.invalidRestartTarget"](
+            result.restartFromStage as number,
+          ),
         };
       }
 
@@ -428,7 +431,7 @@ export async function runPipeline(
           return {
             success: false,
             stoppedAt: stage.number,
-            message: `User declined to continue restart loop at iteration ${lc.iteration}.`,
+            message: t()["pipeline.userDeclinedRestartLoop"](lc.iteration),
           };
         }
         grantLoopBudget(lc);
@@ -450,7 +453,7 @@ export async function runPipeline(
   return {
     success: true,
     stoppedAt: undefined,
-    message: "Pipeline completed successfully.",
+    message: t()["pipeline.completed"],
   };
 }
 
@@ -585,7 +588,7 @@ async function runStage(
         !stage.requiresArtifact,
       );
       if (decision.action === "halt") {
-        return { action: "abort", message: "User halted on blocked agent." };
+        return { action: "abort", message: t()["pipeline.userHaltedBlocked"] };
       }
       if (decision.action === "proceed") {
         return { action: "done", message: result.message };
@@ -605,7 +608,7 @@ async function runStage(
         if (decision.action === "halt") {
           return {
             action: "abort",
-            message: "User halted on ambiguous response.",
+            message: t()["pipeline.userHaltedAmbiguous"],
           };
         }
         if (decision.action === "proceed") {
@@ -637,7 +640,7 @@ async function runStage(
       if (!approved) {
         return {
           action: "abort",
-          message: `User declined to continue loop at iteration ${lc.iteration}.`,
+          message: t()["pipeline.userDeclinedLoop"](lc.iteration),
         };
       }
       grantLoopBudget(lc);
@@ -663,27 +666,30 @@ export function createDoneStageHandler(options: {
   cleanup: () => void;
 }): StageDefinition {
   return {
-    name: "Done",
+    name: t()["stage.done"],
     number: 9,
     handler: async (ctx) => {
-      const summary = `Pipeline for ${ctx.owner}/${ctx.repo}#${ctx.issueNumber} completed.`;
+      const m = t();
+      const summary = m["pipeline.pipelineCompleted"](
+        ctx.owner,
+        ctx.repo,
+        ctx.issueNumber,
+      );
       await options.reportCompletion(summary);
 
-      const merged = await options.confirmMerge(
-        "Has the PR been merged? Confirm to clean up the worktree.",
-      );
+      const merged = await options.confirmMerge(m["pipeline.mergeConfirm"]);
 
       if (merged) {
         options.cleanup();
         return {
           outcome: "completed",
-          message: `${summary} Worktree cleaned up.`,
+          message: `${summary} ${m["pipeline.worktreeCleanedUp"]}`,
         };
       }
 
       return {
         outcome: "completed",
-        message: `${summary} Worktree preserved (merge not confirmed).`,
+        message: `${summary} ${m["pipeline.worktreePreserved"]}`,
       };
     },
   };

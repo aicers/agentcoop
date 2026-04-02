@@ -11,6 +11,7 @@ import { type ExecFileSyncOptions, execFileSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { t } from "./i18n/index.js";
 
 // ---- public types --------------------------------------------------------
 
@@ -188,16 +189,13 @@ export function createWorktree(options: {
 
   if (existsSync(wtPath)) {
     if (conflictChoice === undefined) {
-      throw new Error(
-        `Worktree already exists at ${wtPath}. ` +
-          "Provide a conflictChoice (reuse | clean | halt).",
-      );
+      throw new Error(t()["worktree.alreadyExists"](wtPath));
     }
 
     const dirty = hasUncommittedChanges(wtPath);
 
     if (conflictChoice === "halt") {
-      throw new Error("User chose to halt — worktree conflict unresolved.");
+      throw new Error(t()["worktree.haltConflict"]);
     }
 
     if (conflictChoice === "clean") {
