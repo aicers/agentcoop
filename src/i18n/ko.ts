@@ -203,6 +203,9 @@ export const ko: Messages = {
     `\uC5D0\uC774\uC804\uD2B8\uAC00 \uCD5C\uB300 \uD134 \uC218\uC5D0 \uB3C4\uB2EC\uD588\uC2B5\uB2C8\uB2E4${context}.`,
   "stageError.inactivityTimeout": (context) =>
     `\uBE44\uD65C\uC131\uC73C\uB85C \uC778\uD574 \uC5D0\uC774\uC804\uD2B8 \uD504\uB85C\uC138\uC2A4\uAC00 \uC2DC\uAC04 \uCD08\uACFC\uB418\uC5C8\uC2B5\uB2C8\uB2E4${context}.`,
+  "stageError.configParsing": (context, detail) =>
+    `\uC5D0\uC774\uC804\uD2B8 CLI\uAC00 \uC124\uC815\uC744 \uAC70\uBD80\uD588\uC2B5\uB2C8\uB2E4${context}. ` +
+    `~/.codex/config.toml\uC5D0\uC11C \uC9C0\uC6D0\uB418\uC9C0 \uC54A\uB294 \uAC12\uC744 \uD655\uC778\uD558\uC138\uC694: ${detail}`,
   "stageError.agentError": (context, detail) =>
     `\uC5D0\uC774\uC804\uD2B8 \uC624\uB958${context}: ${detail}`,
 

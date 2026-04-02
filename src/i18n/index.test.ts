@@ -81,6 +81,7 @@ describe("catalogs are complete", () => {
       "statusBar.last": ["ok"],
       "stageError.maxTurns": [" (stage 1)"],
       "stageError.inactivityTimeout": [" (stage 2)"],
+      "stageError.configParsing": [" (stage 8)", "unknown variant"],
       "stageError.agentError": [" (stage 3)", "timeout"],
       "ci.pendingTimeout": [30],
       "ci.stillFailing": [3],

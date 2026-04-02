@@ -164,6 +164,7 @@ export interface Messages {
 
   "stageError.maxTurns": (context: string) => string;
   "stageError.inactivityTimeout": (context: string) => string;
+  "stageError.configParsing": (context: string, detail: string) => string;
   "stageError.agentError": (context: string, detail: string) => string;
 
   // ---- worktree errors ---------------------------------------------------

@@ -174,6 +174,9 @@ export const en: Messages = {
     `Agent hit the maximum turn limit${context}.`,
   "stageError.inactivityTimeout": (context) =>
     `Agent process timed out due to inactivity${context}.`,
+  "stageError.configParsing": (context, detail) =>
+    `Agent CLI rejected its configuration${context}. ` +
+    `Check ~/.codex/config.toml for unsupported values: ${detail}`,
   "stageError.agentError": (context, detail) =>
     `Agent error${context}: ${detail}`,
 

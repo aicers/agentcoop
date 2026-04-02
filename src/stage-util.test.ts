@@ -110,6 +110,54 @@ describe("mapAgentError", () => {
     const result = mapAgentError({ ...base, stderrText: "oops" }, "during fix");
     expect(result.message).toBe("Agent error during fix: oops");
   });
+
+  test("maps config_parsing to actionable message with stderr detail", () => {
+    const stderr =
+      "Error: unknown variant `xhigh`, expected one of `minimal`, `low`, `medium`, `high`";
+    const result = mapAgentError({
+      ...base,
+      errorType: "config_parsing",
+      stderrText: stderr,
+    });
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("~/.codex/config.toml");
+    expect(result.message).toContain(stderr);
+  });
+
+  test("config_parsing includes context when provided", () => {
+    const result = mapAgentError(
+      {
+        ...base,
+        errorType: "config_parsing",
+        stderrText: "invalid value",
+      },
+      " during review",
+    );
+    expect(result.message).toContain("during review");
+    expect(result.message).toContain("invalid value");
+  });
+
+  test("config_parsing falls back to responseText when stderrText is empty", () => {
+    const result = mapAgentError({
+      ...base,
+      errorType: "config_parsing",
+      stderrText: "",
+      responseText: "unknown variant `xhigh`",
+    });
+    expect(result.message).toContain("unknown variant `xhigh`");
+    expect(result.message).toContain("~/.codex/config.toml");
+  });
+
+  test("config_parsing falls back to 'unknown' when both stderr and response are empty", () => {
+    const result = mapAgentError({
+      ...base,
+      errorType: "config_parsing",
+      stderrText: "",
+      responseText: "",
+    });
+    expect(result.message).toContain("unknown");
+    expect(result.message).toContain("~/.codex/config.toml");
+  });
 });
 
 // ---- mapParsedStepToResult -------------------------------------------------
@@ -393,6 +441,23 @@ describe("invokeOrResume", () => {
 
     const out = await invokeOrResume(agent, "saved-sess", "prompt", "/cwd");
     expect(out).toBe(execError);
+    expect(agent.invoke).not.toHaveBeenCalled();
+  });
+
+  test("returns error immediately on config_parsing (non-recoverable)", async () => {
+    const configError = makeResult({
+      status: "error",
+      errorType: "config_parsing",
+      stderrText:
+        "Error: unknown variant `xhigh`, expected one of `minimal`, `low`, `medium`, `high`",
+    });
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn().mockReturnValue(makeStream(configError)),
+    };
+
+    const out = await invokeOrResume(agent, "saved-sess", "prompt", "/cwd");
+    expect(out).toBe(configError);
     expect(agent.invoke).not.toHaveBeenCalled();
   });
 });

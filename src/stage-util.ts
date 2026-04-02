@@ -36,6 +36,13 @@ export function mapAgentError(
       message: m["stageError.inactivityTimeout"](during),
     };
   }
+  if (result.errorType === "config_parsing") {
+    const detail = result.stderrText || result.responseText || "unknown";
+    return {
+      outcome: "error",
+      message: m["stageError.configParsing"](during, detail),
+    };
+  }
   const detail = result.stderrText || result.errorType || "unknown";
   return {
     outcome: "error",
@@ -172,6 +179,7 @@ async function invokeOrResumeOnce(
     if (
       result.errorType === "cli_not_found" ||
       result.errorType === "execution_error" ||
+      result.errorType === "config_parsing" ||
       result.errorType === "inactivity_timeout"
     ) {
       return result;
