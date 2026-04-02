@@ -18,7 +18,9 @@ import { runPipeline } from "./pipeline.js";
 import { createCiCheckStageHandler } from "./stage-cicheck.js";
 import { createCreatePrStageHandler } from "./stage-createpr.js";
 import { createImplementStageHandler } from "./stage-implement.js";
+import { createReviewStageHandler } from "./stage-review.js";
 import { createSelfCheckStageHandler } from "./stage-selfcheck.js";
+import { createSquashStageHandler } from "./stage-squash.js";
 import { createTestPlanStageHandler } from "./stage-testplan.js";
 
 // ---- helpers ---------------------------------------------------------------
@@ -1338,5 +1340,458 @@ describe("Multi-stage E2E: Stage 2 → Stage 3", () => {
     expect(result.stoppedAt).toBe(2);
     // Agent should have been invoked only for Stage 2
     expect(agent.invoke).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---- Stage 7 (Squash) through pipeline ---------------------------------------
+
+describe("Stage 7 (Squash) through pipeline", () => {
+  test("completes when squash succeeds and CI passes", async () => {
+    const agent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "s1", responseText: "Squashed." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+
+    const stage = createSquashStageHandler({
+      agent,
+      ...ISSUE_CTX,
+      getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
+      collectFailureLogs: vi.fn().mockReturnValue(""),
+      delay: vi.fn().mockResolvedValue(undefined),
+      pollIntervalMs: 100,
+      pollTimeoutMs: 1000,
+    });
+
+    const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
+    expect(result.success).toBe(true);
+  });
+
+  test("blocked → user halts → pipeline aborts", async () => {
+    const agent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "s1", responseText: "Cannot squash." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "BLOCKED" }))),
+    };
+    const prompt = makePrompt({
+      handleBlocked: vi.fn().mockResolvedValue({ action: "halt" }),
+    });
+
+    const stage = createSquashStageHandler({
+      agent,
+      ...ISSUE_CTX,
+      getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
+      collectFailureLogs: vi.fn().mockReturnValue(""),
+      delay: vi.fn().mockResolvedValue(undefined),
+      pollIntervalMs: 100,
+      pollTimeoutMs: 1000,
+    });
+
+    const result = await runPipeline(
+      makePipelineOpts({ stages: [stage], prompt }),
+    );
+    expect(result.success).toBe(false);
+    expect(result.stoppedAt).toBe(7);
+  });
+});
+
+// ---- Stage 8 (Review) through pipeline ---------------------------------------
+
+describe("Stage 8 (Review) through pipeline", () => {
+  test("completes when Agent B approves on first round", async () => {
+    const agentA: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn(),
+    };
+
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sb",
+            responseText: "Looks good.\n\nAPPROVED",
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+    };
+
+    const stage = createReviewStageHandler({
+      agentA,
+      agentB,
+      ...ISSUE_CTX,
+      getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
+      collectFailureLogs: vi.fn().mockReturnValue(""),
+      delay: vi.fn().mockResolvedValue(undefined),
+      pollIntervalMs: 100,
+      pollTimeoutMs: 1000,
+    });
+
+    const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
+    expect(result.success).toBe(true);
+    expect(agentA.invoke).not.toHaveBeenCalled();
+  });
+
+  test("NOT_APPROVED → fix → CI pass → loops → APPROVED: completes", async () => {
+    let bInvokeCalls = 0;
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockImplementation(() => {
+        bInvokeCalls++;
+        if (bInvokeCalls === 1) {
+          return makeStream(
+            makeResult({
+              sessionId: "sb1",
+              responseText: "NOT_APPROVED",
+            }),
+          );
+        }
+        return makeStream(
+          makeResult({
+            sessionId: "sb2",
+            responseText: "APPROVED",
+          }),
+        );
+      }),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+    };
+
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sa1",
+            responseText: "Fixed.",
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+
+    const stage = createReviewStageHandler({
+      agentA,
+      agentB,
+      ...ISSUE_CTX,
+      getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
+      collectFailureLogs: vi.fn().mockReturnValue(""),
+      delay: vi.fn().mockResolvedValue(undefined),
+      pollIntervalMs: 100,
+      pollTimeoutMs: 1000,
+    });
+
+    const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
+    expect(result.success).toBe(true);
+    expect(bInvokeCalls).toBe(2);
+  });
+
+  test("3 rounds NOT_APPROVED → budget exhausted → user declines → aborts", async () => {
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sb",
+            responseText: "NOT_APPROVED",
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sa",
+            responseText: "Fixed.",
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+
+    const prompt = makePrompt({
+      confirmContinueLoop: vi.fn().mockResolvedValue(false),
+    });
+
+    const stage = {
+      ...createReviewStageHandler({
+        agentA,
+        agentB,
+        ...ISSUE_CTX,
+        getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
+        collectFailureLogs: vi.fn().mockReturnValue(""),
+        delay: vi.fn().mockResolvedValue(undefined),
+        pollIntervalMs: 100,
+        pollTimeoutMs: 1000,
+      }),
+      autoBudget: 3,
+    };
+
+    const result = await runPipeline(
+      makePipelineOpts({ stages: [stage], prompt }),
+    );
+    expect(result.success).toBe(false);
+    expect(prompt.confirmContinueLoop).toHaveBeenCalled();
+  });
+
+  test("3 rounds NOT_APPROVED → budget exhausted → user approves → APPROVED", async () => {
+    let bInvokeCalls = 0;
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockImplementation(() => {
+        bInvokeCalls++;
+        if (bInvokeCalls <= 3) {
+          return makeStream(
+            makeResult({
+              sessionId: `sb${bInvokeCalls}`,
+              responseText: "NOT_APPROVED",
+            }),
+          );
+        }
+        return makeStream(
+          makeResult({
+            sessionId: `sb${bInvokeCalls}`,
+            responseText: "APPROVED",
+          }),
+        );
+      }),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+    };
+
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sa",
+            responseText: "Fixed.",
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+
+    const prompt = makePrompt({
+      confirmContinueLoop: vi.fn().mockResolvedValue(true),
+    });
+
+    const stage = {
+      ...createReviewStageHandler({
+        agentA,
+        agentB,
+        ...ISSUE_CTX,
+        getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
+        collectFailureLogs: vi.fn().mockReturnValue(""),
+        delay: vi.fn().mockResolvedValue(undefined),
+        pollIntervalMs: 100,
+        pollTimeoutMs: 1000,
+      }),
+      autoBudget: 3,
+    };
+
+    const result = await runPipeline(
+      makePipelineOpts({ stages: [stage], prompt }),
+    );
+    expect(result.success).toBe(true);
+    expect(bInvokeCalls).toBe(4);
+    expect(prompt.confirmContinueLoop).toHaveBeenCalledTimes(1);
+  });
+
+  test("CI error during fix flow → pipeline aborts", async () => {
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sb",
+            responseText: "NOT_APPROVED",
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      );
+
+    // Agent A: first call is fix, rest are CI fix attempts (all "succeed" but CI keeps failing)
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sa",
+            responseText: "Fixed.",
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+
+    const prompt = makePrompt({
+      handleError: vi.fn().mockResolvedValue({ action: "abort" }),
+    });
+
+    const stage = createReviewStageHandler({
+      agentA,
+      agentB,
+      ...ISSUE_CTX,
+      getCiStatus,
+      collectFailureLogs: vi.fn().mockReturnValue("test err"),
+      delay: vi.fn().mockResolvedValue(undefined),
+      pollIntervalMs: 100,
+      pollTimeoutMs: 1000,
+      maxFixAttempts: 3,
+    });
+
+    const result = await runPipeline(
+      makePipelineOpts({ stages: [stage], prompt }),
+    );
+    expect(result.success).toBe(false);
+  });
+});
+
+// ---- Stages 7+8 combined through pipeline ------------------------------------
+
+describe("Stages 7+8 (Squash + Review) through pipeline", () => {
+  test("squash succeeds → CI passes → review approves: pipeline completes", async () => {
+    const squashAgent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sq1", responseText: "Squashed." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+
+    const agentA: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn(),
+    };
+
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sb",
+            responseText: "APPROVED",
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+    };
+
+    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pass"));
+
+    const squashStage = createSquashStageHandler({
+      agent: squashAgent,
+      ...ISSUE_CTX,
+      getCiStatus,
+      collectFailureLogs: vi.fn().mockReturnValue(""),
+      delay: vi.fn().mockResolvedValue(undefined),
+      pollIntervalMs: 100,
+      pollTimeoutMs: 1000,
+    });
+
+    const reviewStage = createReviewStageHandler({
+      agentA,
+      agentB,
+      ...ISSUE_CTX,
+      getCiStatus,
+      collectFailureLogs: vi.fn().mockReturnValue(""),
+      delay: vi.fn().mockResolvedValue(undefined),
+      pollIntervalMs: 100,
+      pollTimeoutMs: 1000,
+    });
+
+    const result = await runPipeline(
+      makePipelineOpts({ stages: [squashStage, reviewStage] }),
+    );
+    expect(result.success).toBe(true);
+    expect(squashAgent.invoke).toHaveBeenCalledTimes(1);
+    expect(agentB.invoke).toHaveBeenCalledTimes(1);
+    expect(agentA.invoke).not.toHaveBeenCalled();
+  });
+
+  test("squash blocked → pipeline aborts before review", async () => {
+    const squashAgent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ sessionId: "sq1", responseText: "Cannot." })),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "BLOCKED" }))),
+    };
+
+    const agentB: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn(),
+    };
+
+    const prompt = makePrompt({
+      handleBlocked: vi.fn().mockResolvedValue({ action: "halt" }),
+    });
+
+    const squashStage = createSquashStageHandler({
+      agent: squashAgent,
+      ...ISSUE_CTX,
+      getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
+      collectFailureLogs: vi.fn().mockReturnValue(""),
+      delay: vi.fn().mockResolvedValue(undefined),
+      pollIntervalMs: 100,
+      pollTimeoutMs: 1000,
+    });
+
+    const reviewStage = createReviewStageHandler({
+      agentA: { invoke: vi.fn(), resume: vi.fn() },
+      agentB,
+      ...ISSUE_CTX,
+      getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
+      collectFailureLogs: vi.fn().mockReturnValue(""),
+      delay: vi.fn().mockResolvedValue(undefined),
+      pollIntervalMs: 100,
+      pollTimeoutMs: 1000,
+    });
+
+    const result = await runPipeline(
+      makePipelineOpts({ stages: [squashStage, reviewStage], prompt }),
+    );
+    expect(result.success).toBe(false);
+    expect(result.stoppedAt).toBe(7);
+    expect(agentB.invoke).not.toHaveBeenCalled();
   });
 });
