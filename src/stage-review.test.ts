@@ -1023,9 +1023,7 @@ describe("createReviewStageHandler", () => {
             }),
           ),
         )
-        .mockReturnValueOnce(
-          makeStream(makeResult({ responseText: "NONE" })),
-        ),
+        .mockReturnValueOnce(makeStream(makeResult({ responseText: "NONE" }))),
       resume: vi.fn(),
     };
 

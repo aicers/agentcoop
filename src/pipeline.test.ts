@@ -51,7 +51,10 @@ function makeStage(
   };
 }
 
-const BASE_CTX: Omit<StageContext, "iteration" | "lastAutoIteration" | "userInstruction"> = {
+const BASE_CTX: Omit<
+  StageContext,
+  "iteration" | "lastAutoIteration" | "userInstruction"
+> = {
   owner: "org",
   repo: "repo",
   issueNumber: 5,
