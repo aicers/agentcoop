@@ -8,7 +8,9 @@ import { createDoneStageHandler, runPipeline } from "./pipeline.js";
 import { createCiCheckStageHandler } from "./stage-cicheck.js";
 import { createCreatePrStageHandler } from "./stage-createpr.js";
 import { createImplementStageHandler } from "./stage-implement.js";
+import { createReviewStageHandler } from "./stage-review.js";
 import { createSelfCheckStageHandler } from "./stage-selfcheck.js";
+import { createSquashStageHandler } from "./stage-squash.js";
 import { createTestPlanStageHandler } from "./stage-testplan.js";
 import type { AgentConfig } from "./startup.js";
 import { runStartup } from "./startup.js";
@@ -82,6 +84,7 @@ try {
 
   // Create agent adapters.
   const agentA = createAdapter(result.agentA, result.claudePermissionMode);
+  const agentB = createAdapter(result.agentB, result.claudePermissionMode);
 
   const issueCtx = {
     issueTitle: result.issue.title,
@@ -119,6 +122,20 @@ try {
     restartFromStage: 5,
   };
 
+  const squashStage = createSquashStageHandler({
+    agent: agentA,
+    ...issueCtx,
+  });
+
+  const reviewStage = {
+    ...createReviewStageHandler({
+      agentA,
+      agentB,
+      ...issueCtx,
+    }),
+    autoBudget: result.pipelineSettings.reviewAutoRounds,
+  };
+
   const doneStage = createDoneStageHandler({
     reportCompletion: async (msg) => console.log(msg),
     confirmMerge: async () => true, // placeholder until real prompts
@@ -134,6 +151,8 @@ try {
       createPrStage,
       ciCheckStage,
       testPlanStage,
+      squashStage,
+      reviewStage,
       doneStage,
     ],
     prompt: {

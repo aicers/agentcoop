@@ -1,0 +1,324 @@
+/**
+ * Stage 8 — Review loop.
+ *
+ * Multi-agent flow per iteration:
+ *   1. Agent B posts a review prefixed with `[Reviewer Round {n}]`,
+ *      ending with APPROVED or NOT_APPROVED.
+ *   2. If APPROVED — Agent B summarises unresolved items (or NONE),
+ *      and the stage completes.
+ *   3. If NOT_APPROVED:
+ *      a. Agent A reads the review, fixes issues, and posts a response
+ *         prefixed with `[Author Round {n}]`.
+ *      b. Completion check on Agent A.
+ *      c. Internal CI poll + fix loop.
+ *      d. Returns `"not_approved"` so the pipeline engine loops for
+ *         the next review round.
+ *
+ * The pipeline engine's auto-budget manages the 3-automatic /
+ * 4th-asks-user contract.  `autoBudget` should be set from the
+ * `reviewAutoRounds` config value in `index.ts`.
+ */
+
+import type { AgentAdapter } from "./agent.js";
+import type { CiStatus } from "./ci.js";
+import {
+  collectFailureLogs as defaultCollectFailureLogs,
+  getCiStatus as defaultGetCiStatus,
+} from "./ci.js";
+import { pollCiAndFix } from "./ci-poll.js";
+import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
+import {
+  mapAgentError,
+  mapResponseToResult,
+  sendFollowUp,
+} from "./stage-util.js";
+import { parseStepStatus } from "./step-parser.js";
+
+// ---- defaults ----------------------------------------------------------------
+
+const DEFAULT_POLL_INTERVAL_MS = 30_000;
+const DEFAULT_POLL_TIMEOUT_MS = 600_000;
+
+function defaultDelay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ---- public types ------------------------------------------------------------
+
+export interface ReviewStageOptions {
+  agentA: AgentAdapter;
+  agentB: AgentAdapter;
+  issueTitle: string;
+  issueBody: string;
+  /** Injected for testability. */
+  getCiStatus?: (owner: string, repo: string, branch: string) => CiStatus;
+  /** Injected for testability. */
+  collectFailureLogs?: (owner: string, repo: string, runId: number) => string;
+  pollIntervalMs?: number;
+  pollTimeoutMs?: number;
+  maxFixAttempts?: number;
+  /** Injected for testability. */
+  delay?: (ms: number) => Promise<void>;
+}
+
+// ---- prompt builders ---------------------------------------------------------
+
+export function buildReviewPrompt(
+  ctx: StageContext,
+  opts: ReviewStageOptions,
+  round: number,
+): string {
+  const lines = [
+    `You are reviewing a pull request for the following GitHub issue.`,
+    ``,
+    `## Repository`,
+    `- Owner: ${ctx.owner}`,
+    `- Repo: ${ctx.repo}`,
+    `- Branch: ${ctx.branch}`,
+    `- Worktree: ${ctx.worktreePath}`,
+    ``,
+    `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
+    ``,
+    opts.issueBody,
+    ``,
+    `## Instructions`,
+    ``,
+    `1. Find the pull request for this branch (use \`gh pr view\`).`,
+  ];
+
+  if (round > 1) {
+    lines.push(
+      `2. Read the author's response in the PR comment prefixed with`,
+      `   \`[Author Round ${round - 1}]\` to understand what was changed.`,
+      `3. Review the updated code changes in the PR.  Evaluate`,
+      `   correctness, test coverage, error handling, security, and`,
+      `   performance.`,
+      `4. Post your follow-up review as a PR comment prefixed with`,
+      `   \`**[Reviewer Round ${round}]**\`.`,
+      `5. End your response with one of these keywords:`,
+    );
+  } else {
+    lines.push(
+      `2. Review the code changes in the PR.  Evaluate correctness,`,
+      `   test coverage, error handling, security, and performance.`,
+      `3. Post your review as a PR comment prefixed with`,
+      `   \`**[Reviewer Round ${round}]**\`.`,
+      `4. End your response with one of these keywords:`,
+    );
+  }
+
+  lines.push(
+    `   - APPROVED — if the changes are ready to merge`,
+    `   - NOT_APPROVED — if changes are needed`,
+  );
+
+  if (ctx.userInstruction) {
+    lines.push(``, `## Additional feedback`, ``, ctx.userInstruction);
+  }
+
+  return lines.join("\n");
+}
+
+export function buildAuthorFixPrompt(
+  ctx: StageContext,
+  opts: ReviewStageOptions,
+  round: number,
+): string {
+  const lines = [
+    `You are addressing review feedback for the following GitHub issue.`,
+    ``,
+    `## Repository`,
+    `- Owner: ${ctx.owner}`,
+    `- Repo: ${ctx.repo}`,
+    `- Branch: ${ctx.branch}`,
+    `- Worktree: ${ctx.worktreePath}`,
+    ``,
+    `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
+    ``,
+    opts.issueBody,
+    ``,
+    `## Instructions`,
+    ``,
+    `1. Find the pull request for this branch (use \`gh pr view\`).`,
+    `2. Read the review comments prefixed with \`[Reviewer Round ${round}]\``,
+    `   (only comments from your own account).`,
+    `3. Fix all agreed-upon items from the review.`,
+    `4. Post a response as a PR comment prefixed with`,
+    `   \`**[Author Round ${round}]**\` summarising what you changed.`,
+    `5. Commit and push your changes so a new CI run is triggered.`,
+  ];
+
+  return lines.join("\n");
+}
+
+export function buildAuthorCompletionCheckPrompt(): string {
+  return [
+    `You have finished addressing the review feedback.  Please evaluate`,
+    `the result and respond with exactly one of the following keywords:`,
+    ``,
+    `- COMPLETED — if all feedback was addressed and changes were pushed`,
+    `- BLOCKED — if you cannot proceed and need user intervention`,
+  ].join("\n");
+}
+
+export function buildUnresolvedSummaryPrompt(round: number): string {
+  return [
+    `The review loop has ended.  Please check whether there are any`,
+    `unresolved items from this review cycle.`,
+    ``,
+    `- If there are unresolved items, post a PR comment prefixed with`,
+    `  \`**[Unresolved Round ${round}]**\` listing each unresolved item.`,
+    `  Then end your response with COMPLETED.`,
+    `- If there are no unresolved items, respond with exactly: NONE`,
+  ].join("\n");
+}
+
+// ---- handler -----------------------------------------------------------------
+
+export function createReviewStageHandler(
+  opts: ReviewStageOptions,
+): StageDefinition {
+  return {
+    name: "Review",
+    number: 8,
+    handler: async (ctx: StageContext): Promise<StageResult> => {
+      const round = ctx.iteration + 1; // 1-based for display
+
+      // Step 1: Agent B reviews.
+      const reviewPrompt = buildReviewPrompt(ctx, opts, round);
+      const reviewStream = opts.agentB.invoke(reviewPrompt, {
+        cwd: ctx.worktreePath,
+      });
+      const reviewResult = await reviewStream.result;
+
+      if (reviewResult.status === "error") {
+        return mapAgentError(reviewResult, "during review");
+      }
+
+      // Parse review verdict.
+      const reviewParsed = parseStepStatus(reviewResult.responseText);
+
+      // Step 2: If approved — ask B for unresolved summary, then complete.
+      if (reviewParsed.status === "approved") {
+        const { error, summary } = await handleUnresolvedSummary(
+          opts,
+          reviewResult.sessionId,
+          round,
+          ctx.worktreePath,
+        );
+        if (error) return error;
+
+        const base = `Review approved at round ${round}.`;
+        const message = summary
+          ? `${base}\n\nUnresolved items:\n${summary}`
+          : base;
+
+        return { outcome: "completed", message };
+      }
+
+      // Treat anything other than not_approved as ambiguous → needs_clarification.
+      if (reviewParsed.status !== "not_approved") {
+        return mapResponseToResult(reviewResult.responseText);
+      }
+
+      // Step 3: NOT_APPROVED — Agent A fixes.
+      const fixPrompt = buildAuthorFixPrompt(ctx, opts, round);
+      const fixStream = opts.agentA.invoke(fixPrompt, {
+        cwd: ctx.worktreePath,
+      });
+      const fixResult = await fixStream.result;
+
+      if (fixResult.status === "error") {
+        return mapAgentError(fixResult, "during author fix");
+      }
+
+      // Completion check on Agent A.
+      const checkResult = await sendFollowUp(
+        opts.agentA,
+        fixResult.sessionId,
+        buildAuthorCompletionCheckPrompt(),
+        ctx.worktreePath,
+      );
+
+      if (checkResult.status === "error") {
+        return mapAgentError(checkResult, "during author completion check");
+      }
+
+      const checkParsed = parseStepStatus(checkResult.responseText);
+      if (checkParsed.status === "blocked") {
+        return {
+          outcome: "blocked",
+          message: `${fixResult.responseText}\n\n---\n\n${checkResult.responseText}`,
+        };
+      }
+
+      // Step 4: Poll CI after Agent A pushes.
+      const ciResult = await pollCiAndFix({
+        ctx,
+        agent: opts.agentA,
+        issueTitle: opts.issueTitle,
+        issueBody: opts.issueBody,
+        getCiStatus: opts.getCiStatus ?? defaultGetCiStatus,
+        collectFailureLogs:
+          opts.collectFailureLogs ?? defaultCollectFailureLogs,
+        pollIntervalMs: opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+        pollTimeoutMs: opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS,
+        maxFixAttempts: opts.maxFixAttempts,
+        delay: opts.delay ?? defaultDelay,
+      });
+
+      if (!ciResult.passed) {
+        return { outcome: "error", message: ciResult.message };
+      }
+
+      // CI passed — return not_approved so the engine loops for next round.
+      return {
+        outcome: "not_approved",
+        message: `Round ${round} fixes applied, CI passed. Proceeding to next review round.`,
+      };
+    },
+  };
+}
+
+// ---- helpers -----------------------------------------------------------------
+
+interface UnresolvedSummaryResult {
+  /** Non-null when the agent returned an error. */
+  error: StageResult | undefined;
+  /** The summary text from Agent B, or `undefined` when NONE. */
+  summary: string | undefined;
+}
+
+/**
+ * Ask Agent B for an unresolved items summary.  Returns the summary
+ * text so the caller can include it in the completion message shown
+ * to the user.
+ */
+async function handleUnresolvedSummary(
+  opts: ReviewStageOptions,
+  sessionId: string | undefined,
+  round: number,
+  cwd: string,
+): Promise<UnresolvedSummaryResult> {
+  const summaryPrompt = buildUnresolvedSummaryPrompt(round);
+
+  // If we have a session, resume; otherwise invoke fresh.
+  const result = sessionId
+    ? await sendFollowUp(opts.agentB, sessionId, summaryPrompt, cwd)
+    : await opts.agentB.invoke(summaryPrompt, { cwd }).result;
+
+  if (result.status === "error") {
+    return {
+      error: mapAgentError(result, "during unresolved summary"),
+      summary: undefined,
+    };
+  }
+
+  // Check whether Agent B said NONE.
+  const upper = result.responseText.trim().toUpperCase();
+  if (upper === "NONE" || upper.endsWith("NONE")) {
+    return { error: undefined, summary: undefined };
+  }
+
+  return { error: undefined, summary: result.responseText };
+}
