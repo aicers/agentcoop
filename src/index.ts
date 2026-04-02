@@ -156,7 +156,7 @@ try {
       doneStage,
     ],
     prompt: {
-      confirmContinueLoop: async () => false,
+      confirmContinueLoop: async (_stage, _iter, _msg) => false,
       confirmNextStage: async () => true,
       handleBlocked: async () => ({ action: "halt" }),
       handleError: async () => ({ action: "abort" }),

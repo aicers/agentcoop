@@ -332,6 +332,24 @@ describe("runPipeline — loop control", () => {
     expect(prompt.confirmContinueLoop).toHaveBeenCalledTimes(1);
   });
 
+  test("forwards not_approved message to confirmContinueLoop", async () => {
+    const prompt = makePrompt({
+      confirmContinueLoop: vi.fn().mockResolvedValue(false),
+    });
+    const stages = [
+      makeStage(1, async () => ({
+        outcome: "not_approved",
+        message: "round feedback",
+      })),
+    ];
+    await runPipeline(makePipelineOpts({ stages, prompt }));
+    expect(prompt.confirmContinueLoop).toHaveBeenCalledWith(
+      "Stage 1",
+      3,
+      "round feedback",
+    );
+  });
+
   test("grants 3 more iterations when user approves", async () => {
     let calls = 0;
     const prompt = makePrompt({
