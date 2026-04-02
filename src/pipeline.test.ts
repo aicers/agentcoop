@@ -15,6 +15,11 @@ import {
   isTerminalSuccess,
   runPipeline,
 } from "./pipeline.js";
+import {
+  PipelineEventEmitter,
+  type StageEnterEvent,
+  type StageExitEvent,
+} from "./pipeline-events.js";
 import { buildClarificationPrompt } from "./step-parser.js";
 
 // ---- helpers -------------------------------------------------------------
@@ -1741,5 +1746,231 @@ describe("full resume cycle (E2E)", () => {
         s === 5 && l === 0 && idx > 0 && transitions[idx - 1][0] === 6,
     );
     expect(jumpCheckpoints.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pipeline event emitter integration
+// ---------------------------------------------------------------------------
+
+describe("pipeline event emission", () => {
+  test("emits stage:enter before handler and stage:exit after handler", async () => {
+    const timeline: string[] = [];
+    const emitter = new PipelineEventEmitter();
+    emitter.on("stage:enter", () => timeline.push("enter"));
+    emitter.on("stage:exit", () => timeline.push("exit"));
+
+    const stages = [
+      makeStage(1, async () => {
+        timeline.push("handler");
+        return { outcome: "completed", message: "" };
+      }),
+    ];
+
+    await runPipeline(makePipelineOpts({ stages, events: emitter }));
+
+    expect(timeline).toEqual(["enter", "handler", "exit"]);
+  });
+
+  test("stage:enter includes stageNumber, stageName, and iteration", async () => {
+    const emitter = new PipelineEventEmitter();
+    const enterEvents: StageEnterEvent[] = [];
+    emitter.on("stage:enter", (ev) => enterEvents.push(ev));
+
+    const stages = [
+      makeStage(5, async () => ({ outcome: "completed", message: "" })),
+    ];
+
+    await runPipeline(makePipelineOpts({ stages, events: emitter }));
+
+    expect(enterEvents).toEqual([
+      { stageNumber: 5, stageName: "Stage 5", iteration: 0 },
+    ]);
+  });
+
+  test("stage:exit includes stageNumber and outcome", async () => {
+    const emitter = new PipelineEventEmitter();
+    const exitEvents: StageExitEvent[] = [];
+    emitter.on("stage:exit", (ev) => exitEvents.push(ev));
+
+    const stages = [
+      makeStage(2, async () => ({ outcome: "completed", message: "" })),
+    ];
+
+    await runPipeline(makePipelineOpts({ stages, events: emitter }));
+
+    expect(exitEvents).toEqual([{ stageNumber: 2, outcome: "completed" }]);
+  });
+
+  test("emits events for each stage in sequence", async () => {
+    const emitter = new PipelineEventEmitter();
+    const events: string[] = [];
+    emitter.on("stage:enter", (ev) => events.push(`enter:${ev.stageNumber}`));
+    emitter.on("stage:exit", (ev) => events.push(`exit:${ev.stageNumber}`));
+
+    const stages = [
+      makeStage(1, async () => ({ outcome: "completed", message: "" })),
+      makeStage(2, async () => ({ outcome: "completed", message: "" })),
+      makeStage(3, async () => ({ outcome: "completed", message: "" })),
+    ];
+
+    await runPipeline(makePipelineOpts({ stages, events: emitter }));
+
+    expect(events).toEqual([
+      "enter:1",
+      "exit:1",
+      "enter:2",
+      "exit:2",
+      "enter:3",
+      "exit:3",
+    ]);
+  });
+
+  test("emits stage:enter on each loop iteration with incrementing iteration", async () => {
+    const emitter = new PipelineEventEmitter();
+    const enterEvents: StageEnterEvent[] = [];
+    emitter.on("stage:enter", (ev) => enterEvents.push(ev));
+
+    let call = 0;
+    const stages = [
+      makeStage(
+        4,
+        async () => {
+          call++;
+          // First two iterations return not_approved, third completes.
+          if (call < 3) return { outcome: "not_approved", message: "" };
+          return { outcome: "completed", message: "" };
+        },
+        { autoBudget: 5 },
+      ),
+    ];
+
+    await runPipeline(makePipelineOpts({ stages, events: emitter }));
+
+    expect(enterEvents).toEqual([
+      { stageNumber: 4, stageName: "Stage 4", iteration: 0 },
+      { stageNumber: 4, stageName: "Stage 4", iteration: 1 },
+      { stageNumber: 4, stageName: "Stage 4", iteration: 2 },
+    ]);
+  });
+
+  test("emits stage:exit with not_approved on loop iterations", async () => {
+    const emitter = new PipelineEventEmitter();
+    const exitEvents: StageExitEvent[] = [];
+    emitter.on("stage:exit", (ev) => exitEvents.push(ev));
+
+    let call = 0;
+    const stages = [
+      makeStage(
+        3,
+        async () => {
+          call++;
+          if (call < 3) return { outcome: "not_approved", message: "" };
+          return { outcome: "completed", message: "" };
+        },
+        { autoBudget: 5 },
+      ),
+    ];
+
+    await runPipeline(makePipelineOpts({ stages, events: emitter }));
+
+    expect(exitEvents).toEqual([
+      { stageNumber: 3, outcome: "not_approved" },
+      { stageNumber: 3, outcome: "not_approved" },
+      { stageNumber: 3, outcome: "completed" },
+    ]);
+  });
+
+  test("streamSinks are passed to stage context when events are provided", async () => {
+    const emitter = new PipelineEventEmitter();
+    let capturedSinks: StageContext["streamSinks"];
+
+    const stages = [
+      makeStage(1, async (ctx) => {
+        capturedSinks = ctx.streamSinks;
+        return { outcome: "completed", message: "" };
+      }),
+    ];
+
+    await runPipeline(makePipelineOpts({ stages, events: emitter }));
+
+    expect(capturedSinks).toBeDefined();
+    expect(typeof capturedSinks?.a).toBe("function");
+    expect(typeof capturedSinks?.b).toBe("function");
+  });
+
+  test("streamSinks emit agent:chunk events on the emitter", async () => {
+    const emitter = new PipelineEventEmitter();
+    const chunks: { agent: string; chunk: string }[] = [];
+    emitter.on("agent:chunk", (ev) => chunks.push(ev));
+
+    const stages = [
+      makeStage(1, async (ctx) => {
+        ctx.streamSinks?.a("hello from A");
+        ctx.streamSinks?.b("hello from B");
+        return { outcome: "completed", message: "" };
+      }),
+    ];
+
+    await runPipeline(makePipelineOpts({ stages, events: emitter }));
+
+    expect(chunks).toEqual([
+      { agent: "a", chunk: "hello from A" },
+      { agent: "b", chunk: "hello from B" },
+    ]);
+  });
+
+  test("streamSinks are undefined when events option is omitted", async () => {
+    let capturedSinks: StageContext["streamSinks"];
+
+    const stages = [
+      makeStage(1, async (ctx) => {
+        capturedSinks = ctx.streamSinks;
+        return { outcome: "completed", message: "" };
+      }),
+    ];
+
+    await runPipeline(makePipelineOpts({ stages }));
+
+    expect(capturedSinks).toBeUndefined();
+  });
+
+  test("stage:exit emits blocked outcome when user halts", async () => {
+    const emitter = new PipelineEventEmitter();
+    const exitEvents: StageExitEvent[] = [];
+    emitter.on("stage:exit", (ev) => exitEvents.push(ev));
+
+    const prompt = makePrompt({
+      handleBlocked: vi.fn().mockResolvedValue({ action: "halt" }),
+    });
+
+    const stages = [
+      makeStage(2, async () => ({
+        outcome: "blocked",
+        message: "stuck",
+      })),
+    ];
+
+    await runPipeline(makePipelineOpts({ stages, events: emitter, prompt }));
+
+    expect(exitEvents).toEqual([{ stageNumber: 2, outcome: "blocked" }]);
+  });
+
+  test("stage:exit emits error outcome", async () => {
+    const emitter = new PipelineEventEmitter();
+    const exitEvents: StageExitEvent[] = [];
+    emitter.on("stage:exit", (ev) => exitEvents.push(ev));
+
+    const prompt = makePrompt({
+      handleError: vi.fn().mockResolvedValue({ action: "abort" }),
+    });
+
+    const stages = [
+      makeStage(1, async () => ({ outcome: "error", message: "boom" })),
+    ];
+
+    await runPipeline(makePipelineOpts({ stages, events: emitter, prompt }));
+
+    expect(exitEvents).toEqual([{ stageNumber: 1, outcome: "error" }]);
   });
 });

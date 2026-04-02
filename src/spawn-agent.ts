@@ -22,15 +22,28 @@ export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
   const stdoutChunks: string[] = [];
   const stderrChunks: string[] = [];
 
+  // Async queue: data listener is the single consumer of the stdout
+  // stream.  It pushes to stdoutChunks (for the result promise) and to
+  // chunkQueue (for the async iterator).  This avoids the conflict
+  // between consuming a readable via both `data` events and
+  // `for await`.
+  const chunkQueue: string[] = [];
+  let chunkResolve: (() => void) | null = null;
+  let streamDone = false;
+
+  stdout?.on("data", (data: Buffer) => {
+    const text = data.toString();
+    stdoutChunks.push(text);
+    chunkQueue.push(text);
+    chunkResolve?.();
+    chunkResolve = null;
+  });
+
+  stderr?.on("data", (data: Buffer) => {
+    stderrChunks.push(data.toString());
+  });
+
   const result = new Promise<AgentResult>((resolve, reject) => {
-    stdout?.on("data", (data: Buffer) => {
-      stdoutChunks.push(data.toString());
-    });
-
-    stderr?.on("data", (data: Buffer) => {
-      stderrChunks.push(data.toString());
-    });
-
     child.on("error", (err) => {
       if ("code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
         resolve({
@@ -46,6 +59,9 @@ export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
     });
 
     child.on("close", (code) => {
+      streamDone = true;
+      chunkResolve?.();
+      chunkResolve = null;
       const output = stdoutChunks.join("");
       const stderrText = stderrChunks.join("");
       resolve(opts.parseResult(output, code, stderrText));
@@ -54,11 +70,15 @@ export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
 
   const stream: AgentStream = {
     async *[Symbol.asyncIterator]() {
-      if (!stdout) return;
-      for await (const chunk of stdout) {
-        const text =
-          typeof chunk === "string" ? chunk : (chunk as Buffer).toString();
-        yield text;
+      while (true) {
+        while (chunkQueue.length > 0) {
+          const chunk = chunkQueue.shift();
+          if (chunk !== undefined) yield chunk;
+        }
+        if (streamDone) return;
+        await new Promise<void>((r) => {
+          chunkResolve = r;
+        });
       }
     },
     result,

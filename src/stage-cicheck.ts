@@ -182,6 +182,7 @@ export function createCiCheckStageHandler(
         ctx.savedAgentASessionId,
         prompt,
         ctx.worktreePath,
+        ctx.streamSinks?.a,
       );
 
       if (fixResult.sessionId) {

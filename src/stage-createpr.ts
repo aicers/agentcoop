@@ -100,6 +100,7 @@ export function createCreatePrStageHandler(
         ctx.savedAgentASessionId,
         prompt,
         ctx.worktreePath,
+        ctx.streamSinks?.a,
       );
 
       if (prResult.sessionId) {
@@ -119,6 +120,7 @@ export function createCreatePrStageHandler(
         prResult.sessionId,
         buildPrCompletionCheckPrompt(),
         ctx.worktreePath,
+        ctx.streamSinks?.a,
       );
 
       if (checkResult.status === "error") {
@@ -133,6 +135,7 @@ export function createCreatePrStageHandler(
           checkResult.sessionId,
           buildClarificationPrompt(checkResult.responseText),
           ctx.worktreePath,
+          ctx.streamSinks?.a,
         );
 
         if (retryResult.status === "error") {

@@ -80,6 +80,7 @@ export function createImplementStageHandler(
         ctx.savedAgentASessionId,
         prompt,
         ctx.worktreePath,
+        ctx.streamSinks?.a,
       );
 
       if (implResult.sessionId) {
@@ -96,6 +97,7 @@ export function createImplementStageHandler(
         implResult.sessionId,
         buildCompletionCheckPrompt(),
         ctx.worktreePath,
+        ctx.streamSinks?.a,
       );
 
       if (checkResult.status === "error") {
