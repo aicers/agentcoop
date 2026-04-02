@@ -536,6 +536,43 @@ describe("createReviewStageHandler", () => {
     expect(retryPrompt).not.toContain("NOT_APPROVED");
   });
 
+  test("ambiguous author check without sessionId skips internal clarification", async () => {
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "NOT_APPROVED",
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+
+    const ambiguousCheck = makeResult({
+      sessionId: undefined,
+      responseText: "I addressed the feedback.",
+    });
+
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-a", responseText: "Fixed." }),
+          ),
+        ),
+      resume: vi.fn().mockReturnValueOnce(makeStream(ambiguousCheck)),
+    };
+
+    const opts = makeOpts({ agentA, agentB });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("needs_clarification");
+    expect(agentA.resume).toHaveBeenCalledTimes(1);
+  });
+
   test("returns needs_clarification when author check stays ambiguous after retry", async () => {
     const agentB: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(

@@ -151,6 +151,40 @@ export function extractCodexResumeResponse(text: string): string {
   return text.slice(start, end).trim();
 }
 
+/**
+ * Extract the session ID from `codex exec resume` plain text banner.
+ *
+ * The real Codex banner always looks like:
+ * ```
+ * OpenAI Codex v0.46.0 (research preview)
+ * --------
+ * ...key: value lines including session id...
+ * --------
+ * ```
+ *
+ * We verify the `OpenAI Codex` header precedes the first `--------`
+ * separator so that separator pairs appearing in the assistant's
+ * response body are never mistaken for the banner.  Returns
+ * `undefined` when the banner is absent or does not contain a
+ * `session id:` line.
+ */
+export function extractSessionId(text: string): string | undefined {
+  const sep = "--------";
+  const first = text.indexOf(sep);
+  if (first === -1) return undefined;
+
+  // The real Codex banner always starts the output.  Reject when the
+  // header is missing so that response body content is never mistaken
+  // for the banner.
+  if (!text.trimStart().startsWith("OpenAI Codex")) return undefined;
+
+  const second = text.indexOf(sep, first + sep.length);
+  if (second === -1) return undefined;
+  const banner = text.slice(first, second + sep.length);
+  const match = /^session id:\s*(\S+)/m.exec(banner);
+  return match?.[1];
+}
+
 export function parseCodexPlainText(
   text: string,
   exitCode: number | null,
@@ -163,7 +197,7 @@ export function parseCodexPlainText(
     errorType = detectCodexError(text + stderrText);
   }
   return {
-    sessionId: undefined,
+    sessionId: extractSessionId(text),
     responseText,
     status: failed ? "error" : "success",
     errorType,
@@ -285,7 +319,15 @@ export function createCodexAdapter(
           reasoningEffort,
         }),
         cwd: options?.cwd,
-        parseResult: parseCodexPlainText,
+        parseResult(output, exitCode, stderr) {
+          const result = parseCodexPlainText(output, exitCode, stderr);
+          // Preserve the input session ID when the plain text output
+          // does not contain one (e.g. older CLI versions).
+          if (result.sessionId === undefined) {
+            result.sessionId = sessionId;
+          }
+          return result;
+        },
       });
     },
   };

@@ -377,6 +377,27 @@ describe("createSquashStageHandler", () => {
     expect(agent.resume).toHaveBeenCalledTimes(2);
   });
 
+  test("ambiguous check without sessionId skips internal clarification", async () => {
+    const ambiguousCheck = makeResult({
+      sessionId: undefined,
+      responseText: "I squashed the commits.",
+    });
+
+    const agent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ sessionId: "sess-squash" }))),
+      resume: vi.fn().mockReturnValueOnce(makeStream(ambiguousCheck)),
+    };
+
+    const opts = makeOpts({ agent });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("needs_clarification");
+    expect(agent.resume).toHaveBeenCalledTimes(1);
+  });
+
   // -- CI pending then pass ---------------------------------------------------
 
   test("polls CI when pending then completes on pass", async () => {
