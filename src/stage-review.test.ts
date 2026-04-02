@@ -526,6 +526,14 @@ describe("createReviewStageHandler", () => {
 
     expect(result.outcome).toBe("not_approved");
     expect(agentA.resume).toHaveBeenCalledTimes(2);
+
+    // The retry prompt must be the stage-specific completion check
+    // (COMPLETED/BLOCKED only), not the generic clarification prompt.
+    const retryPrompt = (agentA.resume as ReturnType<typeof vi.fn>).mock
+      .calls[1][1] as string;
+    expect(retryPrompt).toContain("COMPLETED");
+    expect(retryPrompt).toContain("BLOCKED");
+    expect(retryPrompt).not.toContain("NOT_APPROVED");
   });
 
   test("returns needs_clarification when author check stays ambiguous after retry", async () => {

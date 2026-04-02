@@ -32,7 +32,7 @@ import {
   mapResponseToResult,
   sendFollowUp,
 } from "./stage-util.js";
-import { buildClarificationPrompt, parseStepStatus } from "./step-parser.js";
+import { parseStepStatus } from "./step-parser.js";
 
 // ---- defaults ----------------------------------------------------------------
 
@@ -254,7 +254,7 @@ export function createReviewStageHandler(
         const retryResult = await sendFollowUp(
           opts.agentA,
           checkResult.sessionId,
-          buildClarificationPrompt(checkResult.responseText),
+          buildAuthorCompletionCheckPrompt(),
           ctx.worktreePath,
         );
 
