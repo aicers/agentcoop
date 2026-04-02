@@ -23,6 +23,7 @@ export interface CiRun {
   status: string;
   conclusion: string;
   headBranch: string;
+  headSha: string;
 }
 
 export type CiVerdict = "pass" | "fail" | "pending";
@@ -32,6 +33,18 @@ export interface CiStatus {
   /** Individual check runs used to compute the verdict. */
   runs: CiRun[];
 }
+
+/**
+ * Signature shared by `getCiStatus` and all injectable overrides.
+ * Extracted to avoid repeating the 4-param signature across every
+ * stage options interface.
+ */
+export type GetCiStatusFn = (
+  owner: string,
+  repo: string,
+  branch: string,
+  commitSha?: string,
+) => CiStatus;
 
 // ---- CI pass criteria ----------------------------------------------------
 
@@ -94,28 +107,33 @@ export function normaliseCiConclusion(run: CiRun): CheckConclusion {
 
 /**
  * Fetch the latest CI runs for `branch` in `owner/repo`.
+ *
+ * When `commitSha` is provided, uses `gh run list --commit` to let
+ * the server filter by SHA.  This avoids pagination issues where the
+ * target commit's runs could be paged out on high-activity branches.
  */
 export function fetchCiRuns(
   owner: string,
   repo: string,
   branch: string,
+  commitSha?: string,
 ): CiRun[] {
-  const output = execFileSync(
-    "gh",
-    [
-      "run",
-      "list",
-      "--repo",
-      `${owner}/${repo}`,
-      "--branch",
-      branch,
-      "--json",
-      "databaseId,name,status,conclusion,headBranch",
-      "--limit",
-      "20",
-    ],
-    { encoding: "utf-8" },
-  );
+  const args = [
+    "run",
+    "list",
+    "--repo",
+    `${owner}/${repo}`,
+    "--branch",
+    branch,
+    "--json",
+    "databaseId,name,status,conclusion,headBranch,headSha",
+    "--limit",
+    "100",
+  ];
+  if (commitSha) {
+    args.push("--commit", commitSha);
+  }
+  const output = execFileSync("gh", args, { encoding: "utf-8" });
   try {
     return JSON.parse(output);
   } catch {
@@ -125,13 +143,17 @@ export function fetchCiRuns(
 
 /**
  * Fetch CI status for a branch, returning the overall verdict.
+ *
+ * When `commitSha` is provided, only runs triggered by that commit
+ * are considered.
  */
 export function getCiStatus(
   owner: string,
   repo: string,
   branch: string,
+  commitSha?: string,
 ): CiStatus {
-  const runs = fetchCiRuns(owner, repo, branch);
+  const runs = fetchCiRuns(owner, repo, branch, commitSha);
   return { verdict: evaluateCiRuns(runs), runs };
 }
 

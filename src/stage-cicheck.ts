@@ -12,7 +12,7 @@
  */
 
 import type { AgentAdapter } from "./agent.js";
-import type { CiStatus } from "./ci.js";
+import type { CiStatus, GetCiStatusFn } from "./ci.js";
 import {
   collectFailureLogs as defaultCollectFailureLogs,
   getCiStatus as defaultGetCiStatus,
@@ -20,11 +20,13 @@ import {
 } from "./ci.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import { mapAgentError } from "./stage-util.js";
+import { getHeadSha as defaultGetHeadSha } from "./worktree.js";
 
 // ---- defaults --------------------------------------------------------------
 
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const DEFAULT_POLL_TIMEOUT_MS = 600_000; // 10 minutes
+const DEFAULT_EMPTY_RUNS_GRACE_PERIOD_MS = 60_000; // 1 minute
 
 function defaultDelay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -37,13 +39,24 @@ export interface CiCheckStageOptions {
   issueTitle: string;
   issueBody: string;
   /** Injected for testability. Defaults to `ci.getCiStatus`. */
-  getCiStatus?: (owner: string, repo: string, branch: string) => CiStatus;
+  getCiStatus?: GetCiStatusFn;
   /** Injected for testability. Defaults to `ci.collectFailureLogs`. */
   collectFailureLogs?: (owner: string, repo: string, runId: number) => string;
+  /**
+   * Read the current HEAD SHA from the worktree.  Called before each
+   * CI poll so that fix pushes automatically target the new commit.
+   * Injected for testability.  Defaults to `worktree.getHeadSha`.
+   */
+  getHeadSha?: (cwd: string) => string;
   /** Delay in ms between polls when CI is pending. Default 30 000. */
   pollIntervalMs?: number;
   /** Max time in ms to wait for pending CI. Default 600 000 (10 min). */
   pollTimeoutMs?: number;
+  /**
+   * How long to keep polling when SHA filtering returns zero runs.
+   * After this period, an empty "pass" is accepted.  Default 60 000.
+   */
+  emptyRunsGracePeriodMs?: number;
   /** Injected for testability. Defaults to a real delay function. */
   delay?: (ms: number) => Promise<void>;
 }
@@ -92,8 +105,11 @@ export function createCiCheckStageHandler(
 ): StageDefinition {
   const getCiStatus = opts.getCiStatus ?? defaultGetCiStatus;
   const collectLogs = opts.collectFailureLogs ?? defaultCollectFailureLogs;
+  const readHeadSha = opts.getHeadSha ?? defaultGetHeadSha;
   const pollInterval = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const pollTimeout = opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS;
+  const emptyGrace =
+    opts.emptyRunsGracePeriodMs ?? DEFAULT_EMPTY_RUNS_GRACE_PERIOD_MS;
   const delay = opts.delay ?? defaultDelay;
 
   return {
@@ -106,11 +122,21 @@ export function createCiCheckStageHandler(
 
       let ciStatus: CiStatus;
       while (true) {
-        ciStatus = getCiStatus(ctx.owner, ctx.repo, ctx.branch);
+        const commitSha = readHeadSha(ctx.worktreePath);
+        ciStatus = getCiStatus(ctx.owner, ctx.repo, ctx.branch, commitSha);
 
-        if (ciStatus.verdict !== "pending") break;
+        const elapsed = Date.now() - startTime;
 
-        if (Date.now() - startTime >= pollTimeout) {
+        if (ciStatus.verdict !== "pending") {
+          // When SHA-filtering, an empty "pass" may mean the workflow
+          // hasn't been created yet.  Keep polling within the grace
+          // period; after that, accept it (no CI / skipped workflow).
+          const withinGrace =
+            ciStatus.runs.length === 0 && elapsed < emptyGrace;
+          if (!withinGrace) break;
+        }
+
+        if (elapsed >= pollTimeout) {
           return {
             outcome: "error",
             message:

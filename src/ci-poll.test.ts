@@ -34,6 +34,7 @@ function makeCiRun(overrides: Partial<CiRun> = {}): CiRun {
     status: "completed",
     conclusion: "success",
     headBranch: "issue-42",
+    headSha: "abc123",
     ...overrides,
   };
 }
@@ -67,10 +68,12 @@ function makeOpts(overrides: Partial<CiPollOptions> = {}): CiPollOptions {
     issueBody: "The widget is broken.",
     getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
     collectFailureLogs: vi.fn().mockReturnValue(""),
+    getHeadSha: vi.fn().mockReturnValue("abc123"),
     delay: vi.fn().mockResolvedValue(undefined),
     pollIntervalMs: 100,
     pollTimeoutMs: 1000,
     maxFixAttempts: 3,
+    emptyRunsGracePeriodMs: 0,
     ...overrides,
   };
 }
@@ -335,6 +338,118 @@ describe("pollCiAndFix", () => {
     expect(result.passed).toBe(false);
     expect(result.message).toContain("still failing after 0 fix attempt");
     expect(agent.invoke).not.toHaveBeenCalled();
+  });
+
+  // -- getHeadSha integration ---------------------------------------------------
+
+  test("reads HEAD SHA from worktree and forwards to getCiStatus", async () => {
+    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pass"));
+    const getHeadSha = vi.fn().mockReturnValue("deadbeef");
+    const opts = makeOpts({ getCiStatus, getHeadSha });
+    await pollCiAndFix(opts);
+
+    expect(getHeadSha).toHaveBeenCalledWith("/tmp/wt");
+    expect(getCiStatus).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      "issue-42",
+      "deadbeef",
+    );
+  });
+
+  test("waits within grace period when SHA filter returns empty pass", async () => {
+    // No workflow yet → getCiStatus returns pass with empty runs.
+    // Grace period keeps polling; eventually runs appear and pass.
+    const getHeadSha = vi.fn().mockReturnValue("new-sha");
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(makeCiStatus("pass")) // empty, within grace
+      .mockReturnValueOnce(makeCiStatus("pass")) // empty, within grace
+      .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()])); // runs appeared
+
+    let elapsed = 0;
+    const startTime = Date.now();
+    const delay = vi.fn().mockImplementation(async () => {
+      elapsed += 100;
+    });
+    vi.spyOn(Date, "now").mockImplementation(() => startTime + elapsed);
+
+    const result = await pollCiAndFix(
+      makeOpts({
+        getCiStatus,
+        getHeadSha,
+        delay,
+        emptyRunsGracePeriodMs: 500,
+      }),
+    );
+
+    expect(result.passed).toBe(true);
+    expect(getCiStatus).toHaveBeenCalledTimes(3);
+
+    vi.restoreAllMocks();
+  });
+
+  test("accepts empty pass after grace period expires", async () => {
+    // No CI configured → empty runs persist beyond grace period.
+    const getHeadSha = vi.fn().mockReturnValue("new-sha");
+    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pass")); // always empty
+
+    let elapsed = 0;
+    const startTime = Date.now();
+    const delay = vi.fn().mockImplementation(async () => {
+      elapsed += 300;
+    });
+    vi.spyOn(Date, "now").mockImplementation(() => startTime + elapsed);
+
+    const result = await pollCiAndFix(
+      makeOpts({
+        getCiStatus,
+        getHeadSha,
+        delay,
+        emptyRunsGracePeriodMs: 500,
+        pollIntervalMs: 100,
+      }),
+    );
+
+    expect(result.passed).toBe(true);
+    expect(result.message).toContain("CI checks passed");
+
+    vi.restoreAllMocks();
+  });
+
+  test("re-reads HEAD SHA after each fix push", async () => {
+    let shaCall = 0;
+    const shas = ["aaa111", "bbb222"];
+    const getHeadSha = vi.fn().mockImplementation(() => shas[shaCall++]);
+
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      )
+      .mockReturnValueOnce(makeCiStatus("pass"));
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+
+    const agent = makeAgent();
+    await pollCiAndFix(
+      makeOpts({ agent, getCiStatus, collectFailureLogs, getHeadSha }),
+    );
+
+    expect(getHeadSha).toHaveBeenCalledTimes(2);
+    expect(getCiStatus).toHaveBeenNthCalledWith(
+      1,
+      "org",
+      "repo",
+      "issue-42",
+      "aaa111",
+    );
+    expect(getCiStatus).toHaveBeenNthCalledWith(
+      2,
+      "org",
+      "repo",
+      "issue-42",
+      "bbb222",
+    );
   });
 
   // -- timeout during fix loop (pending after agent pushes fix) ---------------

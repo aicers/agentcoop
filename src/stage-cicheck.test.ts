@@ -38,6 +38,7 @@ function makeCiRun(overrides: Partial<CiRun> = {}): CiRun {
     status: "completed",
     conclusion: "success",
     headBranch: "issue-42",
+    headSha: "abc123",
     ...overrides,
   };
 }
@@ -68,9 +69,11 @@ function makeOpts(
     issueBody: "The widget is broken.",
     getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
     collectFailureLogs: vi.fn().mockReturnValue(""),
+    getHeadSha: vi.fn().mockReturnValue("abc123"),
     delay: vi.fn().mockResolvedValue(undefined),
     pollIntervalMs: 100,
     pollTimeoutMs: 1000,
+    emptyRunsGracePeriodMs: 0,
     ...overrides,
   };
 }
@@ -427,6 +430,113 @@ describe("createCiCheckStageHandler", () => {
   });
 
   // -- message preservation --------------------------------------------------
+
+  test("reads HEAD SHA and forwards to getCiStatus", async () => {
+    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pass"));
+    const getHeadSha = vi.fn().mockReturnValue("deadbeef");
+    const opts = makeOpts({ getCiStatus, getHeadSha });
+    const stage = createCiCheckStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    expect(getHeadSha).toHaveBeenCalledWith("/tmp/wt");
+    expect(getCiStatus).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      "issue-42",
+      "deadbeef",
+    );
+  });
+
+  test("re-reads HEAD SHA on each poll cycle", async () => {
+    let shaCall = 0;
+    const shas = ["aaa111", "bbb222", "bbb222"];
+    const getHeadSha = vi.fn().mockImplementation(() => shas[shaCall++]);
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(makeCiStatus("pending"))
+      .mockReturnValueOnce(makeCiStatus("pending"))
+      .mockReturnValueOnce(makeCiStatus("pass"));
+
+    const opts = makeOpts({
+      getCiStatus,
+      getHeadSha,
+      delay: vi.fn().mockResolvedValue(undefined),
+    });
+    const stage = createCiCheckStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    expect(getHeadSha).toHaveBeenCalledTimes(3);
+    expect(getCiStatus).toHaveBeenNthCalledWith(
+      1,
+      "org",
+      "repo",
+      "issue-42",
+      "aaa111",
+    );
+    expect(getCiStatus).toHaveBeenNthCalledWith(
+      2,
+      "org",
+      "repo",
+      "issue-42",
+      "bbb222",
+    );
+  });
+
+  test("waits within grace period when SHA filter returns empty pass", async () => {
+    const getHeadSha = vi.fn().mockReturnValue("new-sha");
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(makeCiStatus("pass")) // empty, within grace
+      .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()])); // runs appeared
+
+    let elapsed = 0;
+    const startTime = Date.now();
+    const delay = vi.fn().mockImplementation(async () => {
+      elapsed += 100;
+    });
+    vi.spyOn(Date, "now").mockImplementation(() => startTime + elapsed);
+
+    const opts = makeOpts({
+      getCiStatus,
+      getHeadSha,
+      delay,
+      emptyRunsGracePeriodMs: 500,
+    });
+    const stage = createCiCheckStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(getCiStatus).toHaveBeenCalledTimes(2);
+
+    vi.restoreAllMocks();
+  });
+
+  test("accepts empty pass after grace period expires (no CI)", async () => {
+    const getHeadSha = vi.fn().mockReturnValue("new-sha");
+    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pass"));
+
+    let elapsed = 0;
+    const startTime = Date.now();
+    const delay = vi.fn().mockImplementation(async () => {
+      elapsed += 300;
+    });
+    vi.spyOn(Date, "now").mockImplementation(() => startTime + elapsed);
+
+    const opts = makeOpts({
+      getCiStatus,
+      getHeadSha,
+      delay,
+      emptyRunsGracePeriodMs: 500,
+      pollIntervalMs: 100,
+    });
+    const stage = createCiCheckStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(result.message).toContain("CI checks passed");
+
+    vi.restoreAllMocks();
+  });
 
   test("preserves agent fix response text in message", async () => {
     const getCiStatus = vi

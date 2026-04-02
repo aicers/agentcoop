@@ -39,6 +39,7 @@ function makeCiRun(overrides: Partial<CiRun> = {}): CiRun {
     status: "completed",
     conclusion: "success",
     headBranch: "issue-42",
+    headSha: "abc123",
     ...overrides,
   };
 }
@@ -79,9 +80,11 @@ function makeOpts(
     issueBody: "The widget is broken.",
     getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
     collectFailureLogs: vi.fn().mockReturnValue(""),
+    getHeadSha: vi.fn().mockReturnValue("abc123"),
     delay: vi.fn().mockResolvedValue(undefined),
     pollIntervalMs: 100,
     pollTimeoutMs: 1000,
+    emptyRunsGracePeriodMs: 0,
     ...overrides,
   };
 }
@@ -518,6 +521,24 @@ describe("createSquashStageHandler", () => {
     const result = await stage.handler(BASE_CTX);
 
     expect(result.outcome).toBe("needs_clarification");
+  });
+
+  // -- getHeadSha forwarding ----------------------------------------------------
+
+  test("forwards getHeadSha to pollCiAndFix and uses SHA in getCiStatus", async () => {
+    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pass"));
+    const getHeadSha = vi.fn().mockReturnValue("deadbeef");
+    const opts = makeOpts({ getCiStatus, getHeadSha });
+    const stage = createSquashStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    expect(getHeadSha).toHaveBeenCalledWith("/tmp/wt");
+    expect(getCiStatus).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      "issue-42",
+      "deadbeef",
+    );
   });
 
   // -- agent error during CI fix attempt --------------------------------------
