@@ -19,7 +19,7 @@ import {
   normaliseCiConclusion,
 } from "./ci.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
-import { mapAgentError } from "./stage-util.js";
+import { invokeOrResume, mapAgentError } from "./stage-util.js";
 import { getHeadSha as defaultGetHeadSha } from "./worktree.js";
 
 // ---- defaults --------------------------------------------------------------
@@ -177,8 +177,16 @@ export function createCiCheckStageHandler(
           : "No detailed failure logs available.";
 
       const prompt = buildCiFixPrompt(ctx, opts, failureLogs);
-      const fixStream = opts.agent.invoke(prompt, { cwd: ctx.worktreePath });
-      const fixResult = await fixStream.result;
+      const fixResult = await invokeOrResume(
+        opts.agent,
+        ctx.savedAgentASessionId,
+        prompt,
+        ctx.worktreePath,
+      );
+
+      if (fixResult.sessionId) {
+        ctx.onSessionId?.("a", fixResult.sessionId);
+      }
 
       if (fixResult.status === "error") {
         return mapAgentError(fixResult, "during CI fix");

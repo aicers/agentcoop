@@ -21,6 +21,7 @@ import {
 import { type CiPollResult, pollCiAndFix } from "./ci-poll.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
+  invokeOrResume,
   mapAgentError,
   mapResponseToResult,
   sendFollowUp,
@@ -108,12 +109,18 @@ export function createSquashStageHandler(
     number: 7,
     requiresArtifact: true,
     handler: async (ctx: StageContext): Promise<StageResult> => {
-      // Step 1: Send the squash prompt.
+      // Step 1: Send the squash prompt (resume if saved session).
       const prompt = buildSquashPrompt(ctx, opts);
-      const squashStream = opts.agent.invoke(prompt, {
-        cwd: ctx.worktreePath,
-      });
-      const squashResult = await squashStream.result;
+      const squashResult = await invokeOrResume(
+        opts.agent,
+        ctx.savedAgentASessionId,
+        prompt,
+        ctx.worktreePath,
+      );
+
+      if (squashResult.sessionId) {
+        ctx.onSessionId?.("a", squashResult.sessionId);
+      }
 
       if (squashResult.status === "error") {
         return mapAgentError(squashResult, "during squash");

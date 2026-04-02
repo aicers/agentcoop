@@ -35,7 +35,7 @@ vi.mock("./github.js", () => ({
   getIssue: (...args: unknown[]) => mockGetIssue(...args),
 }));
 
-const { runStartup } = await import("./startup.js");
+const { runStartup, selectTarget } = await import("./startup.js");
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1093,5 +1093,103 @@ describe("runStartup — pipeline settings", () => {
     mockGetIssue.mockReturnValue(defaultIssue());
 
     await runStartup();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// selectTarget
+// ---------------------------------------------------------------------------
+describe("selectTarget", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test("returns owner, repo, issueNumber, config, and configDirty", async () => {
+    mockLoadConfig.mockReturnValue(defaultConfig());
+    mockSelect.mockResolvedValueOnce("aicers"); // owner
+    mockSearch.mockResolvedValueOnce("agentcoop"); // repo
+    mockInput.mockResolvedValueOnce("42"); // issue number
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "Multi-agent CLI" },
+    ]);
+
+    const result = await selectTarget();
+    expect(result.owner).toBe("aicers");
+    expect(result.repo).toBe("agentcoop");
+    expect(result.issueNumber).toBe(42);
+    expect(result.config).toBeDefined();
+    expect(result.configDirty).toBe(false);
+  });
+
+  test("does not prompt for agent models or execution mode", async () => {
+    mockLoadConfig.mockReturnValue(defaultConfig());
+    mockSelect.mockResolvedValueOnce("aicers"); // owner
+    mockSearch.mockResolvedValueOnce("agentcoop"); // repo
+    mockInput.mockResolvedValueOnce("7"); // issue number
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+
+    await selectTarget();
+    // select called only once for owner (not for models, mode, permission, language).
+    expect(mockSelect).toHaveBeenCalledTimes(1);
+    // getIssue NOT called (that happens in runStartup).
+    expect(mockGetIssue).not.toHaveBeenCalled();
+  });
+
+  test("marks configDirty when new owner is entered", async () => {
+    mockLoadConfig.mockReturnValue({
+      ...defaultConfig(),
+      owners: [],
+    });
+    mockInput
+      .mockResolvedValueOnce("new-org") // new owner
+      .mockResolvedValueOnce("1"); // issue number
+    mockSearch.mockResolvedValueOnce("some-repo");
+    mockListRepositories.mockReturnValue([
+      { name: "some-repo", description: "" },
+    ]);
+
+    const result = await selectTarget();
+    expect(result.owner).toBe("new-org");
+    expect(result.configDirty).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runStartup with pre-selected target
+// ---------------------------------------------------------------------------
+describe("runStartup with target parameter", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test("skips owner/repo/issue prompts when target is provided", async () => {
+    const config = defaultConfig();
+    const target = {
+      owner: "aicers",
+      repo: "agentcoop",
+      issueNumber: 42,
+      config,
+      configDirty: false,
+    };
+    // Only prompts needed: agentA, agentB, executionMode, permissionMode, language, settings, confirm.
+    mockSelect
+      .mockResolvedValueOnce("opus") // agent A model
+      .mockResolvedValueOnce("sonnet") // agent B model
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("auto") // permission mode
+      .mockResolvedValueOnce("en"); // language
+    mockCheckbox.mockResolvedValueOnce([]); // no settings adjusted
+    mockConfirm.mockResolvedValueOnce(true); // confirm issue
+    mockGetIssue.mockReturnValue(defaultIssue());
+
+    const result = await runStartup(target);
+    expect(result.owner).toBe("aicers");
+    expect(result.repo).toBe("agentcoop");
+    expect(result.issue.number).toBe(42);
+    expect(result.agentA.model).toBe("opus");
+    // Should NOT have called search (repo) or input (issue number).
+    expect(mockSearch).not.toHaveBeenCalled();
   });
 });

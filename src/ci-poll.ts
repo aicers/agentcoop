@@ -204,6 +204,10 @@ export async function pollCiAndFix(
     const fixStream = agent.invoke(fixPrompt, { cwd: ctx.worktreePath });
     const fixResult = await fixStream.result;
 
+    if (fixResult.sessionId) {
+      ctx.onSessionId?.("a", fixResult.sessionId);
+    }
+
     if (fixResult.status === "error") {
       const detail =
         fixResult.stderrText || fixResult.errorType || "unknown error";

@@ -83,6 +83,37 @@ export async function sendFollowUp(
 }
 
 /**
+ * Invoke an agent, or resume an existing session if a saved session ID
+ * is available.  Used on pipeline resume so stage handlers can continue
+ * from a prior conversation.
+ *
+ * If `resume()` fails (e.g. expired session), falls back to a fresh
+ * `invoke()` automatically.
+ */
+export async function invokeOrResume(
+  agent: AgentAdapter,
+  savedSessionId: string | undefined,
+  prompt: string,
+  cwd: string,
+): Promise<AgentResult> {
+  if (savedSessionId) {
+    const result = await agent.resume(savedSessionId, prompt, { cwd }).result;
+    if (result.status === "success") {
+      return result;
+    }
+    // Non-recoverable errors should be surfaced, not retried.
+    if (
+      result.errorType === "cli_not_found" ||
+      result.errorType === "execution_error"
+    ) {
+      return result;
+    }
+    // Session expired or unknown error — fall back to fresh invoke.
+  }
+  return agent.invoke(prompt, { cwd }).result;
+}
+
+/**
  * Convenience: parse response text and convert to a `StageResult` in one
  * call.
  */

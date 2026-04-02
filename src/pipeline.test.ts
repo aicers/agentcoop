@@ -1230,3 +1230,516 @@ describe("E2E — multi-stage pipeline", () => {
     expect(opts.cleanup).toHaveBeenCalledOnce();
   });
 });
+
+// ---------------------------------------------------------------------------
+// startFromStage
+// ---------------------------------------------------------------------------
+describe("startFromStage", () => {
+  test("skips stages before startFromStage", async () => {
+    const calls: number[] = [];
+    const stages = [
+      makeStage(2, async () => {
+        calls.push(2);
+        return { outcome: "completed", message: "" };
+      }),
+      makeStage(5, async () => {
+        calls.push(5);
+        return { outcome: "completed", message: "" };
+      }),
+      makeStage(8, async () => {
+        calls.push(8);
+        return { outcome: "completed", message: "" };
+      }),
+    ];
+    const result = await runPipeline(
+      makePipelineOpts({ stages, startFromStage: 5 }),
+    );
+    expect(result.success).toBe(true);
+    expect(calls).toEqual([5, 8]);
+  });
+
+  test("runs all stages when startFromStage matches first stage", async () => {
+    const calls: number[] = [];
+    const stages = [
+      makeStage(2, async () => {
+        calls.push(2);
+        return { outcome: "completed", message: "" };
+      }),
+      makeStage(3, async () => {
+        calls.push(3);
+        return { outcome: "completed", message: "" };
+      }),
+    ];
+    const result = await runPipeline(
+      makePipelineOpts({ stages, startFromStage: 2 }),
+    );
+    expect(result.success).toBe(true);
+    expect(calls).toEqual([2, 3]);
+  });
+
+  test("skips all stages when startFromStage exceeds all stage numbers", async () => {
+    const calls: number[] = [];
+    const stages = [
+      makeStage(2, async () => {
+        calls.push(2);
+        return { outcome: "completed", message: "" };
+      }),
+    ];
+    const result = await runPipeline(
+      makePipelineOpts({ stages, startFromStage: 99 }),
+    );
+    expect(result.success).toBe(true);
+    expect(calls).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// onStageTransition
+// ---------------------------------------------------------------------------
+describe("onStageTransition", () => {
+  test("called before each stage handler invocation", async () => {
+    const transitions: [number, number][] = [];
+    const stages = [
+      makeStage(2, async () => ({ outcome: "completed", message: "" })),
+      makeStage(5, async () => ({ outcome: "completed", message: "" })),
+    ];
+    await runPipeline(
+      makePipelineOpts({
+        stages,
+        onStageTransition: (stage, loop) => transitions.push([stage, loop]),
+      }),
+    );
+    // Each stage: called once before handler (loop=0), and once after advanceLoop is NOT called
+    // because terminal success returns immediately before advanceLoop.
+    // So we expect exactly one call per stage at iteration 0.
+    expect(transitions).toEqual([
+      [2, 0],
+      [5, 0],
+    ]);
+  });
+
+  test("called after loop counter advances on non-terminal outcome", async () => {
+    const transitions: [number, number][] = [];
+    let callCount = 0;
+    const stages = [
+      makeStage(2, async () => {
+        callCount++;
+        if (callCount === 1) {
+          return { outcome: "not_approved", message: "needs work" };
+        }
+        return { outcome: "completed", message: "done" };
+      }),
+    ];
+    await runPipeline(
+      makePipelineOpts({
+        stages,
+        onStageTransition: (stage, loop) => transitions.push([stage, loop]),
+      }),
+    );
+    // Iteration 0: before handler → (2, 0)
+    // After not_approved: advanceLoop → iteration becomes 1 → (2, 1)
+    // Iteration 1: before handler → (2, 1)
+    // Terminal success → return (no advanceLoop)
+    expect(transitions).toEqual([
+      [2, 0],
+      [2, 1],
+      [2, 1],
+    ]);
+  });
+
+  test("stageLoopCount resets to 0 when transitioning between stages", async () => {
+    const transitions: [number, number][] = [];
+    let stage2Calls = 0;
+    const stages = [
+      makeStage(2, async () => {
+        stage2Calls++;
+        if (stage2Calls === 1) {
+          return { outcome: "not_approved", message: "loop" };
+        }
+        return { outcome: "completed", message: "done" };
+      }),
+      makeStage(3, async () => ({ outcome: "completed", message: "done" })),
+    ];
+    await runPipeline(
+      makePipelineOpts({
+        stages,
+        onStageTransition: (stage, loop) => transitions.push([stage, loop]),
+      }),
+    );
+    // Stage 2: (2,0), advance→(2,1), (2,1), terminal
+    // Stage 3: (3,0), terminal
+    expect(transitions).toEqual([
+      [2, 0],
+      [2, 1],
+      [2, 1],
+      [3, 0],
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// startFromStageLoopCount (intra-stage resume)
+// ---------------------------------------------------------------------------
+describe("startFromStageLoopCount", () => {
+  test("restores loop iteration when resuming same stage", async () => {
+    const transitions: [number, number][] = [];
+    const iterations: number[] = [];
+    const stages = [
+      makeStage(5, async (ctx) => {
+        iterations.push(ctx.iteration);
+        return { outcome: "completed", message: "done" };
+      }),
+    ];
+    await runPipeline(
+      makePipelineOpts({
+        stages,
+        startFromStage: 5,
+        startFromStageLoopCount: 3,
+        onStageTransition: (stage, loop) => transitions.push([stage, loop]),
+      }),
+    );
+    // Handler should receive iteration=3 (restored).
+    expect(iterations).toEqual([3]);
+    // onStageTransition should fire with restored count.
+    expect(transitions).toEqual([[5, 3]]);
+  });
+
+  test("does not affect stages after the resume stage", async () => {
+    const iterations: [number, number][] = [];
+    const stages = [
+      makeStage(5, async (ctx) => {
+        iterations.push([5, ctx.iteration]);
+        return { outcome: "completed", message: "" };
+      }),
+      makeStage(8, async (ctx) => {
+        iterations.push([8, ctx.iteration]);
+        return { outcome: "completed", message: "" };
+      }),
+    ];
+    await runPipeline(
+      makePipelineOpts({
+        stages,
+        startFromStage: 5,
+        startFromStageLoopCount: 2,
+      }),
+    );
+    // Stage 5 resumes at iteration 2, stage 8 starts fresh at 0.
+    expect(iterations).toEqual([
+      [5, 2],
+      [8, 0],
+    ]);
+  });
+
+  test("auto-budget is reduced by restored loop count", async () => {
+    let callCount = 0;
+    const promptMock = makePrompt({
+      confirmContinueLoop: vi.fn().mockResolvedValue(false),
+    });
+    const stages = [
+      makeStage(
+        5,
+        async () => {
+          callCount++;
+          return { outcome: "not_approved", message: "loop" };
+        },
+        { autoBudget: 3 },
+      ),
+    ];
+    await runPipeline(
+      makePipelineOpts({
+        stages,
+        prompt: promptMock,
+        startFromStage: 5,
+        startFromStageLoopCount: 2,
+      }),
+    );
+    // Budget is 3. Restored iteration is 2. autoRemaining = max(1, 3-2) = 1.
+    // First call runs at iteration 2, then advanceLoop makes autoRemaining 0.
+    // User declines to continue → abort.
+    expect(callCount).toBe(1);
+    expect(promptMock.confirmContinueLoop).toHaveBeenCalledOnce();
+  });
+
+  test("ignored when startFromStage is not set", async () => {
+    const iterations: number[] = [];
+    const stages = [
+      makeStage(2, async (ctx) => {
+        iterations.push(ctx.iteration);
+        return { outcome: "completed", message: "" };
+      }),
+    ];
+    await runPipeline(
+      makePipelineOpts({
+        stages,
+        startFromStageLoopCount: 5,
+      }),
+    );
+    // Without startFromStage, loop count should start at 0.
+    expect(iterations).toEqual([0]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// onSessionId
+// ---------------------------------------------------------------------------
+describe("onSessionId", () => {
+  test("passes onSessionId callback through to StageContext", async () => {
+    const sessionCalls: [string, string][] = [];
+    const stages = [
+      makeStage(2, async (ctx) => {
+        ctx.onSessionId?.("a", "sess-impl-1");
+        return { outcome: "completed", message: "" };
+      }),
+    ];
+    await runPipeline(
+      makePipelineOpts({
+        stages,
+        onSessionId: (agent, sid) => sessionCalls.push([agent, sid]),
+      }),
+    );
+    expect(sessionCalls).toEqual([["a", "sess-impl-1"]]);
+  });
+
+  test("captures session IDs from multiple stages and agents", async () => {
+    const sessionCalls: [string, string][] = [];
+    const stages = [
+      makeStage(2, async (ctx) => {
+        ctx.onSessionId?.("a", "sess-a-1");
+        return { outcome: "completed", message: "" };
+      }),
+      makeStage(8, async (ctx) => {
+        ctx.onSessionId?.("b", "sess-b-1");
+        ctx.onSessionId?.("a", "sess-a-2");
+        return { outcome: "completed", message: "" };
+      }),
+    ];
+    await runPipeline(
+      makePipelineOpts({
+        stages,
+        onSessionId: (agent, sid) => sessionCalls.push([agent, sid]),
+      }),
+    );
+    expect(sessionCalls).toEqual([
+      ["a", "sess-a-1"],
+      ["b", "sess-b-1"],
+      ["a", "sess-a-2"],
+    ]);
+  });
+
+  test("onSessionId is optional — stages work without it", async () => {
+    const stages = [
+      makeStage(2, async (ctx) => {
+        // Should not throw even without onSessionId.
+        ctx.onSessionId?.("a", "sess-1");
+        return { outcome: "completed", message: "" };
+      }),
+    ];
+    const result = await runPipeline(makePipelineOpts({ stages }));
+    expect(result.success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E2E: full resume cycle
+// ---------------------------------------------------------------------------
+describe("full resume cycle (E2E)", () => {
+  test("pipeline halts, state captured, resumed from correct stage and loop", async () => {
+    const transitions: [number, number][] = [];
+    let stage5Calls = 0;
+
+    // First run: stage 2 completes, stage 5 loops once then user aborts.
+    const prompt1 = makePrompt({
+      confirmContinueLoop: vi.fn().mockResolvedValue(false),
+    });
+    const makeStage5Handler = () =>
+      makeStage(
+        5,
+        async () => {
+          stage5Calls++;
+          return { outcome: "not_approved", message: "CI fail" };
+        },
+        { autoBudget: 1 },
+      );
+
+    const result1 = await runPipeline(
+      makePipelineOpts({
+        stages: [
+          makeStage(2, async () => ({ outcome: "completed", message: "" })),
+          makeStage5Handler(),
+        ],
+        prompt: prompt1,
+        onStageTransition: (s, l) => transitions.push([s, l]),
+      }),
+    );
+
+    expect(result1.success).toBe(false);
+    expect(result1.stoppedAt).toBe(5);
+
+    // Extract last transition to simulate saved state.
+    const lastTransition = transitions[transitions.length - 1];
+    expect(lastTransition[0]).toBe(5); // stage 5
+    expect(lastTransition[1]).toBe(1); // loop count 1
+
+    // Second run: resume from stage 5, loop count 1.
+    const transitions2: [number, number][] = [];
+    stage5Calls = 0;
+
+    const result2 = await runPipeline(
+      makePipelineOpts({
+        stages: [
+          makeStage(2, async () => ({ outcome: "completed", message: "" })),
+          makeStage(5, async () => {
+            stage5Calls++;
+            return { outcome: "completed", message: "CI pass now" };
+          }),
+          makeStage(8, async () => ({ outcome: "completed", message: "" })),
+        ],
+        startFromStage: 5,
+        startFromStageLoopCount: 1,
+        onStageTransition: (s, l) => transitions2.push([s, l]),
+      }),
+    );
+
+    expect(result2.success).toBe(true);
+    // Stage 2 was skipped (startFromStage: 5).
+    // Stage 5 resumed at iteration 1, completed immediately.
+    // Stage 8 started fresh at iteration 0.
+    expect(stage5Calls).toBe(1);
+    expect(transitions2).toEqual([
+      [5, 1], // stage 5 at restored iteration
+      [8, 0], // stage 8 fresh
+    ]);
+  });
+
+  test("pipeline saves review round via onStageTransition in stage 8", async () => {
+    const transitions: [number, number][] = [];
+    let reviewCalls = 0;
+
+    const stages = [
+      makeStage(8, async () => {
+        reviewCalls++;
+        if (reviewCalls <= 2) {
+          return { outcome: "not_approved", message: "needs work" };
+        }
+        return { outcome: "completed", message: "approved" };
+      }),
+    ];
+    await runPipeline(
+      makePipelineOpts({
+        stages,
+        onStageTransition: (s, l) => transitions.push([s, l]),
+      }),
+    );
+
+    // 3 iterations: calls at (8,0), advance→(8,1), (8,1), advance→(8,2), (8,2), terminal
+    expect(transitions).toEqual([
+      [8, 0],
+      [8, 1],
+      [8, 1],
+      [8, 2],
+      [8, 2],
+    ]);
+    // A caller can derive reviewRound = loopCount + 1.
+  });
+
+  test("saved session IDs are passed to resumed stage handler and cleared after", async () => {
+    const receivedSessions: {
+      a: string | undefined;
+      b: string | undefined;
+    }[] = [];
+    const stages = [
+      makeStage(5, async (ctx) => {
+        receivedSessions.push({
+          a: ctx.savedAgentASessionId,
+          b: ctx.savedAgentBSessionId,
+        });
+        return { outcome: "completed", message: "" };
+      }),
+      makeStage(8, async (ctx) => {
+        receivedSessions.push({
+          a: ctx.savedAgentASessionId,
+          b: ctx.savedAgentBSessionId,
+        });
+        return { outcome: "completed", message: "" };
+      }),
+    ];
+    await runPipeline(
+      makePipelineOpts({
+        stages,
+        startFromStage: 5,
+        savedAgentASessionId: "sess-a-saved",
+        savedAgentBSessionId: "sess-b-saved",
+      }),
+    );
+    // Stage 5 (resume stage) should receive saved session IDs.
+    expect(receivedSessions[0]).toEqual({
+      a: "sess-a-saved",
+      b: "sess-b-saved",
+    });
+    // Stage 8 (after resume) should NOT receive saved session IDs.
+    expect(receivedSessions[1]).toEqual({
+      a: undefined,
+      b: undefined,
+    });
+  });
+
+  test("saved session IDs are cleared after first invocation within same stage", async () => {
+    const receivedSessions: (string | undefined)[] = [];
+    let callCount = 0;
+    const stages = [
+      makeStage(5, async (ctx) => {
+        receivedSessions.push(ctx.savedAgentASessionId);
+        callCount++;
+        if (callCount === 1) {
+          return { outcome: "not_approved", message: "loop" };
+        }
+        return { outcome: "completed", message: "" };
+      }),
+    ];
+    await runPipeline(
+      makePipelineOpts({
+        stages,
+        startFromStage: 5,
+        savedAgentASessionId: "sess-a-saved",
+      }),
+    );
+    // First call has saved session, second call does not.
+    expect(receivedSessions).toEqual(["sess-a-saved", undefined]);
+  });
+
+  test("restart_from jump is checkpointed via onStageTransition", async () => {
+    const transitions: [number, number][] = [];
+    const stages = [
+      makeStage(5, async () => ({ outcome: "completed", message: "" })),
+      makeStage(
+        6,
+        async () => ({ outcome: "not_approved", message: "test fail" }),
+        { restartFromStage: 5 },
+      ),
+    ];
+    const prompt = makePrompt({
+      confirmContinueLoop: vi.fn().mockResolvedValue(false),
+    });
+    await runPipeline(
+      makePipelineOpts({
+        stages,
+        prompt,
+        onStageTransition: (s, l) => transitions.push([s, l]),
+      }),
+    );
+    // Stage 5 entry: (5,0)
+    // Stage 6 entry: (6,0)
+    // Stage 6 returns restart_from 5 → checkpoint: (5,0)
+    // Stage 5 re-entry: (5,0)
+    // Stage 6 re-entry: (6,0)
+    // Stage 6 returns restart_from again → checkpoint: (5,0)
+    // Budget exhausted → confirmContinueLoop → user declines
+    expect(transitions).toContainEqual([5, 0]);
+    // Verify the jump target is checkpointed (not just the source stage).
+    const jumpCheckpoints = transitions.filter(
+      ([s, l], idx) =>
+        s === 5 && l === 0 && idx > 0 && transitions[idx - 1][0] === 6,
+    );
+    expect(jumpCheckpoints.length).toBeGreaterThanOrEqual(1);
+  });
+});

@@ -97,6 +97,17 @@ export interface StageContext {
   lastAutoIteration: boolean;
   /** Instruction injected by the user after a "instruct" action. */
   userInstruction: string | undefined;
+  /**
+   * Callback for stage handlers to report agent session IDs so they
+   * can be persisted for resume.  `agent` is `"a"` or `"b"`.
+   */
+  onSessionId?: (agent: "a" | "b", sessionId: string) => void;
+  /**
+   * Saved session IDs from a prior run, passed on resume so stage
+   * handlers can `resume()` instead of `invoke()` on first call.
+   */
+  savedAgentASessionId?: string;
+  savedAgentBSessionId?: string;
 }
 
 // ---- user interaction interface ------------------------------------------
@@ -221,8 +232,45 @@ export interface PipelineOptions {
   /** Shared context fields injected into every `StageContext`. */
   context: Omit<
     StageContext,
-    "iteration" | "lastAutoIteration" | "userInstruction"
+    | "iteration"
+    | "lastAutoIteration"
+    | "userInstruction"
+    | "onSessionId"
+    | "savedAgentASessionId"
+    | "savedAgentBSessionId"
   >;
+  /**
+   * When set, stages with a number strictly less than this value are
+   * skipped.  Used to resume a pipeline from a saved checkpoint.
+   */
+  startFromStage?: number;
+  /**
+   * When resuming mid-stage, set this to the saved `stageLoopCount` so
+   * the loop control picks up where it left off.  Only meaningful when
+   * `startFromStage` is also set.
+   */
+  startFromStageLoopCount?: number;
+  /**
+   * Called before each stage handler invocation and after every
+   * loop-counter change, so the caller can persist progress.
+   *
+   * @param stageNumber - The 1-based stage number about to run.
+   * @param stageLoopCount - The current loop iteration within the stage.
+   */
+  onStageTransition?: (stageNumber: number, stageLoopCount: number) => void;
+  /**
+   * Called by stage handlers when they receive an agent session ID.
+   * Wired into `StageContext.onSessionId` for each handler invocation.
+   */
+  onSessionId?: (agent: "a" | "b", sessionId: string) => void;
+  /**
+   * Saved session IDs from a prior run.  Passed into `StageContext` on
+   * the first handler invocation of the resumed stage so handlers can
+   * `resume()` an existing agent conversation.  Cleared after the first
+   * invocation to prevent stale sessions from leaking into later stages.
+   */
+  savedAgentASessionId?: string;
+  savedAgentBSessionId?: string;
 }
 
 export interface PipelineResult {
@@ -239,7 +287,18 @@ export interface PipelineResult {
 export async function runPipeline(
   options: PipelineOptions,
 ): Promise<PipelineResult> {
-  const { mode, stages, prompt, context } = options;
+  const {
+    mode,
+    stages,
+    prompt,
+    context,
+    startFromStage,
+    startFromStageLoopCount,
+    onStageTransition,
+    onSessionId,
+    savedAgentASessionId,
+    savedAgentBSessionId,
+  } = options;
 
   // Sort stages by number to guarantee order.
   const sorted = [...stages].sort((a, b) => a.number - b.number);
@@ -269,6 +328,14 @@ export async function runPipeline(
   const restartCounts = new Map<number, LoopControl>();
 
   let i = 0;
+
+  // Skip stages below startFromStage when resuming.
+  if (startFromStage !== undefined) {
+    while (i < sorted.length && sorted[i].number < startFromStage) {
+      i++;
+    }
+  }
+
   while (i < sorted.length) {
     const stage = sorted[i];
 
@@ -284,7 +351,27 @@ export async function runPipeline(
       }
     }
 
-    const result = await runStage(stage, context, prompt);
+    // On the first stage after resume, restore loop count and session IDs.
+    const isResumeStage =
+      startFromStage !== undefined && stage.number === startFromStage;
+
+    const resumeLoopCount =
+      isResumeStage &&
+      startFromStageLoopCount !== undefined &&
+      startFromStageLoopCount > 0
+        ? startFromStageLoopCount
+        : undefined;
+
+    const result = await runStage(
+      stage,
+      context,
+      prompt,
+      onStageTransition,
+      onSessionId,
+      resumeLoopCount,
+      isResumeStage ? savedAgentASessionId : undefined,
+      isResumeStage ? savedAgentBSessionId : undefined,
+    );
 
     if (result.action === "abort") {
       return {
@@ -332,6 +419,9 @@ export async function runPipeline(
       }
 
       i = targetIdx;
+      // Persist the jump target so a crash before the next handler
+      // invocation resumes at the correct stage.
+      onStageTransition?.(sorted[targetIdx].number, 0);
       continue;
     }
 
@@ -375,11 +465,27 @@ async function runStage(
   stage: StageDefinition,
   baseCtx: Omit<
     StageContext,
-    "iteration" | "lastAutoIteration" | "userInstruction"
+    | "iteration"
+    | "lastAutoIteration"
+    | "userInstruction"
+    | "onSessionId"
+    | "savedAgentASessionId"
+    | "savedAgentBSessionId"
   >,
   prompt: UserPrompt,
+  onStageTransition?: (stageNumber: number, stageLoopCount: number) => void,
+  onSessionId?: (agent: "a" | "b", sessionId: string) => void,
+  resumeLoopCount?: number,
+  savedAgentASessionId?: string,
+  savedAgentBSessionId?: string,
 ): Promise<StageRunResult> {
   const lc = createLoopControl(stage.autoBudget);
+
+  // Restore loop state when resuming mid-stage.
+  if (resumeLoopCount !== undefined) {
+    lc.iteration = resumeLoopCount;
+    lc.autoRemaining = Math.max(1, lc.budget - resumeLoopCount);
+  }
   let userInstruction: string | undefined;
   /** Last not_approved message, forwarded to confirmContinueLoop. */
   let loopMessage = "";
@@ -387,15 +493,23 @@ async function runStage(
   let clarificationAttempted = false;
 
   while (true) {
+    // Notify caller before each handler invocation for persistence.
+    onStageTransition?.(stage.number, lc.iteration);
+
     const ctx: StageContext = {
       ...baseCtx,
       iteration: lc.iteration,
       lastAutoIteration: lc.autoRemaining === 1,
       userInstruction,
+      onSessionId,
+      savedAgentASessionId,
+      savedAgentBSessionId,
     };
 
-    // Clear the one-shot instruction after use.
+    // Clear one-shot fields after use.
     userInstruction = undefined;
+    savedAgentASessionId = undefined;
+    savedAgentBSessionId = undefined;
 
     let result: StageResult;
     try {
@@ -473,6 +587,8 @@ async function runStage(
     // ---- loop control ----------------------------------------------------
 
     const canContinue = advanceLoop(lc);
+    // Notify caller after loop counter change for persistence.
+    onStageTransition?.(stage.number, lc.iteration);
     if (!canContinue) {
       const approved = await prompt.confirmContinueLoop(
         stage.name,
