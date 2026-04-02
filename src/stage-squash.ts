@@ -19,6 +19,7 @@ import {
   getCiStatus as defaultGetCiStatus,
 } from "./ci.js";
 import { type CiPollResult, pollCiAndFix } from "./ci-poll.js";
+import { t } from "./i18n/index.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
   invokeOrResume,
@@ -105,7 +106,7 @@ export function createSquashStageHandler(
   opts: SquashStageOptions,
 ): StageDefinition {
   return {
-    name: "Squash commits",
+    name: t()["stage.squash"],
     number: 7,
     requiresArtifact: true,
     handler: async (ctx: StageContext): Promise<StageResult> => {
@@ -195,7 +196,7 @@ export function createSquashStageHandler(
 
       return {
         outcome: "completed",
-        message: "Commits squashed and CI passed.",
+        message: t()["squash.completed"],
       };
     },
   };

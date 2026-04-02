@@ -137,6 +137,18 @@ export interface Messages {
   "agentPane.tooSmall": string;
   "agentPane.waiting": string;
 
+  // ---- CI / stage result messages -----------------------------------------
+
+  "ci.pendingTimeout": (seconds: number) => string;
+  "ci.passed": string;
+  "ci.stillFailing": (attempts: number) => string;
+  "ci.fixLoopExhausted": string;
+  "ci.agentError": (detail: string) => string;
+  "squash.completed": string;
+  "review.approved": (round: number) => string;
+  "review.unresolvedItems": (base: string, summary: string) => string;
+  "review.fixesApplied": (round: number) => string;
+
   // ---- stage-util errors -------------------------------------------------
 
   "stageError.maxTurns": (context: string) => string;

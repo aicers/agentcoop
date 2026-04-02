@@ -12,6 +12,7 @@
  */
 
 import type { AgentAdapter } from "./agent.js";
+import { t } from "./i18n/index.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
   invokeOrResume,
@@ -82,7 +83,7 @@ export function createSelfCheckStageHandler(
   opts: SelfCheckStageOptions,
 ): StageDefinition {
   return {
-    name: "Self-check",
+    name: t()["stage.selfCheck"],
     number: 3,
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send self-check prompt (resume if saved session).

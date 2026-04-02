@@ -140,6 +140,23 @@ export const en: Messages = {
   "agentPane.tooSmall": "(pane too small)",
   "agentPane.waiting": "(waiting for output)",
 
+  // ---- CI / stage result messages -----------------------------------------
+
+  "ci.pendingTimeout": (seconds) =>
+    `CI checks still pending after ${seconds}s. ` +
+    `The pipeline cannot proceed until CI completes.`,
+  "ci.passed": "CI checks passed.",
+  "ci.stillFailing": (attempts) =>
+    `CI still failing after ${attempts} fix attempt(s).`,
+  "ci.fixLoopExhausted": "CI fix loop exhausted.",
+  "ci.agentError": (detail) => `Agent error during CI fix: ${detail}`,
+  "squash.completed": "Commits squashed and CI passed.",
+  "review.approved": (round) => `Review approved at round ${round}.`,
+  "review.unresolvedItems": (base, summary) =>
+    `${base}\n\nUnresolved items:\n${summary}`,
+  "review.fixesApplied": (round) =>
+    `Round ${round} fixes applied, CI passed. Proceeding to next review round.`,
+
   // ---- stage-util errors -------------------------------------------------
 
   "stageError.maxTurns": (context) =>

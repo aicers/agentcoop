@@ -82,6 +82,12 @@ describe("catalogs are complete", () => {
       "stageError.maxTurns": [" (stage 1)"],
       "stageError.inactivityTimeout": [" (stage 2)"],
       "stageError.agentError": [" (stage 3)", "timeout"],
+      "ci.pendingTimeout": [30],
+      "ci.stillFailing": [3],
+      "ci.agentError": ["timeout"],
+      "review.approved": [2],
+      "review.unresolvedItems": ["Review approved.", "item 1"],
+      "review.fixesApplied": [1],
       "worktree.alreadyExists": ["/tmp/wt"],
     };
 

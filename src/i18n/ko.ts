@@ -168,6 +168,23 @@ export const ko: Messages = {
     "(\uD328\uB110\uC774 \uB108\uBB34 \uC791\uC2B5\uB2C8\uB2E4)",
   "agentPane.waiting": "(\uCD9C\uB825 \uB300\uAE30 \uC911)",
 
+  // ---- CI / stage result messages -----------------------------------------
+
+  "ci.pendingTimeout": (seconds) =>
+    `CI 검사가 ${seconds}초 후에도 보류 중입니다. ` +
+    `CI가 완료될 때까지 파이프라인을 진행할 수 없습니다.`,
+  "ci.passed": "CI 검사를 통과했습니다.",
+  "ci.stillFailing": (attempts) =>
+    `${attempts}회 수정 시도 후에도 CI가 여전히 실패합니다.`,
+  "ci.fixLoopExhausted": "CI 수정 반복이 소진되었습니다.",
+  "ci.agentError": (detail) => `CI 수정 중 에이전트 오류: ${detail}`,
+  "squash.completed": "커밋이 스쿼시되고 CI를 통과했습니다.",
+  "review.approved": (round) => `${round}라운드에서 리뷰가 승인되었습니다.`,
+  "review.unresolvedItems": (base, summary) =>
+    `${base}\n\n미해결 항목:\n${summary}`,
+  "review.fixesApplied": (round) =>
+    `${round}라운드 수정 적용 완료, CI 통과. 다음 리뷰 라운드로 진행합니다.`,
+
   // ---- stage-util errors -------------------------------------------------
 
   "stageError.maxTurns": (context) =>

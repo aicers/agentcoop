@@ -3,7 +3,7 @@ import type { Config, PipelineSettings } from "./config.js";
 import { loadConfig, saveConfig } from "./config.js";
 import type { Issue } from "./github.js";
 import { getIssue, listRepositories } from "./github.js";
-import { t } from "./i18n/index.js";
+import { initI18n, t } from "./i18n/index.js";
 
 export interface TargetResult {
   owner: string;
@@ -217,6 +217,9 @@ async function selectLanguage(
   });
   const dirty = language !== config.language;
   config.language = language;
+  if (dirty) {
+    await initI18n(language);
+  }
   return { language, dirty };
 }
 

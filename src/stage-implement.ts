@@ -9,6 +9,7 @@
  */
 
 import type { AgentAdapter } from "./agent.js";
+import { t } from "./i18n/index.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
   invokeOrResume,
@@ -70,7 +71,7 @@ export function createImplementStageHandler(
   opts: ImplementStageOptions,
 ): StageDefinition {
   return {
-    name: "Implement",
+    name: t()["stage.implement"],
     number: 2,
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send the implementation prompt (resume if saved session).
