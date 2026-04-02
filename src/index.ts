@@ -1,14 +1,21 @@
 #!/usr/bin/env node
 
 import { confirm, select } from "@inquirer/prompts";
+import { render } from "ink";
+import React from "react";
 
 import type { AgentAdapter } from "./agent.js";
 import { createClaudeAdapter } from "./claude-adapter.js";
 import { createCodexAdapter } from "./codex-adapter.js";
 import type { PipelineSettings } from "./config.js";
 import { getIssue } from "./github.js";
-import type { PipelineOptions } from "./pipeline.js";
-import { createDoneStageHandler, runPipeline } from "./pipeline.js";
+import type {
+  PipelineOptions,
+  PipelineResult,
+  UserPrompt,
+} from "./pipeline.js";
+import { createDoneStageHandler } from "./pipeline.js";
+import { PipelineEventEmitter } from "./pipeline-events.js";
 import { findPrNumber } from "./pr.js";
 import {
   deleteRunState,
@@ -25,6 +32,7 @@ import { createSquashStageHandler } from "./stage-squash.js";
 import { createTestPlanStageHandler } from "./stage-testplan.js";
 import type { AgentConfig } from "./startup.js";
 import { runStartup, selectTarget } from "./startup.js";
+import { App } from "./ui/App.js";
 import {
   bootstrapRepo,
   createWorktree,
@@ -320,13 +328,31 @@ try {
   // Save initial state.
   saveRunState(runState);
 
+  // The TUI prompt is created inside <App> at mount time.  Done stage
+  // callbacks delegate to it via a late-binding ref so stage 9 shows
+  // a real user confirmation instead of auto-approving.
+  let tuiPrompt:
+    | {
+        confirmMerge: UserPrompt["confirmMerge"];
+        reportCompletion: UserPrompt["reportCompletion"];
+      }
+    | undefined;
+
   const doneStage = createDoneStageHandler({
-    reportCompletion: async (msg) => console.log(msg),
-    confirmMerge: async () => true, // placeholder until real prompts
+    reportCompletion: async (msg) => {
+      if (tuiPrompt) return tuiPrompt.reportCompletion(msg);
+      console.log(msg);
+    },
+    confirmMerge: async (msg) => {
+      if (tuiPrompt) return tuiPrompt.confirmMerge(msg);
+      return true;
+    },
     cleanup: () => removeWorktree(owner, repo, issueNumber, wt.branch),
   });
 
-  const pipelineOpts: PipelineOptions = {
+  // The `prompt` field is intentionally omitted here — it will be
+  // supplied by the ink <App> component via TuiUserPrompt.
+  const pipelineOpts: Omit<PipelineOptions, "prompt" | "events"> = {
     mode: executionMode,
     stages: [
       implementStage,
@@ -338,15 +364,6 @@ try {
       reviewStage,
       doneStage,
     ],
-    prompt: {
-      confirmContinueLoop: async (_stage, _iter, _msg) => false,
-      confirmNextStage: async () => true,
-      handleBlocked: async () => ({ action: "halt" }),
-      handleError: async () => ({ action: "abort" }),
-      handleAmbiguous: async () => ({ action: "halt" }),
-      confirmMerge: async () => true,
-      reportCompletion: async () => {},
-    },
     context: {
       owner,
       repo,
@@ -380,7 +397,26 @@ try {
       saveRunState(runState);
     },
   };
-  const pipelineResult = await runPipeline(pipelineOpts);
+
+  // Launch the ink TUI.
+  const emitter = new PipelineEventEmitter();
+
+  const pipelineResult = await new Promise<PipelineResult>((resolve) => {
+    const { unmount } = render(
+      React.createElement(App, {
+        emitter,
+        pipelineOptions: pipelineOpts,
+        onExit: (result: PipelineResult) => {
+          unmount();
+          resolve(result);
+        },
+        onPromptReady: (prompt) => {
+          tuiPrompt = prompt;
+        },
+      }),
+    );
+  });
+
   console.log();
   console.log(pipelineResult.message);
 

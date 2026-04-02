@@ -19,7 +19,7 @@
  * `reviewAutoRounds` config value in `index.ts`.
  */
 
-import type { AgentAdapter } from "./agent.js";
+import type { AgentAdapter, AgentResult } from "./agent.js";
 import type { GetCiStatusFn } from "./ci.js";
 import {
   collectFailureLogs as defaultCollectFailureLogs,
@@ -28,9 +28,11 @@ import {
 import { pollCiAndFix } from "./ci-poll.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
+  drainToSink,
   invokeOrResume,
   mapAgentError,
   mapResponseToResult,
+  type StreamSink,
   sendFollowUp,
 } from "./stage-util.js";
 import { parseStepStatus } from "./step-parser.js";
@@ -187,6 +189,7 @@ export function createReviewStageHandler(
         ctx.savedAgentBSessionId,
         reviewPrompt,
         ctx.worktreePath,
+        ctx.streamSinks?.b,
       );
 
       if (reviewResult.sessionId) {
@@ -207,6 +210,7 @@ export function createReviewStageHandler(
           reviewResult.sessionId,
           round,
           ctx.worktreePath,
+          ctx.streamSinks?.b,
         );
         if (error) return error;
 
@@ -230,6 +234,7 @@ export function createReviewStageHandler(
         ctx.savedAgentASessionId,
         fixPrompt,
         ctx.worktreePath,
+        ctx.streamSinks?.a,
       );
 
       if (fixResult.sessionId) {
@@ -247,6 +252,7 @@ export function createReviewStageHandler(
         fixResult.sessionId,
         buildAuthorCompletionCheckPrompt(),
         ctx.worktreePath,
+        ctx.streamSinks?.a,
       );
 
       if (checkResult.status === "error") {
@@ -264,6 +270,7 @@ export function createReviewStageHandler(
           checkResult.sessionId,
           buildAuthorCompletionCheckPrompt(),
           ctx.worktreePath,
+          ctx.streamSinks?.a,
         );
 
         if (retryResult.status === "error") {
@@ -323,6 +330,7 @@ export function createReviewStageHandler(
           reviewResult.sessionId,
           round,
           ctx.worktreePath,
+          ctx.streamSinks?.b,
         );
         if (error) return error;
         if (summary) {
@@ -354,13 +362,25 @@ async function handleUnresolvedSummary(
   sessionId: string | undefined,
   round: number,
   cwd: string,
+  sink?: StreamSink,
 ): Promise<UnresolvedSummaryResult> {
   const summaryPrompt = buildUnresolvedSummaryPrompt(round);
 
   // If we have a session, resume; otherwise invoke fresh.
-  const result = sessionId
-    ? await sendFollowUp(opts.agentB, sessionId, summaryPrompt, cwd)
-    : await opts.agentB.invoke(summaryPrompt, { cwd }).result;
+  let result: AgentResult;
+  if (sessionId) {
+    result = await sendFollowUp(
+      opts.agentB,
+      sessionId,
+      summaryPrompt,
+      cwd,
+      sink,
+    );
+  } else {
+    const stream = opts.agentB.invoke(summaryPrompt, { cwd });
+    if (sink) drainToSink(stream, sink);
+    result = await stream.result;
+  }
 
   if (result.status === "error") {
     return {

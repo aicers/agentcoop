@@ -328,6 +328,43 @@ describe("streaming", () => {
     expect(result.responseText).toBe("data");
   });
 
+  test("iterator and result both receive data simultaneously", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const stream = spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: (output) => ({
+        sessionId: undefined,
+        responseText: output,
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+    });
+
+    // Consume iterator concurrently with result.
+    const chunks: string[] = [];
+    const iteratorDone = (async () => {
+      for await (const chunk of stream) {
+        chunks.push(chunk);
+      }
+    })();
+
+    emitStdout(child, "part1");
+    emitStdout(child, "part2");
+    endStdout(child);
+    child.emit("close", 0);
+
+    const result = await stream.result;
+    await iteratorDone;
+
+    // Both paths should see all data.
+    expect(chunks.join("")).toBe("part1part2");
+    expect(result.responseText).toBe("part1part2");
+  });
+
   test("exposes child process for cancellation", () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child);

@@ -9,6 +9,8 @@
  * modules (issues #6, #7, #8).
  */
 
+import type { PipelineEventEmitter } from "./pipeline-events.js";
+import type { StreamSink } from "./stage-util.js";
 import { buildClarificationPrompt } from "./step-parser.js";
 
 // ---- public types --------------------------------------------------------
@@ -108,6 +110,12 @@ export interface StageContext {
    */
   savedAgentASessionId?: string;
   savedAgentBSessionId?: string;
+  /**
+   * Optional sinks for real-time agent output streaming.  Stage handlers
+   * forward these to `invokeOrResume` / `sendFollowUp` so that output
+   * chunks are emitted as they arrive.
+   */
+  streamSinks?: { a?: StreamSink; b?: StreamSink };
 }
 
 // ---- user interaction interface ------------------------------------------
@@ -238,6 +246,7 @@ export interface PipelineOptions {
     | "onSessionId"
     | "savedAgentASessionId"
     | "savedAgentBSessionId"
+    | "streamSinks"
   >;
   /**
    * When set, stages with a number strictly less than this value are
@@ -271,6 +280,11 @@ export interface PipelineOptions {
    */
   savedAgentASessionId?: string;
   savedAgentBSessionId?: string;
+  /**
+   * Event emitter for the TUI.  When provided, stage lifecycle and
+   * agent-chunk events are emitted so the UI can render in real time.
+   */
+  events?: PipelineEventEmitter;
 }
 
 export interface PipelineResult {
@@ -298,6 +312,7 @@ export async function runPipeline(
     onSessionId,
     savedAgentASessionId,
     savedAgentBSessionId,
+    events,
   } = options;
 
   // Sort stages by number to guarantee order.
@@ -371,6 +386,7 @@ export async function runPipeline(
       resumeLoopCount,
       isResumeStage ? savedAgentASessionId : undefined,
       isResumeStage ? savedAgentBSessionId : undefined,
+      events,
     );
 
     if (result.action === "abort") {
@@ -471,6 +487,7 @@ async function runStage(
     | "onSessionId"
     | "savedAgentASessionId"
     | "savedAgentBSessionId"
+    | "streamSinks"
   >,
   prompt: UserPrompt,
   onStageTransition?: (stageNumber: number, stageLoopCount: number) => void,
@@ -478,6 +495,7 @@ async function runStage(
   resumeLoopCount?: number,
   savedAgentASessionId?: string,
   savedAgentBSessionId?: string,
+  events?: PipelineEventEmitter,
 ): Promise<StageRunResult> {
   const lc = createLoopControl(stage.autoBudget);
 
@@ -492,9 +510,23 @@ async function runStage(
   /** Tracks whether the last iteration was an auto-clarification retry. */
   let clarificationAttempted = false;
 
+  // Build per-agent stream sinks that delegate to the event emitter.
+  const streamSinks = events
+    ? {
+        a: (chunk: string) => events.emit("agent:chunk", { agent: "a", chunk }),
+        b: (chunk: string) => events.emit("agent:chunk", { agent: "b", chunk }),
+      }
+    : undefined;
+
   while (true) {
     // Notify caller before each handler invocation for persistence.
     onStageTransition?.(stage.number, lc.iteration);
+
+    events?.emit("stage:enter", {
+      stageNumber: stage.number,
+      stageName: stage.name,
+      iteration: lc.iteration,
+    });
 
     const ctx: StageContext = {
       ...baseCtx,
@@ -504,6 +536,7 @@ async function runStage(
       onSessionId,
       savedAgentASessionId,
       savedAgentBSessionId,
+      streamSinks,
     };
 
     // Clear one-shot fields after use.
@@ -520,6 +553,11 @@ async function runStage(
       if (dispatched === undefined) continue; // retry
       return dispatched;
     }
+
+    events?.emit("stage:exit", {
+      stageNumber: stage.number,
+      outcome: result.outcome,
+    });
 
     // ---- evaluate outcome ------------------------------------------------
 

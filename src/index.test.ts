@@ -81,8 +81,8 @@ describe("tsconfig.json", () => {
     }
   });
 
-  test("does not include jsx setting", () => {
-    expect(tsconfig.compilerOptions.jsx).toBeUndefined();
+  test("includes jsx setting for ink TUI", () => {
+    expect(tsconfig.compilerOptions.jsx).toBe("react-jsx");
   });
 
   test("excludes test files from compilation", () => {

@@ -92,6 +92,7 @@ export function createSelfCheckStageHandler(
         ctx.savedAgentASessionId,
         checkPrompt,
         ctx.worktreePath,
+        ctx.streamSinks?.a,
       );
 
       if (checkResult.sessionId) {
@@ -108,6 +109,7 @@ export function createSelfCheckStageHandler(
         checkResult.sessionId,
         buildFixOrDonePrompt(),
         ctx.worktreePath,
+        ctx.streamSinks?.a,
       );
 
       if (fixResult.status === "error") {

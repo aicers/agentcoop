@@ -32,6 +32,30 @@ function makeStream(result: AgentResult): AgentStream {
   };
 }
 
+/**
+ * Create a stream that yields the given chunks before resolving.
+ */
+function makeStreamWithChunks(
+  result: AgentResult,
+  chunks: string[],
+): AgentStream {
+  let idx = 0;
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        next: async () => {
+          if (idx < chunks.length) {
+            return { done: false, value: chunks[idx++] };
+          }
+          return { done: true, value: "" };
+        },
+      };
+    },
+    result: Promise.resolve(result),
+    child: {} as AgentStream["child"],
+  };
+}
+
 // ---- mapAgentError ---------------------------------------------------------
 
 describe("mapAgentError", () => {
@@ -370,5 +394,142 @@ describe("invokeOrResume", () => {
     const out = await invokeOrResume(agent, "saved-sess", "prompt", "/cwd");
     expect(out).toBe(execError);
     expect(agent.invoke).not.toHaveBeenCalled();
+  });
+});
+
+// ---- StreamSink integration --------------------------------------------------
+
+describe("invokeOrResume with StreamSink", () => {
+  test("sink receives chunks from invoke when no saved session", async () => {
+    const result = makeResult({ responseText: "chunk1chunk2" });
+    const agent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(makeStreamWithChunks(result, ["chunk1", "chunk2"])),
+      resume: vi.fn(),
+    };
+
+    const collected: string[] = [];
+    const sink = (chunk: string) => collected.push(chunk);
+
+    const out = await invokeOrResume(agent, undefined, "prompt", "/cwd", sink);
+    // Allow microtask queue to flush for the fire-and-forget drain.
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(out).toBe(result);
+    expect(collected).toEqual(["chunk1", "chunk2"]);
+  });
+
+  test("sink receives chunks from resume", async () => {
+    const result = makeResult({ responseText: "data" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStreamWithChunks(result, ["a", "b", "c"])),
+    };
+
+    const collected: string[] = [];
+    const out = await invokeOrResume(
+      agent,
+      "saved-id",
+      "prompt",
+      "/cwd",
+      (chunk) => collected.push(chunk),
+    );
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(out).toBe(result);
+    expect(collected).toEqual(["a", "b", "c"]);
+  });
+
+  test("result is correct even without a sink", async () => {
+    const result = makeResult({ responseText: "hello" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStreamWithChunks(result, ["hello"])),
+      resume: vi.fn(),
+    };
+
+    const out = await invokeOrResume(agent, undefined, "prompt", "/cwd");
+    expect(out.responseText).toBe("hello");
+  });
+});
+
+describe("sendFollowUp with StreamSink", () => {
+  test("sink receives chunks during follow-up", async () => {
+    const result = makeResult({ responseText: "follow-up done" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStreamWithChunks(result, ["f1", "f2"])),
+    };
+
+    const collected: string[] = [];
+    const out = await sendFollowUp(agent, "sess-1", "prompt", "/cwd", (chunk) =>
+      collected.push(chunk),
+    );
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(out.responseText).toBe("follow-up done");
+    expect(collected).toEqual(["f1", "f2"]);
+  });
+
+  test("works without sink (backward compatible)", async () => {
+    const result = makeResult({ responseText: "ok" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn().mockReturnValue(makeStream(result)),
+    };
+
+    const out = await sendFollowUp(agent, "sess-1", "prompt", "/cwd");
+    expect(out.responseText).toBe("ok");
+  });
+});
+
+// ---- drainToSink edge cases -------------------------------------------------
+
+describe("drainToSink", () => {
+  test("result resolves independently even when sink throws", async () => {
+    const result = makeResult({ responseText: "completed" });
+    const agent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(makeStreamWithChunks(result, ["c1", "c2"])),
+      resume: vi.fn(),
+    };
+
+    const sink = vi.fn().mockImplementation(() => {
+      throw new Error("sink exploded");
+    });
+
+    // drainToSink runs fire-and-forget, so the error is swallowed
+    // and .result should still resolve.
+    const out = await invokeOrResume(agent, undefined, "prompt", "/cwd", sink);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(out).toBe(result);
+    // sink was called at least once before the error stopped the drain.
+    expect(sink).toHaveBeenCalled();
+  });
+
+  test("sink receives all chunks in order", async () => {
+    const result = makeResult({ responseText: "done" });
+    const agent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStreamWithChunks(result, ["first", "second", "third"]),
+        ),
+      resume: vi.fn(),
+    };
+
+    const collected: string[] = [];
+    await invokeOrResume(agent, undefined, "prompt", "/cwd", (chunk) =>
+      collected.push(chunk),
+    );
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(collected).toEqual(["first", "second", "third"]);
   });
 });

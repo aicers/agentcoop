@@ -116,6 +116,7 @@ export function createSquashStageHandler(
         ctx.savedAgentASessionId,
         prompt,
         ctx.worktreePath,
+        ctx.streamSinks?.a,
       );
 
       if (squashResult.sessionId) {
@@ -133,6 +134,7 @@ export function createSquashStageHandler(
         squashResult.sessionId,
         buildSquashCompletionCheckPrompt(),
         ctx.worktreePath,
+        ctx.streamSinks?.a,
       );
 
       if (checkResult.status === "error") {
@@ -147,6 +149,7 @@ export function createSquashStageHandler(
           checkResult.sessionId,
           buildClarificationPrompt(checkResult.responseText),
           ctx.worktreePath,
+          ctx.streamSinks?.a,
         );
 
         if (retryResult.status === "error") {

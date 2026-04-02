@@ -3,9 +3,14 @@
  * step-status-to-outcome conversion.
  */
 
-import type { AgentAdapter, AgentResult } from "./agent.js";
+import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
 import type { StageOutcome, StageResult } from "./pipeline.js";
 import { type ParsedStep, parseStepStatus } from "./step-parser.js";
+
+/**
+ * Callback that receives streaming output chunks from an agent process.
+ */
+export type StreamSink = (chunk: string) => void;
 
 /**
  * Map an `AgentResult` with `status === "error"` to a `StageResult`.
@@ -60,6 +65,23 @@ export function mapParsedStepToResult(
 }
 
 /**
+ * Drain the async iterator of a stream, forwarding chunks to a sink.
+ * The task runs detached — the returned promise is the stream's
+ * `.result` (which resolves independently of the iterator).
+ */
+export function drainToSink(stream: AgentStream, sink: StreamSink): void {
+  (async () => {
+    try {
+      for await (const chunk of stream) {
+        sink(chunk);
+      }
+    } catch {
+      // Fire-and-forget: sink errors must not become unhandled rejections.
+    }
+  })();
+}
+
+/**
  * Send a follow-up prompt to the agent by resuming the session.
  *
  * Throws if `sessionId` is undefined — a follow-up without session
@@ -71,6 +93,7 @@ export async function sendFollowUp(
   sessionId: string | undefined,
   prompt: string,
   cwd: string,
+  sink?: StreamSink,
 ): Promise<AgentResult> {
   if (sessionId === undefined) {
     throw new Error(
@@ -79,6 +102,7 @@ export async function sendFollowUp(
     );
   }
   const stream = agent.resume(sessionId, prompt, { cwd });
+  if (sink) drainToSink(stream, sink);
   return stream.result;
 }
 
@@ -95,9 +119,12 @@ export async function invokeOrResume(
   savedSessionId: string | undefined,
   prompt: string,
   cwd: string,
+  sink?: StreamSink,
 ): Promise<AgentResult> {
   if (savedSessionId) {
-    const result = await agent.resume(savedSessionId, prompt, { cwd }).result;
+    const stream = agent.resume(savedSessionId, prompt, { cwd });
+    if (sink) drainToSink(stream, sink);
+    const result = await stream.result;
     if (result.status === "success") {
       return result;
     }
@@ -110,7 +137,9 @@ export async function invokeOrResume(
     }
     // Session expired or unknown error — fall back to fresh invoke.
   }
-  return agent.invoke(prompt, { cwd }).result;
+  const stream = agent.invoke(prompt, { cwd });
+  if (sink) drainToSink(stream, sink);
+  return stream.result;
 }
 
 /**

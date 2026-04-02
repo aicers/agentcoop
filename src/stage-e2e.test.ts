@@ -15,6 +15,12 @@ import type {
   UserPrompt,
 } from "./pipeline.js";
 import { runPipeline } from "./pipeline.js";
+import {
+  type AgentChunkEvent,
+  PipelineEventEmitter,
+  type StageEnterEvent,
+  type StageExitEvent,
+} from "./pipeline-events.js";
 import { createCiCheckStageHandler } from "./stage-cicheck.js";
 import { createCreatePrStageHandler } from "./stage-createpr.js";
 import { createImplementStageHandler } from "./stage-implement.js";
@@ -40,6 +46,27 @@ function makeStream(result: AgentResult): AgentStream {
   return {
     [Symbol.asyncIterator]() {
       return { next: async () => ({ done: true, value: "" }) };
+    },
+    result: Promise.resolve(result),
+    child: {} as AgentStream["child"],
+  };
+}
+
+function makeStreamWithChunks(
+  result: AgentResult,
+  chunks: string[],
+): AgentStream {
+  let idx = 0;
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        next: async () => {
+          if (idx < chunks.length) {
+            return { done: false, value: chunks[idx++] };
+          }
+          return { done: true, value: "" };
+        },
+      };
     },
     result: Promise.resolve(result),
     child: {} as AgentStream["child"],
@@ -2187,5 +2214,256 @@ describe("Stages 7+8 (Squash + Review) through pipeline", () => {
     expect(result.success).toBe(false);
     expect(result.stoppedAt).toBe(7);
     expect(agentB.invoke).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pipeline event emitter integration
+// ---------------------------------------------------------------------------
+
+describe("Pipeline event emitter integration", () => {
+  test("emits stage:enter and stage:exit events during pipeline run", async () => {
+    const implResult = makeResult({ sessionId: "s1", responseText: "Done." });
+    const checkResult = makeResult({ responseText: "COMPLETED" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(implResult)),
+      resume: vi.fn().mockReturnValue(makeStream(checkResult)),
+    };
+
+    const emitter = new PipelineEventEmitter();
+    const enterEvents: StageEnterEvent[] = [];
+    const exitEvents: StageExitEvent[] = [];
+    emitter.on("stage:enter", (ev) => enterEvents.push(ev));
+    emitter.on("stage:exit", (ev) => exitEvents.push(ev));
+
+    const stage = createImplementStageHandler({ agent, ...ISSUE_CTX });
+    const result = await runPipeline(
+      makePipelineOpts({ stages: [stage], events: emitter }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(enterEvents).toEqual([
+      { stageNumber: 2, stageName: "Implement", iteration: 0 },
+    ]);
+    expect(exitEvents).toEqual([{ stageNumber: 2, outcome: "completed" }]);
+  });
+
+  test("emits agent:chunk events when sink is wired through stage handler", async () => {
+    const implResult = makeResult({ sessionId: "s1", responseText: "Done." });
+    const checkResult = makeResult({ responseText: "COMPLETED" });
+    const agent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStreamWithChunks(implResult, ["chunk-a1", "chunk-a2"]),
+        ),
+      resume: vi.fn().mockReturnValue(makeStream(checkResult)),
+    };
+
+    const emitter = new PipelineEventEmitter();
+    const chunkEvents: AgentChunkEvent[] = [];
+    emitter.on("agent:chunk", (ev) => chunkEvents.push(ev));
+
+    const stage = createImplementStageHandler({ agent, ...ISSUE_CTX });
+    const result = await runPipeline(
+      makePipelineOpts({ stages: [stage], events: emitter }),
+    );
+    // Allow fire-and-forget drain to flush.
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(result.success).toBe(true);
+    expect(chunkEvents.length).toBe(2);
+    expect(chunkEvents[0]).toEqual({ agent: "a", chunk: "chunk-a1" });
+    expect(chunkEvents[1]).toEqual({ agent: "a", chunk: "chunk-a2" });
+  });
+
+  test("emits stage events for multi-stage pipeline", async () => {
+    const implResult = makeResult({ sessionId: "s1", responseText: "ok" });
+    const implCheck = makeResult({ responseText: "COMPLETED" });
+    const selfResult = makeResult({ sessionId: "s2", responseText: "ok" });
+    const selfCheck = makeResult({ responseText: "DONE" });
+
+    const agent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(implResult))
+        .mockReturnValueOnce(makeStream(selfResult)),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(implCheck))
+        .mockReturnValueOnce(makeStream(selfCheck)),
+    };
+
+    const emitter = new PipelineEventEmitter();
+    const enterEvents: StageEnterEvent[] = [];
+    emitter.on("stage:enter", (ev) => enterEvents.push(ev));
+
+    const stages = [
+      createImplementStageHandler({ agent, ...ISSUE_CTX }),
+      createSelfCheckStageHandler({ agent, ...ISSUE_CTX }),
+    ];
+    const result = await runPipeline(
+      makePipelineOpts({ stages, events: emitter }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(enterEvents).toEqual([
+      { stageNumber: 2, stageName: "Implement", iteration: 0 },
+      { stageNumber: 3, stageName: "Self-check", iteration: 0 },
+    ]);
+  });
+
+  test("no events emitted when events option is omitted", async () => {
+    const implResult = makeResult({ sessionId: "s1", responseText: "Done." });
+    const checkResult = makeResult({ responseText: "COMPLETED" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(implResult)),
+      resume: vi.fn().mockReturnValue(makeStream(checkResult)),
+    };
+
+    // No emitter passed — should not throw.
+    const stage = createImplementStageHandler({ agent, ...ISSUE_CTX });
+    const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
+
+    expect(result.success).toBe(true);
+  });
+
+  test("review stage emits chunks for agent B on sink b", async () => {
+    const reviewResult = makeResult({
+      sessionId: "sb1",
+      responseText: "APPROVED",
+    });
+    // Unresolved summary response.
+    const summaryResult = makeResult({ responseText: "NONE" });
+
+    const agentA: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn(),
+    };
+    const agentB: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStreamWithChunks(reviewResult, ["review-b1", "review-b2"]),
+        ),
+      resume: vi.fn().mockReturnValue(makeStream(summaryResult)),
+    };
+
+    const emitter = new PipelineEventEmitter();
+    const chunkEvents: AgentChunkEvent[] = [];
+    emitter.on("agent:chunk", (ev) => chunkEvents.push(ev));
+
+    const stage = createReviewStageHandler({
+      agentA,
+      agentB,
+      ...ISSUE_CTX,
+    });
+    const result = await runPipeline(
+      makePipelineOpts({ stages: [stage], events: emitter }),
+    );
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(result.success).toBe(true);
+    const agentBChunks = chunkEvents.filter((e) => e.agent === "b");
+    expect(agentBChunks.length).toBe(2);
+    expect(agentBChunks[0].chunk).toBe("review-b1");
+  });
+
+  test("emits stage:enter on each iteration when self-check loops", async () => {
+    // Self-check returns FIXED twice (not_approved → loop), then DONE.
+    const implResult = makeResult({ sessionId: "s1", responseText: "ok" });
+    const implCheck = makeResult({ responseText: "COMPLETED" });
+
+    const selfResult1 = makeResult({ sessionId: "s2", responseText: "ok" });
+    const selfCheck1 = makeResult({ responseText: "FIXED" });
+    const selfResult2 = makeResult({ sessionId: "s3", responseText: "ok" });
+    const selfCheck2 = makeResult({ responseText: "FIXED" });
+    const selfResult3 = makeResult({ sessionId: "s4", responseText: "ok" });
+    const selfCheck3 = makeResult({ responseText: "DONE" });
+
+    const agent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(implResult))
+        .mockReturnValueOnce(makeStream(selfResult1))
+        .mockReturnValueOnce(makeStream(selfResult2))
+        .mockReturnValueOnce(makeStream(selfResult3)),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(implCheck))
+        .mockReturnValueOnce(makeStream(selfCheck1))
+        .mockReturnValueOnce(makeStream(selfCheck2))
+        .mockReturnValueOnce(makeStream(selfCheck3)),
+    };
+
+    const emitter = new PipelineEventEmitter();
+    const enterEvents: StageEnterEvent[] = [];
+    const exitEvents: StageExitEvent[] = [];
+    emitter.on("stage:enter", (ev) => enterEvents.push(ev));
+    emitter.on("stage:exit", (ev) => exitEvents.push(ev));
+
+    const stages = [
+      createImplementStageHandler({ agent, ...ISSUE_CTX }),
+      createSelfCheckStageHandler({ agent, ...ISSUE_CTX }),
+    ];
+    const result = await runPipeline(
+      makePipelineOpts({ stages, events: emitter }),
+    );
+
+    expect(result.success).toBe(true);
+
+    // Implement: 1 enter + 1 exit.
+    // Self-check: 3 iterations (0,1,2) → 3 enter + 3 exit.
+    const selfEnterEvents = enterEvents.filter((e) => e.stageNumber === 3);
+    expect(selfEnterEvents).toEqual([
+      { stageNumber: 3, stageName: "Self-check", iteration: 0 },
+      { stageNumber: 3, stageName: "Self-check", iteration: 1 },
+      { stageNumber: 3, stageName: "Self-check", iteration: 2 },
+    ]);
+
+    const selfExitEvents = exitEvents.filter((e) => e.stageNumber === 3);
+    expect(selfExitEvents).toEqual([
+      { stageNumber: 3, outcome: "not_approved" },
+      { stageNumber: 3, outcome: "not_approved" },
+      { stageNumber: 3, outcome: "completed" },
+    ]);
+  });
+
+  test("event ordering: enter-exit pairs interleave correctly across stages", async () => {
+    const implResult = makeResult({ sessionId: "s1", responseText: "ok" });
+    const implCheck = makeResult({ responseText: "COMPLETED" });
+    const selfResult = makeResult({ sessionId: "s2", responseText: "ok" });
+    const selfCheck = makeResult({ responseText: "DONE" });
+
+    const agent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(implResult))
+        .mockReturnValueOnce(makeStream(selfResult)),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(implCheck))
+        .mockReturnValueOnce(makeStream(selfCheck)),
+    };
+
+    const emitter = new PipelineEventEmitter();
+    const timeline: string[] = [];
+    emitter.on("stage:enter", (ev) => timeline.push(`enter:${ev.stageNumber}`));
+    emitter.on("stage:exit", (ev) =>
+      timeline.push(`exit:${ev.stageNumber}:${ev.outcome}`),
+    );
+
+    const stages = [
+      createImplementStageHandler({ agent, ...ISSUE_CTX }),
+      createSelfCheckStageHandler({ agent, ...ISSUE_CTX }),
+    ];
+    await runPipeline(makePipelineOpts({ stages, events: emitter }));
+
+    expect(timeline).toEqual([
+      "enter:2",
+      "exit:2:completed",
+      "enter:3",
+      "exit:3:completed",
+    ]);
   });
 });

@@ -16,6 +16,7 @@ import {
 } from "./ci.js";
 import type { StageContext } from "./pipeline.js";
 import { buildCiFixPrompt } from "./stage-cicheck.js";
+import { drainToSink } from "./stage-util.js";
 import { getHeadSha as defaultGetHeadSha } from "./worktree.js";
 
 // ---- defaults ----------------------------------------------------------------
@@ -202,6 +203,9 @@ export async function pollCiAndFix(
       failureLogs,
     );
     const fixStream = agent.invoke(fixPrompt, { cwd: ctx.worktreePath });
+    if (ctx.streamSinks?.a) {
+      drainToSink(fixStream, ctx.streamSinks.a);
+    }
     const fixResult = await fixStream.result;
 
     if (fixResult.sessionId) {

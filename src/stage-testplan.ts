@@ -94,6 +94,7 @@ export function createTestPlanStageHandler(
         ctx.savedAgentASessionId,
         verifyPrompt,
         ctx.worktreePath,
+        ctx.streamSinks?.a,
       );
 
       if (verifyResult.sessionId) {
@@ -110,6 +111,7 @@ export function createTestPlanStageHandler(
         verifyResult.sessionId,
         buildTestPlanSelfCheckPrompt(),
         ctx.worktreePath,
+        ctx.streamSinks?.a,
       );
 
       if (checkResult.status === "error") {
