@@ -1091,4 +1091,48 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
     expect(result.status).toBe("error");
     expect(result.stderrText).toBe("unexpected argument '--model'");
   });
+
+  test("invoke: config parsing error from stderr produces config_parsing error type", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const adapter = createCodexAdapter();
+    const stream = adapter.invoke("prompt");
+
+    // Codex CLI rejects config at startup: no stdout, error on stderr.
+    emitStderr(
+      child,
+      "Error: unknown variant `xhigh`, expected one of `minimal`, `low`, `medium`, `high`\nin `model_reasoning_effort`",
+    );
+    child.emit("close", 1);
+
+    const result = await stream.result;
+    expect(result.status).toBe("error");
+    expect(result.errorType).toBe("config_parsing");
+    expect(result.stderrText).toContain("unknown variant");
+  });
+
+  test("resume: config parsing error from stderr produces config_parsing error type", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const adapter = createCodexAdapter();
+    const stream = adapter.resume("sess-1", "continue");
+
+    emitStderr(child, "Error: invalid value for model_reasoning_effort");
+    child.emit("close", 1);
+
+    const result = await stream.result;
+    expect(result.status).toBe("error");
+    expect(result.errorType).toBe("config_parsing");
+    expect(result.stderrText).toContain("invalid value");
+  });
+
+  test("createCodexAdapter rejects unsupported reasoning effort at construction", () => {
+    expect(() =>
+      createCodexAdapter({
+        reasoningEffort: "xhigh" as never,
+      }),
+    ).toThrow(/Unsupported Codex reasoning effort "xhigh"/);
+  });
 });

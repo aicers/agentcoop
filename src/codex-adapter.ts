@@ -234,7 +234,7 @@ export class CodexStreamTransformer extends JsonlLineTransformer {
 // Error detection
 // ---------------------------------------------------------------------------
 
-function detectCodexError(text: string): AgentErrorType {
+export function detectCodexError(text: string): AgentErrorType {
   const lower = text.toLowerCase();
   if (lower.includes("max turns") || lower.includes("turn limit")) {
     return "max_turns";
@@ -245,6 +245,9 @@ function detectCodexError(text: string): AgentErrorType {
   ) {
     return "execution_error";
   }
+  if (lower.includes("unknown variant") || lower.includes("invalid value")) {
+    return "config_parsing";
+  }
   return "unknown";
 }
 
@@ -252,7 +255,29 @@ function detectCodexError(text: string): AgentErrorType {
 // CLI args builders
 // ---------------------------------------------------------------------------
 
-export type CodexReasoningEffort = "minimal" | "low" | "medium" | "high";
+const CODEX_REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
+
+export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
+
+const VALID_CODEX_REASONING_EFFORTS: ReadonlySet<string> = new Set(
+  CODEX_REASONING_EFFORTS,
+);
+
+/**
+ * Validate that `value` is a supported Codex reasoning effort level.
+ * Throws with a descriptive message when the value is unsupported.
+ */
+export function validateCodexReasoningEffort(
+  value: string,
+): CodexReasoningEffort {
+  if (VALID_CODEX_REASONING_EFFORTS.has(value)) {
+    return value as CodexReasoningEffort;
+  }
+  const supported = [...VALID_CODEX_REASONING_EFFORTS].join(", ");
+  throw new Error(
+    `Unsupported Codex reasoning effort "${value}". Supported values: ${supported}`,
+  );
+}
 
 export interface CodexAdapterOptions {
   model?: string;
@@ -331,7 +356,9 @@ export function createCodexAdapter(
   opts: CodexAdapterOptions = {},
 ): AgentAdapter {
   const model = opts.model;
-  const reasoningEffort = opts.reasoningEffort ?? "high";
+  const reasoningEffort = validateCodexReasoningEffort(
+    opts.reasoningEffort ?? "high",
+  );
   const inactivityTimeoutMs = opts.inactivityTimeoutMs;
 
   return {
