@@ -1,19 +1,36 @@
 import { describe, expect, test } from "vitest";
-import { buildClaudeArgs, parseClaudeResponse } from "./claude-adapter.js";
+import {
+  buildClaudeArgs,
+  ClaudeStreamTransformer,
+  parseClaudeStreamJson,
+} from "./claude-adapter.js";
 
 // ---------------------------------------------------------------------------
-// parseClaudeResponse
+// parseClaudeStreamJson
 // ---------------------------------------------------------------------------
-describe("parseClaudeResponse", () => {
-  test("parses successful response", () => {
-    const json = JSON.stringify({
-      session_id: "sess-abc-123",
-      result: "Hello, world!",
-      subtype: "success",
-      is_error: false,
-    });
+describe("parseClaudeStreamJson", () => {
+  function streamJsonl(events: object[]): string {
+    return events.map((e) => JSON.stringify(e)).join("\n");
+  }
 
-    expect(parseClaudeResponse(json)).toEqual({
+  test("parses successful stream-json output", () => {
+    const jsonl = streamJsonl([
+      { type: "system", subtype: "init", session_id: "sess-abc-123" },
+      {
+        type: "assistant",
+        session_id: "sess-abc-123",
+        message: { content: [{ type: "text", text: "Hello, world!" }] },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "sess-abc-123",
+        is_error: false,
+        result: "Hello, world!",
+      },
+    ]);
+
+    expect(parseClaudeStreamJson(jsonl)).toEqual({
       sessionId: "sess-abc-123",
       responseText: "Hello, world!",
       status: "success",
@@ -23,14 +40,18 @@ describe("parseClaudeResponse", () => {
   });
 
   test("parses error_max_turns response", () => {
-    const json = JSON.stringify({
-      session_id: "sess-xyz",
-      result: "Reached maximum number of turns",
-      subtype: "error_max_turns",
-      is_error: true,
-    });
+    const jsonl = streamJsonl([
+      { type: "system", subtype: "init", session_id: "sess-xyz" },
+      {
+        type: "result",
+        subtype: "error_max_turns",
+        session_id: "sess-xyz",
+        is_error: true,
+        result: "Reached maximum number of turns",
+      },
+    ]);
 
-    expect(parseClaudeResponse(json)).toEqual({
+    expect(parseClaudeStreamJson(jsonl)).toEqual({
       sessionId: "sess-xyz",
       responseText: "Reached maximum number of turns",
       status: "error",
@@ -40,14 +61,18 @@ describe("parseClaudeResponse", () => {
   });
 
   test("parses error_during_execution response", () => {
-    const json = JSON.stringify({
-      session_id: "sess-err",
-      result: "Command failed",
-      subtype: "error_during_execution",
-      is_error: true,
-    });
+    const jsonl = streamJsonl([
+      { type: "system", subtype: "init", session_id: "sess-err" },
+      {
+        type: "result",
+        subtype: "error_during_execution",
+        session_id: "sess-err",
+        is_error: true,
+        result: "Command failed",
+      },
+    ]);
 
-    expect(parseClaudeResponse(json)).toEqual({
+    expect(parseClaudeStreamJson(jsonl)).toEqual({
       sessionId: "sess-err",
       responseText: "Command failed",
       status: "error",
@@ -57,66 +82,366 @@ describe("parseClaudeResponse", () => {
   });
 
   test("maps unknown error subtype to 'unknown'", () => {
-    const json = JSON.stringify({
-      session_id: "sess-unk",
-      result: "Something went wrong",
-      subtype: "error_something_new",
-      is_error: true,
-    });
+    const jsonl = streamJsonl([
+      {
+        type: "result",
+        subtype: "error_something_new",
+        session_id: "sess-unk",
+        is_error: true,
+        result: "Something went wrong",
+      },
+    ]);
 
-    const result = parseClaudeResponse(json);
+    const result = parseClaudeStreamJson(jsonl);
     expect(result.status).toBe("error");
     expect(result.errorType).toBe("unknown");
   });
 
   test("treats empty session_id as undefined", () => {
-    const json = JSON.stringify({
-      session_id: "",
-      result: "response",
-      subtype: "success",
-      is_error: false,
-    });
+    const jsonl = streamJsonl([
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "",
+        is_error: false,
+        result: "response",
+      },
+    ]);
 
-    expect(parseClaudeResponse(json).sessionId).toBeUndefined();
+    expect(parseClaudeStreamJson(jsonl).sessionId).toBeUndefined();
   });
 
-  test("treats null result as empty string", () => {
-    const json = JSON.stringify({
-      session_id: "sess-1",
-      result: null,
-      subtype: "success",
-      is_error: false,
-    });
+  test("handles result with error field instead of result field", () => {
+    const jsonl = streamJsonl([
+      {
+        type: "result",
+        subtype: "error",
+        session_id: "sess-1",
+        is_error: true,
+        error: "something failed",
+      },
+    ]);
 
-    expect(parseClaudeResponse(json).responseText).toBe("");
+    const result = parseClaudeStreamJson(jsonl);
+    expect(result.responseText).toBe("something failed");
+    expect(result.status).toBe("error");
   });
 
-  test("throws on invalid JSON", () => {
-    expect(() => parseClaudeResponse("not json")).toThrow();
+  test("extracts session_id from system init event", () => {
+    const jsonl = streamJsonl([
+      { type: "system", subtype: "init", session_id: "from-init" },
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "from-result",
+        is_error: false,
+        result: "ok",
+      },
+    ]);
+
+    // result event overrides the init session_id
+    expect(parseClaudeStreamJson(jsonl).sessionId).toBe("from-result");
+  });
+
+  test("uses init session_id when result has none", () => {
+    const jsonl = streamJsonl([
+      { type: "system", subtype: "init", session_id: "from-init" },
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "",
+        is_error: false,
+        result: "ok",
+      },
+    ]);
+
+    expect(parseClaudeStreamJson(jsonl).sessionId).toBe("from-init");
+  });
+
+  test("skips malformed JSON lines gracefully", () => {
+    const jsonl = [
+      JSON.stringify({
+        type: "system",
+        subtype: "init",
+        session_id: "sess-1",
+      }),
+      "not valid json",
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        session_id: "sess-1",
+        is_error: false,
+        result: "ok",
+      }),
+    ].join("\n");
+
+    const result = parseClaudeStreamJson(jsonl);
+    expect(result.sessionId).toBe("sess-1");
+    expect(result.responseText).toBe("ok");
+    expect(result.status).toBe("success");
+  });
+
+  test("handles empty input", () => {
+    const result = parseClaudeStreamJson("");
+    expect(result.sessionId).toBeUndefined();
+    expect(result.responseText).toBe("");
+    expect(result.status).toBe("success");
+  });
+
+  test("returns empty responseText when no result event exists", () => {
+    const jsonl = streamJsonl([
+      { type: "system", subtype: "init", session_id: "sess-no-result" },
+      {
+        type: "assistant",
+        session_id: "sess-no-result",
+        message: { content: [{ type: "text", text: "partial" }] },
+      },
+    ]);
+
+    const result = parseClaudeStreamJson(jsonl);
+    expect(result.sessionId).toBe("sess-no-result");
+    expect(result.responseText).toBe("");
+    expect(result.status).toBe("success");
+  });
+
+  test("handles result event with neither result nor error field", () => {
+    const jsonl = streamJsonl([
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "sess-empty",
+        is_error: false,
+      },
+    ]);
+
+    const result = parseClaudeStreamJson(jsonl);
+    expect(result.responseText).toBe("");
+    expect(result.status).toBe("success");
+  });
+
+  test("ignores assistant and user events for result extraction", () => {
+    const jsonl = streamJsonl([
+      { type: "system", subtype: "init", session_id: "s1" },
+      {
+        type: "assistant",
+        session_id: "s1",
+        message: { content: [{ type: "text", text: "turn 1 text" }] },
+      },
+      {
+        type: "user",
+        session_id: "s1",
+        message: { content: [{ type: "tool_result" }] },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "s1",
+        is_error: false,
+        result: "final answer",
+      },
+    ]);
+
+    const result = parseClaudeStreamJson(jsonl);
+    expect(result.responseText).toBe("final answer");
   });
 
   test("preserves multiline result text", () => {
-    const json = JSON.stringify({
-      session_id: "sess-ml",
-      result: "line 1\nline 2\nline 3",
-      subtype: "success",
-      is_error: false,
-    });
+    const jsonl = streamJsonl([
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "sess-ml",
+        is_error: false,
+        result: "line 1\nline 2\nline 3",
+      },
+    ]);
 
-    expect(parseClaudeResponse(json).responseText).toBe(
+    expect(parseClaudeStreamJson(jsonl).responseText).toBe(
       "line 1\nline 2\nline 3",
     );
   });
 
   test("preserves unicode in result text", () => {
-    const json = JSON.stringify({
-      session_id: "sess-u",
-      result: "한국어 테스트 🎉",
-      subtype: "success",
-      is_error: false,
+    const jsonl = streamJsonl([
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "sess-u",
+        is_error: false,
+        result: "한국어 테스트 🎉",
+      },
+    ]);
+
+    expect(parseClaudeStreamJson(jsonl).responseText).toBe("한국어 테스트 🎉");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ClaudeStreamTransformer
+// ---------------------------------------------------------------------------
+describe("ClaudeStreamTransformer", () => {
+  test("extracts text from assistant event content blocks", () => {
+    const t = new ClaudeStreamTransformer();
+
+    const chunk = [
+      JSON.stringify({
+        type: "assistant",
+        session_id: "s1",
+        message: { content: [{ type: "text", text: "Hello world" }] },
+      }),
+      "",
+    ].join("\n");
+
+    expect(t.push(chunk)).toBe("Hello world");
+  });
+
+  test("concatenates multiple text blocks in one assistant event", () => {
+    const t = new ClaudeStreamTransformer();
+
+    const chunk = [
+      JSON.stringify({
+        type: "assistant",
+        session_id: "s1",
+        message: {
+          content: [
+            { type: "text", text: "Part 1. " },
+            { type: "tool_use", id: "tool_1", name: "Read" },
+            { type: "text", text: "Part 2." },
+          ],
+        },
+      }),
+      "",
+    ].join("\n");
+
+    expect(t.push(chunk)).toBe("Part 1. Part 2.");
+  });
+
+  test("ignores non-assistant events", () => {
+    const t = new ClaudeStreamTransformer();
+
+    const chunk = [
+      JSON.stringify({ type: "system", subtype: "init", session_id: "s1" }),
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        session_id: "s1",
+        is_error: false,
+        result: "ok",
+      }),
+      JSON.stringify({ type: "rate_limit_event", rate_limit_info: {} }),
+      "",
+    ].join("\n");
+
+    expect(t.push(chunk)).toBe("");
+  });
+
+  test("ignores tool_use content blocks (no text field)", () => {
+    const t = new ClaudeStreamTransformer();
+
+    const chunk = [
+      JSON.stringify({
+        type: "assistant",
+        session_id: "s1",
+        message: {
+          content: [{ type: "tool_use", id: "t1", name: "Bash" }],
+        },
+      }),
+      "",
+    ].join("\n");
+
+    expect(t.push(chunk)).toBe("");
+  });
+
+  test("buffers incomplete lines across pushes", () => {
+    const t = new ClaudeStreamTransformer();
+    const line = JSON.stringify({
+      type: "assistant",
+      session_id: "s1",
+      message: { content: [{ type: "text", text: "Hi" }] },
     });
 
-    expect(parseClaudeResponse(json).responseText).toBe("한국어 테스트 🎉");
+    // Send first half
+    const half = line.slice(0, 20);
+    expect(t.push(half)).toBe("");
+
+    // Send second half with newline
+    expect(t.push(`${line.slice(20)}\n`)).toBe("Hi");
+  });
+
+  test("flush emits buffered content", () => {
+    const t = new ClaudeStreamTransformer();
+    const line = JSON.stringify({
+      type: "assistant",
+      session_id: "s1",
+      message: { content: [{ type: "text", text: "end" }] },
+    });
+
+    t.push(line); // no trailing newline, stays in buffer
+    expect(t.flush()).toBe("end");
+  });
+
+  test("flush returns empty string when buffer is empty", () => {
+    const t = new ClaudeStreamTransformer();
+    expect(t.flush()).toBe("");
+  });
+
+  test("handles JSON split mid-character across multiple pushes", () => {
+    const t = new ClaudeStreamTransformer();
+    const line = JSON.stringify({
+      type: "assistant",
+      session_id: "s1",
+      message: { content: [{ type: "text", text: "split" }] },
+    });
+
+    const parts = [line.slice(0, 5), line.slice(5, 30), `${line.slice(30)}\n`];
+    expect(t.push(parts[0])).toBe("");
+    expect(t.push(parts[1])).toBe("");
+    expect(t.push(parts[2])).toBe("split");
+  });
+
+  test("handles multiple assistant events in a single push", () => {
+    const t = new ClaudeStreamTransformer();
+    const events = [
+      JSON.stringify({
+        type: "assistant",
+        session_id: "s1",
+        message: { content: [{ type: "text", text: "Turn 1" }] },
+      }),
+      JSON.stringify({
+        type: "user",
+        session_id: "s1",
+        message: { content: [] },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        session_id: "s1",
+        message: { content: [{ type: "text", text: "Turn 2" }] },
+      }),
+      "",
+    ].join("\n");
+
+    expect(t.push(events)).toBe("Turn 1Turn 2");
+  });
+
+  test("handles assistant event with empty content array", () => {
+    const t = new ClaudeStreamTransformer();
+
+    const chunk = [
+      JSON.stringify({
+        type: "assistant",
+        session_id: "s1",
+        message: { content: [] },
+      }),
+      "",
+    ].join("\n");
+
+    expect(t.push(chunk)).toBe("");
+  });
+
+  test("flush handles non-JSON content in buffer", () => {
+    const t = new ClaudeStreamTransformer();
+    t.push("garbage without newline");
+    expect(t.flush()).toBe("");
   });
 });
 
@@ -124,7 +449,7 @@ describe("parseClaudeResponse", () => {
 // buildClaudeArgs
 // ---------------------------------------------------------------------------
 describe("buildClaudeArgs", () => {
-  test("builds basic args with auto permission mode", () => {
+  test("builds basic args with auto permission mode and --verbose", () => {
     const args = buildClaudeArgs("do something", {
       permissionMode: "auto",
     });
@@ -133,10 +458,16 @@ describe("buildClaudeArgs", () => {
       "-p",
       "do something",
       "--output-format",
-      "json",
+      "stream-json",
+      "--verbose",
       "--permission-mode",
       "auto",
     ]);
+  });
+
+  test("always includes --verbose (required by stream-json)", () => {
+    const args = buildClaudeArgs("prompt", { permissionMode: "auto" });
+    expect(args).toContain("--verbose");
   });
 
   test("builds args with bypass permission mode", () => {
@@ -196,7 +527,8 @@ describe("buildClaudeArgs", () => {
       "-p",
       "full prompt",
       "--output-format",
-      "json",
+      "stream-json",
+      "--verbose",
       "--model",
       "sonnet",
       "--permission-mode",

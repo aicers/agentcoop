@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { AgentResult, AgentStream } from "./agent.js";
+import type { AgentResult, AgentStream, ChunkTransformer } from "./agent.js";
 
 export interface SpawnAgentOptions {
   command: string;
@@ -10,6 +10,17 @@ export interface SpawnAgentOptions {
     exitCode: number | null,
     stderrText: string,
   ) => AgentResult;
+  /**
+   * When provided, the async iterator yields transformed (display-friendly)
+   * text instead of raw stdout chunks.  Raw chunks are still collected for
+   * `parseResult`.
+   */
+  chunkTransformer?: ChunkTransformer;
+  /**
+   * Kill the child process if stdout is silent for this many milliseconds.
+   * Omit or pass 0 to disable.
+   */
+  inactivityTimeoutMs?: number;
 }
 
 export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
@@ -21,6 +32,7 @@ export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
   const { stdout, stderr } = child;
   const stdoutChunks: string[] = [];
   const stderrChunks: string[] = [];
+  const transformer = opts.chunkTransformer;
 
   // Async queue: data listener is the single consumer of the stdout
   // stream.  It pushes to stdoutChunks (for the result promise) and to
@@ -31,12 +43,41 @@ export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
   let chunkResolve: (() => void) | null = null;
   let streamDone = false;
 
+  // Inactivity timeout state.
+  let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+  let timedOut = false;
+
+  function resetInactivityTimer(): void {
+    if (!opts.inactivityTimeoutMs) return;
+    if (inactivityTimer) clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, opts.inactivityTimeoutMs);
+  }
+
+  // Start the timer immediately so silence from the very beginning is
+  // caught.
+  resetInactivityTimer();
+
   stdout?.on("data", (data: Buffer) => {
     const text = data.toString();
     stdoutChunks.push(text);
-    chunkQueue.push(text);
-    chunkResolve?.();
-    chunkResolve = null;
+
+    resetInactivityTimer();
+
+    if (transformer) {
+      const transformed = transformer.push(text);
+      if (transformed) {
+        chunkQueue.push(transformed);
+        chunkResolve?.();
+        chunkResolve = null;
+      }
+    } else {
+      chunkQueue.push(text);
+      chunkResolve?.();
+      chunkResolve = null;
+    }
   });
 
   stderr?.on("data", (data: Buffer) => {
@@ -45,6 +86,7 @@ export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
 
   const result = new Promise<AgentResult>((resolve, reject) => {
     child.on("error", (err) => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
       if ("code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
         resolve({
           sessionId: undefined,
@@ -59,12 +101,30 @@ export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
     });
 
     child.on("close", (code) => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+
+      // Flush transformer at stream end.
+      if (transformer) {
+        const flushed = transformer.flush();
+        if (flushed) chunkQueue.push(flushed);
+      }
+
       streamDone = true;
       chunkResolve?.();
       chunkResolve = null;
       const output = stdoutChunks.join("");
       const stderrText = stderrChunks.join("");
-      resolve(opts.parseResult(output, code, stderrText));
+      const parsed = opts.parseResult(output, code, stderrText);
+
+      if (timedOut) {
+        resolve({
+          ...parsed,
+          status: "error",
+          errorType: "inactivity_timeout",
+        });
+      } else {
+        resolve(parsed);
+      }
     });
   });
 

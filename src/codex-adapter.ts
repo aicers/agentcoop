@@ -4,6 +4,7 @@ import type {
   AgentResult,
   InvokeOptions,
 } from "./agent.js";
+import { JsonlLineTransformer } from "./agent.js";
 import { spawnAgent } from "./spawn-agent.js";
 
 // ---------------------------------------------------------------------------
@@ -65,7 +66,12 @@ export function parseCodexJsonl(jsonl: string): AgentResult {
   let failMessage = "";
 
   for (const line of lines) {
-    const event: CodexJsonEvent = JSON.parse(line);
+    let event: CodexJsonEvent;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
 
     if (event.type === "thread.started") {
       const e = event as ThreadStartedEvent;
@@ -108,7 +114,7 @@ export function parseCodexJsonl(jsonl: string): AgentResult {
 }
 
 // ---------------------------------------------------------------------------
-// Plain text parser (codex exec resume)
+// Plain text parser (codex exec resume — does not support --json)
 // ---------------------------------------------------------------------------
 
 /**
@@ -205,6 +211,29 @@ export function parseCodexPlainText(
   };
 }
 
+// ---------------------------------------------------------------------------
+// ChunkTransformer — extract display text from Codex JSONL events
+// ---------------------------------------------------------------------------
+
+/**
+ * Transforms raw Codex JSONL chunks into human-readable text for the
+ * terminal UI.  Extracts `agent_message` text from `item.completed`
+ * events.
+ */
+export class CodexStreamTransformer extends JsonlLineTransformer {
+  protected extractTextFromEvent(event: unknown): string {
+    const e = event as Record<string, unknown>;
+    if (e.type !== "item.completed") return "";
+    const item = e.item as Record<string, unknown> | undefined;
+    if (item?.type !== "agent_message") return "";
+    return (item.text as string) ?? "";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Error detection
+// ---------------------------------------------------------------------------
+
 function detectCodexError(text: string): AgentErrorType {
   const lower = text.toLowerCase();
   if (lower.includes("max turns") || lower.includes("turn limit")) {
@@ -228,6 +257,7 @@ export type CodexReasoningEffort = "minimal" | "low" | "medium" | "high";
 export interface CodexAdapterOptions {
   model?: string;
   reasoningEffort?: CodexReasoningEffort;
+  inactivityTimeoutMs?: number;
 }
 
 export function buildCodexInvokeArgs(
@@ -250,6 +280,7 @@ export function buildCodexResumeArgs(
   prompt: string,
   opts: { model?: string; reasoningEffort?: CodexReasoningEffort },
 ): string[] {
+  // Note: `codex exec resume` does not support --json; output is plain text.
   const args = ["exec", "resume", "-c", "sandbox_mode=danger-full-access"];
   if (opts.model) {
     args.push("-c", `model="${opts.model}"`);
@@ -301,6 +332,7 @@ export function createCodexAdapter(
 ): AgentAdapter {
   const model = opts.model;
   const reasoningEffort = opts.reasoningEffort ?? "high";
+  const inactivityTimeoutMs = opts.inactivityTimeoutMs;
 
   return {
     invoke(prompt, options?: InvokeOptions) {
@@ -309,9 +341,12 @@ export function createCodexAdapter(
         args: buildCodexInvokeArgs(prompt, { model, reasoningEffort }),
         cwd: options?.cwd,
         parseResult: parseCodexInvokeOutput,
+        chunkTransformer: new CodexStreamTransformer(),
+        inactivityTimeoutMs,
       });
     },
     resume(sessionId, prompt, options?: InvokeOptions) {
+      // codex exec resume outputs plain text, not JSONL.
       return spawnAgent({
         command: "codex",
         args: buildCodexResumeArgs(sessionId, prompt, {
@@ -328,6 +363,9 @@ export function createCodexAdapter(
           }
           return result;
         },
+        // No chunkTransformer for resume — plain text is already
+        // human-readable and can go directly to the UI.
+        inactivityTimeoutMs,
       });
     },
   };

@@ -181,7 +181,7 @@ describe("module exports", () => {
     expect(config.DEFAULT_PIPELINE_SETTINGS).toEqual({
       selfCheckAutoIterations: 3,
       reviewAutoRounds: 3,
-      inactivityTimeoutMinutes: 15,
+      inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
   });

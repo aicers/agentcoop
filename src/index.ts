@@ -65,11 +65,19 @@ const CLAUDE_MODELS = new Set(["opus", "sonnet"]);
 function createAdapter(
   agentConfig: AgentConfig,
   permissionMode: "auto" | "bypass",
+  inactivityTimeoutMs?: number,
 ): AgentAdapter {
   if (CLAUDE_MODELS.has(agentConfig.model)) {
-    return createClaudeAdapter({ model: agentConfig.model, permissionMode });
+    return createClaudeAdapter({
+      model: agentConfig.model,
+      permissionMode,
+      inactivityTimeoutMs,
+    });
   }
-  return createCodexAdapter({ model: agentConfig.model });
+  return createCodexAdapter({
+    model: agentConfig.model,
+    inactivityTimeoutMs,
+  });
 }
 
 function cliForModel(model: string): string {
@@ -250,8 +258,18 @@ try {
   }
 
   // Create agent adapters.
-  const agentA = createAdapter(agentAConfig, claudePermissionMode);
-  const agentB = createAdapter(agentBConfig, claudePermissionMode);
+  const inactivityTimeoutMs =
+    pipelineSettings.inactivityTimeoutMinutes * 60_000;
+  const agentA = createAdapter(
+    agentAConfig,
+    claudePermissionMode,
+    inactivityTimeoutMs,
+  );
+  const agentB = createAdapter(
+    agentBConfig,
+    claudePermissionMode,
+    inactivityTimeoutMs,
+  );
 
   const issueCtx = { issueTitle, issueBody };
 
