@@ -108,9 +108,14 @@ export interface StageContext {
 export interface UserPrompt {
   /**
    * Ask the user to approve continuing after the automatic loop budget
-   * is exhausted.
+   * is exhausted.  `message` carries the last stage result (e.g. an
+   * unresolved-items summary) so it can be shown before the prompt.
    */
-  confirmContinueLoop(stageName: string, iteration: number): Promise<boolean>;
+  confirmContinueLoop(
+    stageName: string,
+    iteration: number,
+    message: string,
+  ): Promise<boolean>;
 
   /**
    * Ask the user to approve advancing to the next stage (step mode).
@@ -314,6 +319,7 @@ export async function runPipeline(
         const approved = await prompt.confirmContinueLoop(
           stage.name,
           lc.iteration,
+          result.message,
         );
         if (!approved) {
           return {
@@ -375,6 +381,8 @@ async function runStage(
 ): Promise<StageRunResult> {
   const lc = createLoopControl(stage.autoBudget);
   let userInstruction: string | undefined;
+  /** Last not_approved message, forwarded to confirmContinueLoop. */
+  let loopMessage = "";
   /** Tracks whether the last iteration was an auto-clarification retry. */
   let clarificationAttempted = false;
 
@@ -416,6 +424,7 @@ async function runStage(
       }
       // Treat as needing another loop iteration with feedback.
       userInstruction = result.message;
+      loopMessage = result.message;
       clarificationAttempted = false;
     } else if (result.outcome === "blocked") {
       clarificationAttempted = false;
@@ -468,7 +477,9 @@ async function runStage(
       const approved = await prompt.confirmContinueLoop(
         stage.name,
         lc.iteration,
+        loopMessage,
       );
+      loopMessage = "";
       if (!approved) {
         return {
           action: "abort",

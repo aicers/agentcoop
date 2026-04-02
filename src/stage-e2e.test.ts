@@ -1927,6 +1927,13 @@ describe("Stage 8 (Review) through pipeline", () => {
       expect.stringContaining("unresolved"),
       { cwd: "/tmp/wt" },
     );
+
+    // The unresolved summary must reach the user via confirmContinueLoop.
+    expect(prompt.confirmContinueLoop).toHaveBeenCalledWith(
+      "Review",
+      3,
+      expect.stringContaining("Missing error handling in parser"),
+    );
   });
 
   test("non-final NOT_APPROVED rounds do not request unresolved summary", async () => {
