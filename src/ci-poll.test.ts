@@ -50,6 +50,7 @@ const BASE_CTX: StageContext = {
   branch: "issue-42",
   worktreePath: "/tmp/wt",
   iteration: 0,
+  lastAutoIteration: false,
   userInstruction: undefined,
 };
 

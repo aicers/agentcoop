@@ -51,7 +51,7 @@ function makeStage(
   };
 }
 
-const BASE_CTX: Omit<StageContext, "iteration" | "userInstruction"> = {
+const BASE_CTX: Omit<StageContext, "iteration" | "lastAutoIteration" | "userInstruction"> = {
   owner: "org",
   repo: "repo",
   issueNumber: 5,
@@ -347,6 +347,41 @@ describe("runPipeline — loop control", () => {
     // 3 auto + user approves + 3 more auto + user declines = 6
     expect(calls).toBe(6);
     expect(prompt.confirmContinueLoop).toHaveBeenCalledTimes(2);
+  });
+
+  test("sets lastAutoIteration on the final auto-iteration", async () => {
+    const flags: boolean[] = [];
+    const prompt = makePrompt({
+      confirmContinueLoop: vi.fn().mockResolvedValue(false),
+    });
+    const stages = [
+      makeStage(1, async (ctx) => {
+        flags.push(ctx.lastAutoIteration);
+        return { outcome: "not_approved", message: "again" };
+      }),
+    ];
+    await runPipeline(makePipelineOpts({ stages, prompt }));
+    // Budget 3: iterations 0,1 → false; iteration 2 → true (last auto).
+    expect(flags).toEqual([false, false, true]);
+  });
+
+  test("lastAutoIteration resets to false after user grants new budget", async () => {
+    const flags: boolean[] = [];
+    const prompt = makePrompt({
+      confirmContinueLoop: vi
+        .fn()
+        .mockResolvedValueOnce(true)
+        .mockResolvedValue(false),
+    });
+    const stages = [
+      makeStage(1, async (ctx) => {
+        flags.push(ctx.lastAutoIteration);
+        return { outcome: "not_approved", message: "again" };
+      }),
+    ];
+    await runPipeline(makePipelineOpts({ stages, prompt }));
+    // Budget 3: [false, false, true] → user grants → [false, false, true]
+    expect(flags).toEqual([false, false, true, false, false, true]);
   });
 
   test("exits loop early on terminal success", async () => {
@@ -1011,6 +1046,7 @@ describe("createDoneStageHandler", () => {
     const ctx: StageContext = {
       ...BASE_CTX,
       iteration: 0,
+      lastAutoIteration: false,
       userInstruction: undefined,
     };
     const result = await stage.handler(ctx);
@@ -1030,6 +1066,7 @@ describe("createDoneStageHandler", () => {
     const ctx: StageContext = {
       ...BASE_CTX,
       iteration: 0,
+      lastAutoIteration: false,
       userInstruction: undefined,
     };
     const result = await stage.handler(ctx);

@@ -1744,7 +1744,9 @@ describe("Stage 8 (Review) through pipeline", () => {
           }),
         ),
       ),
-      resume: vi.fn(),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
     };
 
     const agentA: AgentAdapter = {
@@ -1853,6 +1855,146 @@ describe("Stage 8 (Review) through pipeline", () => {
     expect(result.success).toBe(true);
     expect(bInvokeCalls).toBe(4);
     expect(prompt.confirmContinueLoop).toHaveBeenCalledTimes(1);
+  });
+
+  test("budget-exhausted NOT_APPROVED round includes unresolved summary", async () => {
+    let bInvokeCalls = 0;
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockImplementation(() => {
+        bInvokeCalls++;
+        return makeStream(
+          makeResult({
+            sessionId: `sb${bInvokeCalls}`,
+            responseText: "NOT_APPROVED",
+          }),
+        );
+      }),
+      resume: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            responseText:
+              "**[Unresolved Round 3]**\n- Missing error handling in parser",
+          }),
+        ),
+      ),
+    };
+
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sa",
+            responseText: "Fixed.",
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+
+    const prompt = makePrompt({
+      confirmContinueLoop: vi.fn().mockResolvedValue(false),
+    });
+
+    const stage = {
+      ...createReviewStageHandler({
+        agentA,
+        agentB,
+        ...ISSUE_CTX,
+        getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
+        collectFailureLogs: vi.fn().mockReturnValue(""),
+        delay: vi.fn().mockResolvedValue(undefined),
+        pollIntervalMs: 100,
+        pollTimeoutMs: 1000,
+        getHeadSha: stubGetHeadSha,
+        emptyRunsGracePeriodMs: 0,
+      }),
+      autoBudget: 3,
+    };
+
+    const result = await runPipeline(
+      makePipelineOpts({ stages: [stage], prompt }),
+    );
+    expect(result.success).toBe(false);
+    expect(prompt.confirmContinueLoop).toHaveBeenCalled();
+
+    // Agent B should be resumed for unresolved summary only on round 3
+    // (the last auto-iteration). Rounds 1-2 should not trigger resume.
+    expect(agentB.resume).toHaveBeenCalledTimes(1);
+    expect(agentB.resume).toHaveBeenCalledWith(
+      "sb3",
+      expect.stringContaining("unresolved"),
+      { cwd: "/tmp/wt" },
+    );
+  });
+
+  test("non-final NOT_APPROVED rounds do not request unresolved summary", async () => {
+    let bInvokeCalls = 0;
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockImplementation(() => {
+        bInvokeCalls++;
+        if (bInvokeCalls <= 2) {
+          return makeStream(
+            makeResult({
+              sessionId: `sb${bInvokeCalls}`,
+              responseText: "NOT_APPROVED",
+            }),
+          );
+        }
+        return makeStream(
+          makeResult({
+            sessionId: `sb${bInvokeCalls}`,
+            responseText: "APPROVED",
+          }),
+        );
+      }),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+    };
+
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sa",
+            responseText: "Fixed.",
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+
+    const stage = {
+      ...createReviewStageHandler({
+        agentA,
+        agentB,
+        ...ISSUE_CTX,
+        getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
+        collectFailureLogs: vi.fn().mockReturnValue(""),
+        delay: vi.fn().mockResolvedValue(undefined),
+        pollIntervalMs: 100,
+        pollTimeoutMs: 1000,
+        getHeadSha: stubGetHeadSha,
+        emptyRunsGracePeriodMs: 0,
+      }),
+      autoBudget: 3,
+    };
+
+    const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
+    expect(result.success).toBe(true);
+
+    // Agent B resumed once: for the APPROVED unresolved summary (round 3).
+    // Rounds 1-2 (NOT_APPROVED, not lastAutoIteration) should NOT trigger resume.
+    expect(agentB.resume).toHaveBeenCalledTimes(1);
+    expect(agentB.resume).toHaveBeenCalledWith(
+      "sb3",
+      expect.stringContaining("unresolved"),
+      { cwd: "/tmp/wt" },
+    );
   });
 
   test("CI error during fix flow → pipeline aborts", async () => {

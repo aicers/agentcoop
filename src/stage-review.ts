@@ -302,10 +302,22 @@ export function createReviewStageHandler(
       }
 
       // CI passed — return not_approved so the engine loops for next round.
-      return {
-        outcome: "not_approved",
-        message: `Round ${round} fixes applied, CI passed. Proceeding to next review round.`,
-      };
+      let message = `Round ${round} fixes applied, CI passed. Proceeding to next review round.`;
+
+      if (ctx.lastAutoIteration) {
+        const { error, summary } = await handleUnresolvedSummary(
+          opts,
+          reviewResult.sessionId,
+          round,
+          ctx.worktreePath,
+        );
+        if (error) return error;
+        if (summary) {
+          message += `\n\nUnresolved items:\n${summary}`;
+        }
+      }
+
+      return { outcome: "not_approved", message };
     },
   };
 }
