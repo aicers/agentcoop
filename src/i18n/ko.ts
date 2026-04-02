@@ -157,16 +157,28 @@ export const ko: Messages = {
   "statusBar.loop": (iteration) => `\uBC18\uBCF5: ${iteration}`,
   "statusBar.last": (outcome) => `\uC774\uC804: ${outcome}`,
 
+  "outcome.completed": "완료",
+  "outcome.fixed": "수정됨",
+  "outcome.approved": "승인됨",
+  "outcome.not_approved": "미승인",
+  "outcome.blocked": "차단됨",
+  "outcome.needs_clarification": "명확화 필요",
+  "outcome.error": "오류",
+
   // ---- input area --------------------------------------------------------
 
   "input.pipelineRunning":
     "\uD30C\uC774\uD504\uB77C\uC778 \uC2E4\uD589 \uC911...",
 
-  // ---- agent pane --------------------------------------------------------
+  // ---- agent pane / labels ------------------------------------------------
 
   "agentPane.tooSmall":
     "(\uD328\uB110\uC774 \uB108\uBB34 \uC791\uC2B5\uB2C8\uB2E4)",
   "agentPane.waiting": "(\uCD9C\uB825 \uB300\uAE30 \uC911)",
+  "agent.labelA": "에이전트 A",
+  "agent.labelB": "에이전트 B",
+  "agent.labelARole": "에이전트 A (구현자)",
+  "agent.labelBRole": "에이전트 B (리뷰어)",
 
   // ---- CI / stage result messages -----------------------------------------
 

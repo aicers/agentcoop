@@ -130,15 +130,26 @@ export const en: Messages = {
   "statusBar.stage": (number, name) => `Stage ${number}: ${name}`,
   "statusBar.loop": (iteration) => `Loop: ${iteration}`,
   "statusBar.last": (outcome) => `Last: ${outcome}`,
+  "outcome.completed": "completed",
+  "outcome.fixed": "fixed",
+  "outcome.approved": "approved",
+  "outcome.not_approved": "not approved",
+  "outcome.blocked": "blocked",
+  "outcome.needs_clarification": "needs clarification",
+  "outcome.error": "error",
 
   // ---- input area --------------------------------------------------------
 
   "input.pipelineRunning": "Pipeline running...",
 
-  // ---- agent pane --------------------------------------------------------
+  // ---- agent pane / labels ------------------------------------------------
 
   "agentPane.tooSmall": "(pane too small)",
   "agentPane.waiting": "(waiting for output)",
+  "agent.labelA": "Agent A",
+  "agent.labelB": "Agent B",
+  "agent.labelARole": "Agent A (implementer)",
+  "agent.labelBRole": "Agent B (reviewer)",
 
   // ---- CI / stage result messages -----------------------------------------
 

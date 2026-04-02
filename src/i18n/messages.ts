@@ -127,15 +127,26 @@ export interface Messages {
   "statusBar.stage": (number: number, name: string) => string;
   "statusBar.loop": (iteration: number) => string;
   "statusBar.last": (outcome: string) => string;
+  "outcome.completed": string;
+  "outcome.fixed": string;
+  "outcome.approved": string;
+  "outcome.not_approved": string;
+  "outcome.blocked": string;
+  "outcome.needs_clarification": string;
+  "outcome.error": string;
 
   // ---- input area (InputArea.tsx) ----------------------------------------
 
   "input.pipelineRunning": string;
 
-  // ---- agent pane (AgentPane.tsx) ----------------------------------------
+  // ---- agent pane / labels ------------------------------------------------
 
   "agentPane.tooSmall": string;
   "agentPane.waiting": string;
+  "agent.labelA": string;
+  "agent.labelB": string;
+  "agent.labelARole": string;
+  "agent.labelBRole": string;
 
   // ---- CI / stage result messages -----------------------------------------
 

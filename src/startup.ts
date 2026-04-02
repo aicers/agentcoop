@@ -75,8 +75,8 @@ export async function runStartup(
   } = target ?? (await selectTarget());
   let configDirty = initialDirty;
 
-  const agentA = await selectAgentModel("Agent A (implementer)");
-  const agentB = await selectAgentModel("Agent B (reviewer)");
+  const agentA = await selectAgentModel(t()["agent.labelARole"]);
+  const agentB = await selectAgentModel(t()["agent.labelBRole"]);
   const executionMode = await selectExecutionMode();
   const claudePermissionMode = await selectClaudePermissionMode();
 

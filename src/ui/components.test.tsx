@@ -178,7 +178,7 @@ describe("StatusBar", () => {
 
     const frame = lastFrame();
     expect(frame).toContain("Stage 3: Self-check");
-    expect(frame).toContain("Last: not_approved");
+    expect(frame).toContain("Last: not approved");
   });
 
   test("clears outcome on new stage:enter", async () => {

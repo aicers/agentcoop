@@ -39,7 +39,12 @@ export function StatusBar({ emitter }: StatusBarProps) {
 
   const iterText = stage ? m["statusBar.loop"](stage.iteration) : "";
 
-  const outcomeText = lastOutcome ? m["statusBar.last"](lastOutcome) : "";
+  const outcomeKey = lastOutcome
+    ? (`outcome.${lastOutcome}` as keyof typeof m)
+    : undefined;
+  const outcomeLabel =
+    outcomeKey && outcomeKey in m ? (m[outcomeKey] as string) : lastOutcome;
+  const outcomeText = outcomeLabel ? m["statusBar.last"](outcomeLabel) : "";
 
   return (
     <Box borderStyle="single" borderColor="gray" paddingX={1}>
