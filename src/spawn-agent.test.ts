@@ -598,15 +598,31 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
     const result = await stream.result;
     expect(result.responseText).toBe("Continued work done.");
     expect(result.status).toBe("success");
-    expect(result.sessionId).toBeUndefined();
+    expect(result.sessionId).toBe("sess-prev");
   });
 
-  test("resume detects error keywords in plain text", async () => {
+  test("resume falls back to input sessionId when output has no session id line", async () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child);
 
     const adapter = createCodexAdapter();
-    const stream = adapter.resume("sess-1", "continue");
+    const stream = adapter.resume("sess-input", "keep going");
+
+    // Output without a "session id:" banner line (e.g. older CLI version).
+    emitStdout(child, "codex\nDone.\ntokens used\n50");
+    child.emit("close", 0);
+
+    const result = await stream.result;
+    expect(result.sessionId).toBe("sess-input");
+    expect(result.status).toBe("success");
+  });
+
+  test("resume preserves sessionId on error exit", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const adapter = createCodexAdapter();
+    const stream = adapter.resume("sess-err", "continue");
 
     emitStdout(child, "Error: max turns reached");
     child.emit("close", 1);
@@ -614,6 +630,35 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
     const result = await stream.result;
     expect(result.status).toBe("error");
     expect(result.errorType).toBe("max_turns");
+    expect(result.sessionId).toBe("sess-err");
+  });
+
+  test("resume prefers parsed sessionId over input when banner has one", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const adapter = createCodexAdapter();
+    // Pass "old-sess" as input, but the CLI output contains "new-sess".
+    const stream = adapter.resume("old-sess", "keep going");
+
+    const resumeOutput = [
+      "OpenAI Codex v0.46.0 (research preview)",
+      "--------",
+      "session id: new-sess",
+      "--------",
+      "user",
+      "keep going",
+      "codex",
+      "Done.",
+      "tokens used",
+      "50",
+    ].join("\n");
+
+    emitStdout(child, resumeOutput);
+    child.emit("close", 0);
+
+    const result = await stream.result;
+    expect(result.sessionId).toBe("new-sess");
   });
 
   test("invoke with cwd passes working directory", () => {

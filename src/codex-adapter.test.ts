@@ -3,6 +3,7 @@ import {
   buildCodexInvokeArgs,
   buildCodexResumeArgs,
   extractCodexResumeResponse,
+  extractSessionId,
   parseCodexJsonl,
   parseCodexPlainText,
 } from "./codex-adapter.js";
@@ -249,25 +250,32 @@ describe("extractCodexResumeResponse", () => {
 // parseCodexPlainText
 // ---------------------------------------------------------------------------
 describe("parseCodexPlainText", () => {
-  test("parses successful plain text response with banner stripping", () => {
-    const text = [
-      "OpenAI Codex v0.46.0 (research preview)",
-      "--------",
-      "workdir: /path",
-      "model: gpt-5.4",
-      "session id: sess-1",
-      "--------",
+  const BANNER = [
+    "OpenAI Codex v0.46.0 (research preview)",
+    "--------",
+    "workdir: /path",
+    "model: gpt-5.4",
+    "session id: sess-1",
+    "--------",
+  ].join("\n");
+
+  function buildResumeOutput(response: string): string {
+    return [
+      BANNER,
       "user",
       "Question",
       "codex",
-      "Answer",
+      response,
       "tokens used",
       "100",
     ].join("\n");
+  }
 
-    const result = parseCodexPlainText(text, 0, "");
+  test("parses successful plain text response with banner stripping", () => {
+    const result = parseCodexPlainText(buildResumeOutput("Answer"), 0, "");
     expect(result.responseText).toBe("Answer");
     expect(result.status).toBe("success");
+    expect(result.sessionId).toBe("sess-1");
   });
 
   test("returns raw text on failure (no banner stripping)", () => {
@@ -344,7 +352,21 @@ describe("parseCodexPlainText", () => {
     expect(result.errorType).toBe("unknown");
   });
 
-  test("sessionId is always undefined for plain text", () => {
+  test("extracts sessionId from banner when present", () => {
+    expect(
+      parseCodexPlainText(buildResumeOutput("Answer"), 0, "").sessionId,
+    ).toBe("sess-1");
+  });
+
+  test("extracts sessionId from banner even on error exit", () => {
+    // The CLI may print the banner before crashing.
+    const text = buildResumeOutput("partial output");
+    const result = parseCodexPlainText(text, 1, "");
+    expect(result.sessionId).toBe("sess-1");
+    expect(result.status).toBe("error");
+  });
+
+  test("sessionId is undefined when output has no session id line", () => {
     expect(parseCodexPlainText("response", 0, "").sessionId).toBeUndefined();
     expect(parseCodexPlainText("error", 1, "").sessionId).toBeUndefined();
   });
@@ -352,6 +374,127 @@ describe("parseCodexPlainText", () => {
   test("includes stderrText in result", () => {
     const result = parseCodexPlainText("output", 0, "some warning");
     expect(result.stderrText).toBe("some warning");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractSessionId
+// ---------------------------------------------------------------------------
+describe("extractSessionId", () => {
+  test("extracts session ID from banner", () => {
+    const text = [
+      "OpenAI Codex v0.46.0 (research preview)",
+      "--------",
+      "session id: 019d46a1-d07f-7bc3-b96d-d50d44001c82",
+      "--------",
+    ].join("\n");
+
+    expect(extractSessionId(text)).toBe("019d46a1-d07f-7bc3-b96d-d50d44001c82");
+  });
+
+  test("returns undefined when no separator lines", () => {
+    expect(extractSessionId("session id: fake-id")).toBeUndefined();
+  });
+
+  test("returns undefined when no Codex header before separators", () => {
+    const text = ["--------", "session id: fake-id", "--------"].join("\n");
+    expect(extractSessionId(text)).toBeUndefined();
+  });
+
+  test("returns undefined when only one separator line", () => {
+    const text = [
+      "OpenAI Codex v0.46.0 (research preview)",
+      "--------",
+      "session id: fake-id",
+    ].join("\n");
+    expect(extractSessionId(text)).toBeUndefined();
+  });
+
+  test("returns undefined for empty string", () => {
+    expect(extractSessionId("")).toBeUndefined();
+  });
+
+  test("handles session id with extra whitespace", () => {
+    const text = [
+      "OpenAI Codex v0.46.0 (research preview)",
+      "--------",
+      "session id:   abc-123",
+      "--------",
+    ].join("\n");
+    expect(extractSessionId(text)).toBe("abc-123");
+  });
+
+  test("ignores session id in response body outside banner", () => {
+    const text = [
+      "OpenAI Codex v0.46.0 (research preview)",
+      "--------",
+      "session id: real-id",
+      "--------",
+      "user",
+      "prompt",
+      "codex",
+      "session id: fake-id-in-response",
+      "tokens used",
+      "100",
+    ].join("\n");
+
+    expect(extractSessionId(text)).toBe("real-id");
+  });
+
+  test("returns undefined when response body contains session id but banner does not", () => {
+    const text = [
+      "OpenAI Codex v0.46.0 (research preview)",
+      "--------",
+      "workdir: /path",
+      "--------",
+      "user",
+      "prompt",
+      "codex",
+      "session id: fake-id-in-response",
+      "tokens used",
+      "100",
+    ].join("\n");
+
+    expect(extractSessionId(text)).toBeUndefined();
+  });
+
+  test("ignores fake banner in response body with separators", () => {
+    const text = [
+      "codex",
+      "Here is the session info:",
+      "--------",
+      "session id: fake-id",
+      "--------",
+      "tokens used",
+      "100",
+    ].join("\n");
+
+    expect(extractSessionId(text)).toBeUndefined();
+  });
+
+  test("ignores Codex header echoed mid-output with fake banner", () => {
+    const text = [
+      "codex",
+      "The output looks like:",
+      "OpenAI Codex v0.46.0 (research preview)",
+      "--------",
+      "session id: fake-id",
+      "--------",
+      "tokens used",
+      "100",
+    ].join("\n");
+
+    expect(extractSessionId(text)).toBeUndefined();
+  });
+
+  test("does not match indented session id in banner", () => {
+    const text = [
+      "OpenAI Codex v0.46.0 (research preview)",
+      "--------",
+      "  session id: indented",
+      "--------",
+    ].join("\n");
+    expect(extractSessionId(text)).toBeUndefined();
   });
 });
 
