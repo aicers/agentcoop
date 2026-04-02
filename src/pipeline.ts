@@ -214,7 +214,10 @@ export interface PipelineOptions {
   stages: StageDefinition[];
   prompt: UserPrompt;
   /** Shared context fields injected into every `StageContext`. */
-  context: Omit<StageContext, "iteration" | "lastAutoIteration" | "userInstruction">;
+  context: Omit<
+    StageContext,
+    "iteration" | "lastAutoIteration" | "userInstruction"
+  >;
 }
 
 export interface PipelineResult {
@@ -364,7 +367,10 @@ async function dispatchError(
 
 async function runStage(
   stage: StageDefinition,
-  baseCtx: Omit<StageContext, "iteration" | "lastAutoIteration" | "userInstruction">,
+  baseCtx: Omit<
+    StageContext,
+    "iteration" | "lastAutoIteration" | "userInstruction"
+  >,
   prompt: UserPrompt,
 ): Promise<StageRunResult> {
   const lc = createLoopControl(stage.autoBudget);
