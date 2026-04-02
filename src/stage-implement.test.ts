@@ -237,4 +237,75 @@ describe("createImplementStageHandler", () => {
     const result = await stage.handler(BASE_CTX);
     expect(result.message).toBe("Everything looks good.\n\nCOMPLETED");
   });
+
+  // -- session ID reporting ---------------------------------------------------
+
+  test("reports agent session ID via onSessionId callback", async () => {
+    const sessionCalls: [string, string][] = [];
+    const implResult = makeResult({ sessionId: "sess-impl-42" });
+    const agent = makeAgent(implResult);
+    const stage = createImplementStageHandler(makeOpts({ agent }));
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      onSessionId: (agent, sid) => sessionCalls.push([agent, sid]),
+    };
+    await stage.handler(ctx);
+    expect(sessionCalls).toEqual([["a", "sess-impl-42"]]);
+  });
+
+  test("does not throw when onSessionId is not provided", async () => {
+    const agent = makeAgent(makeResult());
+    const stage = createImplementStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+    expect(result.outcome).toBe("completed");
+  });
+
+  test("resumes saved session when savedAgentASessionId is present", async () => {
+    const resumeResult = makeResult({ sessionId: "resumed-sess" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(resumeResult))
+        .mockReturnValueOnce(makeStream(makeResult())),
+    };
+    const stage = createImplementStageHandler(makeOpts({ agent }));
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      savedAgentASessionId: "old-sess",
+    };
+    const result = await stage.handler(ctx);
+    expect(result.outcome).toBe("completed");
+    // Should have called resume (via invokeOrResume), not invoke.
+    expect(agent.resume).toHaveBeenCalled();
+    expect(agent.resume).toHaveBeenCalledWith("old-sess", expect.any(String), {
+      cwd: "/tmp/wt",
+    });
+  });
+
+  test("falls back to invoke when saved session fails", async () => {
+    const errorResult = makeResult({
+      status: "error",
+      errorType: "unknown",
+      stderrText: "expired",
+    });
+    const freshResult = makeResult({ sessionId: "fresh-sess" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(freshResult)),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(errorResult))
+        .mockReturnValueOnce(makeStream(makeResult())),
+    };
+    const stage = createImplementStageHandler(makeOpts({ agent }));
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      savedAgentASessionId: "expired-sess",
+    };
+    const result = await stage.handler(ctx);
+    expect(result.outcome).toBe("completed");
+    // Should have attempted resume, then fallen back to invoke.
+    expect(agent.resume).toHaveBeenCalled();
+    expect(agent.invoke).toHaveBeenCalled();
+  });
 });

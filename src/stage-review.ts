@@ -28,6 +28,7 @@ import {
 import { pollCiAndFix } from "./ci-poll.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
+  invokeOrResume,
   mapAgentError,
   mapResponseToResult,
   sendFollowUp,
@@ -179,12 +180,18 @@ export function createReviewStageHandler(
     handler: async (ctx: StageContext): Promise<StageResult> => {
       const round = ctx.iteration + 1; // 1-based for display
 
-      // Step 1: Agent B reviews.
+      // Step 1: Agent B reviews (resume if saved session).
       const reviewPrompt = buildReviewPrompt(ctx, opts, round);
-      const reviewStream = opts.agentB.invoke(reviewPrompt, {
-        cwd: ctx.worktreePath,
-      });
-      const reviewResult = await reviewStream.result;
+      const reviewResult = await invokeOrResume(
+        opts.agentB,
+        ctx.savedAgentBSessionId,
+        reviewPrompt,
+        ctx.worktreePath,
+      );
+
+      if (reviewResult.sessionId) {
+        ctx.onSessionId?.("b", reviewResult.sessionId);
+      }
 
       if (reviewResult.status === "error") {
         return mapAgentError(reviewResult, "during review");
@@ -216,12 +223,18 @@ export function createReviewStageHandler(
         return mapResponseToResult(reviewResult.responseText);
       }
 
-      // Step 3: NOT_APPROVED — Agent A fixes.
+      // Step 3: NOT_APPROVED — Agent A fixes (resume if saved session).
       const fixPrompt = buildAuthorFixPrompt(ctx, opts, round);
-      const fixStream = opts.agentA.invoke(fixPrompt, {
-        cwd: ctx.worktreePath,
-      });
-      const fixResult = await fixStream.result;
+      const fixResult = await invokeOrResume(
+        opts.agentA,
+        ctx.savedAgentASessionId,
+        fixPrompt,
+        ctx.worktreePath,
+      );
+
+      if (fixResult.sessionId) {
+        ctx.onSessionId?.("a", fixResult.sessionId);
+      }
 
       if (fixResult.status === "error") {
         return mapAgentError(fixResult, "during author fix");

@@ -11,6 +11,7 @@
 import type { AgentAdapter } from "./agent.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
+  invokeOrResume,
   mapAgentError,
   mapResponseToResult,
   sendFollowUp,
@@ -72,10 +73,18 @@ export function createImplementStageHandler(
     name: "Implement",
     number: 2,
     handler: async (ctx: StageContext): Promise<StageResult> => {
-      // Step 1: Send the implementation prompt.
+      // Step 1: Send the implementation prompt (resume if saved session).
       const prompt = buildImplementPrompt(ctx, opts);
-      const implStream = opts.agent.invoke(prompt, { cwd: ctx.worktreePath });
-      const implResult = await implStream.result;
+      const implResult = await invokeOrResume(
+        opts.agent,
+        ctx.savedAgentASessionId,
+        prompt,
+        ctx.worktreePath,
+      );
+
+      if (implResult.sessionId) {
+        ctx.onSessionId?.("a", implResult.sessionId);
+      }
 
       if (implResult.status === "error") {
         return mapAgentError(implResult);

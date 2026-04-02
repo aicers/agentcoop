@@ -15,6 +15,7 @@
 import type { AgentAdapter } from "./agent.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
+  invokeOrResume,
   mapAgentError,
   mapFixOrDoneResponse,
   sendFollowUp,
@@ -86,12 +87,18 @@ export function createTestPlanStageHandler(
     name: "Test plan verification",
     number: 6,
     handler: async (ctx: StageContext): Promise<StageResult> => {
-      // Step 1: Send verification prompt.
+      // Step 1: Send verification prompt (resume if saved session).
       const verifyPrompt = buildTestPlanVerifyPrompt(ctx, opts);
-      const verifyStream = opts.agent.invoke(verifyPrompt, {
-        cwd: ctx.worktreePath,
-      });
-      const verifyResult = await verifyStream.result;
+      const verifyResult = await invokeOrResume(
+        opts.agent,
+        ctx.savedAgentASessionId,
+        verifyPrompt,
+        ctx.worktreePath,
+      );
+
+      if (verifyResult.sessionId) {
+        ctx.onSessionId?.("a", verifyResult.sessionId);
+      }
 
       if (verifyResult.status === "error") {
         return mapAgentError(verifyResult, "during test plan verification");

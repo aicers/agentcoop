@@ -1086,3 +1086,80 @@ describe("createReviewStageHandler", () => {
     expect(result.message).toContain("Round 1 fixes applied");
   });
 });
+
+// ---------------------------------------------------------------------------
+// onSessionId callback
+// ---------------------------------------------------------------------------
+describe("onSessionId", () => {
+  test("reports agent B session ID after review", async () => {
+    const sessionCalls: [string, string][] = [];
+    const agentB: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-b-1", responseText: "APPROVED" }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+    };
+    const agentA: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn(),
+    };
+    const opts = makeOpts({ agentA, agentB });
+    const stage = createReviewStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      onSessionId: (agent, sid) => sessionCalls.push([agent, sid]),
+    };
+    await stage.handler(ctx);
+    expect(sessionCalls).toContainEqual(["b", "sess-b-1"]);
+  });
+
+  test("reports agent A session ID after fix", async () => {
+    const sessionCalls: [string, string][] = [];
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b-1",
+            responseText: "NOT_APPROVED",
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-a-1", responseText: "COMPLETED" }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+    const ciPass = makeCiStatus("pass", [makeCiRun()]);
+    const opts = makeOpts({
+      agentA,
+      agentB,
+      getCiStatus: vi.fn().mockReturnValue(ciPass),
+      collectFailureLogs: vi.fn(),
+      getHeadSha: vi.fn().mockReturnValue("abc123"),
+      delay: vi.fn(),
+    });
+    const stage = createReviewStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      onSessionId: (agent, sid) => sessionCalls.push([agent, sid]),
+    };
+    await stage.handler(ctx);
+    expect(sessionCalls).toContainEqual(["b", "sess-b-1"]);
+    expect(sessionCalls).toContainEqual(["a", "sess-a-1"]);
+  });
+});

@@ -14,6 +14,7 @@
 import type { AgentAdapter } from "./agent.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
+  invokeOrResume,
   mapAgentError,
   mapFixOrDoneResponse,
   sendFollowUp,
@@ -84,12 +85,18 @@ export function createSelfCheckStageHandler(
     name: "Self-check",
     number: 3,
     handler: async (ctx: StageContext): Promise<StageResult> => {
-      // Step 1: Send self-check prompt.
+      // Step 1: Send self-check prompt (resume if saved session).
       const checkPrompt = buildSelfCheckPrompt(ctx, opts);
-      const checkStream = opts.agent.invoke(checkPrompt, {
-        cwd: ctx.worktreePath,
-      });
-      const checkResult = await checkStream.result;
+      const checkResult = await invokeOrResume(
+        opts.agent,
+        ctx.savedAgentASessionId,
+        checkPrompt,
+        ctx.worktreePath,
+      );
+
+      if (checkResult.sessionId) {
+        ctx.onSessionId?.("a", checkResult.sessionId);
+      }
 
       if (checkResult.status === "error") {
         return mapAgentError(checkResult, "during self-check");

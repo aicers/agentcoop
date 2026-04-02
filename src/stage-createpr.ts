@@ -21,6 +21,7 @@
 import type { AgentAdapter } from "./agent.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
+  invokeOrResume,
   mapAgentError,
   mapResponseToResult,
   sendFollowUp,
@@ -92,10 +93,18 @@ export function createCreatePrStageHandler(
     number: 4,
     requiresArtifact: true,
     handler: async (ctx: StageContext): Promise<StageResult> => {
-      // Step 1: Send the PR creation prompt.
+      // Step 1: Send the PR creation prompt (resume if saved session).
       const prompt = buildCreatePrPrompt(ctx, opts);
-      const prStream = opts.agent.invoke(prompt, { cwd: ctx.worktreePath });
-      const prResult = await prStream.result;
+      const prResult = await invokeOrResume(
+        opts.agent,
+        ctx.savedAgentASessionId,
+        prompt,
+        ctx.worktreePath,
+      );
+
+      if (prResult.sessionId) {
+        ctx.onSessionId?.("a", prResult.sessionId);
+      }
 
       if (prResult.status === "error") {
         return mapAgentError(prResult);

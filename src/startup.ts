@@ -4,6 +4,14 @@ import { loadConfig, saveConfig } from "./config.js";
 import type { Issue } from "./github.js";
 import { getIssue, listRepositories } from "./github.js";
 
+export interface TargetResult {
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  config: Config;
+  configDirty: boolean;
+}
+
 export interface StartupResult {
   owner: string;
   repo: string;
@@ -32,7 +40,12 @@ const CODEX_MODELS = [
 
 const ALL_MODELS = [...CLAUDE_MODELS, ...CODEX_MODELS];
 
-export async function runStartup(): Promise<StartupResult> {
+/**
+ * First phase of startup: select owner, repo, and issue number.
+ * Returns early so the caller can check for a resumable run state
+ * before collecting the remaining options.
+ */
+export async function selectTarget(): Promise<TargetResult> {
   const config = loadConfig();
   let configDirty = false;
 
@@ -41,6 +54,26 @@ export async function runStartup(): Promise<StartupResult> {
 
   const repo = await selectRepository(owner);
   const issueNumber = await inputIssueNumber();
+
+  return { owner, repo, issueNumber, config, configDirty };
+}
+
+/**
+ * Second phase of startup: collect agent models, execution mode,
+ * language, and pipeline settings.  Confirm the issue before returning.
+ */
+export async function runStartup(
+  target?: TargetResult,
+): Promise<StartupResult> {
+  const {
+    owner,
+    repo,
+    issueNumber,
+    config,
+    configDirty: initialDirty,
+  } = target ?? (await selectTarget());
+  let configDirty = initialDirty;
+
   const agentA = await selectAgentModel("Agent A (implementer)");
   const agentB = await selectAgentModel("Agent B (reviewer)");
   const executionMode = await selectExecutionMode();

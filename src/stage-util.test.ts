@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
 import {
+  invokeOrResume,
   mapAgentError,
   mapFixOrDoneResponse,
   mapParsedStepToResult,
@@ -270,5 +271,104 @@ describe("sendFollowUp", () => {
     ).rejects.toThrow("no session ID");
     expect(agent.invoke).not.toHaveBeenCalled();
     expect(agent.resume).not.toHaveBeenCalled();
+  });
+});
+
+// ---- invokeOrResume --------------------------------------------------------
+
+describe("invokeOrResume", () => {
+  test("invokes fresh when no saved session ID", async () => {
+    const result = makeResult({ sessionId: "new-sess" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(result)),
+      resume: vi.fn(),
+    };
+
+    const out = await invokeOrResume(agent, undefined, "prompt", "/cwd");
+    expect(out).toBe(result);
+    expect(agent.invoke).toHaveBeenCalledWith("prompt", { cwd: "/cwd" });
+    expect(agent.resume).not.toHaveBeenCalled();
+  });
+
+  test("resumes when saved session ID is available and succeeds", async () => {
+    const result = makeResult({ sessionId: "resumed-sess" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn().mockReturnValue(makeStream(result)),
+    };
+
+    const out = await invokeOrResume(agent, "saved-sess", "prompt", "/cwd");
+    expect(out).toBe(result);
+    expect(agent.resume).toHaveBeenCalledWith("saved-sess", "prompt", {
+      cwd: "/cwd",
+    });
+    expect(agent.invoke).not.toHaveBeenCalled();
+  });
+
+  test("falls back to invoke when resume returns error", async () => {
+    const errorResult = makeResult({
+      status: "error",
+      errorType: "unknown",
+      stderrText: "session expired",
+    });
+    const freshResult = makeResult({ sessionId: "fresh-sess" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(freshResult)),
+      resume: vi.fn().mockReturnValue(makeStream(errorResult)),
+    };
+
+    const out = await invokeOrResume(agent, "old-sess", "prompt", "/cwd");
+    expect(out).toBe(freshResult);
+    expect(agent.resume).toHaveBeenCalledOnce();
+    expect(agent.invoke).toHaveBeenCalledOnce();
+  });
+
+  test("falls back to invoke on max_turns (recoverable)", async () => {
+    const maxTurnsResult = makeResult({
+      status: "error",
+      errorType: "max_turns",
+    });
+    const freshResult = makeResult({ sessionId: "fresh" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(freshResult)),
+      resume: vi.fn().mockReturnValue(makeStream(maxTurnsResult)),
+    };
+
+    const out = await invokeOrResume(agent, "saved-sess", "prompt", "/cwd");
+    expect(out).toBe(freshResult);
+    expect(agent.resume).toHaveBeenCalledOnce();
+    expect(agent.invoke).toHaveBeenCalledOnce();
+  });
+
+  test("returns error immediately on cli_not_found (non-recoverable)", async () => {
+    const cliNotFound = makeResult({
+      status: "error",
+      errorType: "cli_not_found",
+      stderrText: "claude: not found",
+    });
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn().mockReturnValue(makeStream(cliNotFound)),
+    };
+
+    const out = await invokeOrResume(agent, "saved-sess", "prompt", "/cwd");
+    expect(out).toBe(cliNotFound);
+    expect(agent.invoke).not.toHaveBeenCalled();
+  });
+
+  test("returns error immediately on execution_error (non-recoverable)", async () => {
+    const execError = makeResult({
+      status: "error",
+      errorType: "execution_error",
+      stderrText: "segfault",
+    });
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn().mockReturnValue(makeStream(execError)),
+    };
+
+    const out = await invokeOrResume(agent, "saved-sess", "prompt", "/cwd");
+    expect(out).toBe(execError);
+    expect(agent.invoke).not.toHaveBeenCalled();
   });
 });
