@@ -6,6 +6,7 @@ export type AgentErrorType =
   | "max_turns"
   | "execution_error"
   | "cli_not_found"
+  | "inactivity_timeout"
   | "unknown";
 
 export interface AgentResult {
@@ -42,4 +43,62 @@ export interface AgentAdapter {
 
 export interface InvokeOptions {
   cwd?: string;
+}
+
+/**
+ * Transforms raw stdout chunks into display-friendly text for the UI.
+ *
+ * Adapters provide implementations that parse format-specific output
+ * (e.g. Claude stream-json JSONL, Codex JSONL) and extract human-readable
+ * text.  Raw chunks are still collected separately for `parseResult`.
+ */
+export interface ChunkTransformer {
+  /** Process a raw stdout chunk; return display-friendly text (may be ""). */
+  push(raw: string): string;
+  /** Flush any remaining buffered content at stream end. */
+  flush(): string;
+}
+
+/**
+ * Base class for JSONL-based chunk transformers.  Handles line buffering
+ * and JSON parsing; subclasses implement `extractTextFromEvent` to pick
+ * out the display text for their specific event format.
+ */
+export abstract class JsonlLineTransformer implements ChunkTransformer {
+  private buffer = "";
+
+  push(raw: string): string {
+    this.buffer += raw;
+    const parts = this.buffer.split("\n");
+    this.buffer = parts.pop() ?? "";
+
+    let text = "";
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      try {
+        text += this.extractTextFromEvent(JSON.parse(trimmed));
+      } catch {
+        // Non-JSON line — ignore.
+      }
+    }
+    return text;
+  }
+
+  flush(): string {
+    const trimmed = this.buffer.trim();
+    this.buffer = "";
+    if (!trimmed) return "";
+    try {
+      return this.extractTextFromEvent(JSON.parse(trimmed));
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Given a parsed JSONL event, return the display-friendly text to emit
+   * (or empty string to skip).
+   */
+  protected abstract extractTextFromEvent(event: unknown): string;
 }

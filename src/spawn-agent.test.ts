@@ -387,9 +387,277 @@ describe("streaming", () => {
 });
 
 // ---------------------------------------------------------------------------
+// ChunkTransformer
+// ---------------------------------------------------------------------------
+describe("chunkTransformer", () => {
+  test("iterator yields transformed chunks instead of raw", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const stream = spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: (output) => ({
+        sessionId: undefined,
+        responseText: output,
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+      chunkTransformer: {
+        push: (raw) => raw.toUpperCase(),
+        flush: () => "",
+      },
+    });
+
+    const chunks: string[] = [];
+    const iteratorDone = (async () => {
+      for await (const chunk of stream) {
+        chunks.push(chunk);
+      }
+    })();
+
+    emitStdout(child, "hello");
+    emitStdout(child, "world");
+    child.emit("close", 0);
+    await iteratorDone;
+
+    expect(chunks.join("")).toBe("HELLOWORLD");
+  });
+
+  test("raw chunks still collected for parseResult", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    let capturedOutput = "";
+    const stream = spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: (output) => {
+        capturedOutput = output;
+        return {
+          sessionId: undefined,
+          responseText: output,
+          status: "success",
+          errorType: undefined,
+          stderrText: "",
+        };
+      },
+      chunkTransformer: {
+        push: (raw) => `[${raw}]`,
+        flush: () => "",
+      },
+    });
+
+    emitStdout(child, "raw data");
+    child.emit("close", 0);
+    await stream.result;
+
+    // parseResult receives unmodified raw output
+    expect(capturedOutput).toBe("raw data");
+  });
+
+  test("empty transformer output is not yielded", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const stream = spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: () => ({
+        sessionId: undefined,
+        responseText: "",
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+      chunkTransformer: {
+        push: () => "",
+        flush: () => "",
+      },
+    });
+
+    const chunks: string[] = [];
+    const iteratorDone = (async () => {
+      for await (const chunk of stream) {
+        chunks.push(chunk);
+      }
+    })();
+
+    emitStdout(child, "data");
+    child.emit("close", 0);
+    await iteratorDone;
+
+    expect(chunks).toEqual([]);
+  });
+
+  test("flush output is yielded at stream end", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const stream = spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: () => ({
+        sessionId: undefined,
+        responseText: "",
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+      chunkTransformer: {
+        push: () => "",
+        flush: () => "flushed!",
+      },
+    });
+
+    const chunks: string[] = [];
+    const iteratorDone = (async () => {
+      for await (const chunk of stream) {
+        chunks.push(chunk);
+      }
+    })();
+
+    emitStdout(child, "data");
+    child.emit("close", 0);
+    await iteratorDone;
+
+    expect(chunks).toEqual(["flushed!"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Inactivity timeout
+// ---------------------------------------------------------------------------
+describe("inactivityTimeoutMs", () => {
+  test("kills process after silence exceeds timeout", async () => {
+    vi.useFakeTimers();
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const stream = spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: (output) => ({
+        sessionId: "sess-1",
+        responseText: output,
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+      inactivityTimeoutMs: 5000,
+    });
+
+    // No output for 5 seconds — should kill.
+    vi.advanceTimersByTime(5000);
+    expect(child.kill).toHaveBeenCalled();
+
+    // Simulate process exit after kill.
+    child.emit("close", null);
+    const result = await stream.result;
+
+    expect(result.status).toBe("error");
+    expect(result.errorType).toBe("inactivity_timeout");
+    vi.useRealTimers();
+  });
+
+  test("resets timer on stdout data", async () => {
+    vi.useFakeTimers();
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: () => ({
+        sessionId: undefined,
+        responseText: "",
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+      inactivityTimeoutMs: 5000,
+    });
+
+    // Emit data at 4 seconds — resets the timer.
+    vi.advanceTimersByTime(4000);
+    emitStdout(child, "still alive");
+
+    // Another 4 seconds — still within timeout from last data.
+    vi.advanceTimersByTime(4000);
+    expect(child.kill).not.toHaveBeenCalled();
+
+    // 1 more second — now 5s since last data, should kill.
+    vi.advanceTimersByTime(1000);
+    expect(child.kill).toHaveBeenCalled();
+
+    child.emit("close", null);
+    vi.useRealTimers();
+  });
+
+  test("does not kill when timeout is disabled (0)", async () => {
+    vi.useFakeTimers();
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: () => ({
+        sessionId: undefined,
+        responseText: "",
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+      inactivityTimeoutMs: 0,
+    });
+
+    vi.advanceTimersByTime(60_000);
+    expect(child.kill).not.toHaveBeenCalled();
+
+    child.emit("close", 0);
+    vi.useRealTimers();
+  });
+
+  test("preserves parsed sessionId on timeout", async () => {
+    vi.useFakeTimers();
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const stream = spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: () => ({
+        sessionId: "sess-timeout",
+        responseText: "partial",
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+      inactivityTimeoutMs: 1000,
+    });
+
+    emitStdout(child, "some output");
+    vi.advanceTimersByTime(1000);
+    child.emit("close", null);
+
+    const result = await stream.result;
+    expect(result.sessionId).toBe("sess-timeout");
+    expect(result.errorType).toBe("inactivity_timeout");
+
+    vi.useRealTimers();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // E2E: Claude adapter full flow
 // ---------------------------------------------------------------------------
 describe("Claude adapter invoke/resume (E2E with mock spawn)", () => {
+  function streamJsonl(events: object[]): string {
+    return events.map((e) => JSON.stringify(e)).join("\n");
+  }
+
   test("invoke sends correct args and returns parsed result", async () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child);
@@ -403,17 +671,29 @@ describe("Claude adapter invoke/resume (E2E with mock spawn)", () => {
 
     expect(mockSpawn).toHaveBeenCalledWith(
       "claude",
-      expect.arrayContaining(["-p", "write tests", "--model", "opus"]),
+      expect.arrayContaining([
+        "-p",
+        "write tests",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--model",
+        "opus",
+      ]),
       expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] }),
     );
 
-    const responseJson = JSON.stringify({
-      session_id: "sess-new",
-      result: "Done!",
-      subtype: "success",
-      is_error: false,
-    });
-    emitStdout(child, responseJson);
+    const output = streamJsonl([
+      { type: "system", subtype: "init", session_id: "sess-new" },
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "sess-new",
+        is_error: false,
+        result: "Done!",
+      },
+    ]);
+    emitStdout(child, output);
     child.emit("close", 0);
 
     const result = await stream.result;
@@ -455,22 +735,6 @@ describe("Claude adapter invoke/resume (E2E with mock spawn)", () => {
     );
   });
 
-  test("handles non-JSON output gracefully", async () => {
-    const child = createMockChild();
-    mockSpawn.mockReturnValue(child);
-
-    const adapter = createClaudeAdapter();
-    const stream = adapter.invoke("prompt");
-
-    emitStdout(child, "not valid json at all");
-    child.emit("close", 0);
-
-    const result = await stream.result;
-    expect(result.status).toBe("error");
-    expect(result.errorType).toBe("unknown");
-    expect(result.responseText).toBe("not valid json at all");
-  });
-
   test("handles empty output with non-zero exit", async () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child);
@@ -497,6 +761,79 @@ describe("Claude adapter invoke/resume (E2E with mock spawn)", () => {
 
     const result = await stream.result;
     expect(result.stderrText).toBe("Error: invalid session");
+  });
+
+  test("streams assistant event text through transformer", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const adapter = createClaudeAdapter();
+    const stream = adapter.invoke("prompt");
+
+    const chunks: string[] = [];
+    const iteratorDone = (async () => {
+      for await (const chunk of stream) {
+        chunks.push(chunk);
+      }
+    })();
+
+    // Emit events as a single blob (simulating real CLI output).
+    const events = [
+      JSON.stringify({
+        type: "system",
+        subtype: "init",
+        session_id: "s1",
+      }),
+      JSON.stringify({
+        type: "assistant",
+        session_id: "s1",
+        message: { content: [{ type: "text", text: "Hello world" }] },
+      }),
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        session_id: "s1",
+        is_error: false,
+        result: "Hello world",
+      }),
+    ];
+
+    emitStdout(child, `${events.join("\n")}\n`);
+    child.emit("close", 0);
+    await iteratorDone;
+
+    // Transformer should extract text from assistant events.
+    const text = chunks.join("");
+    expect(text).toBe("Hello world");
+  });
+
+  test("non-zero exit with partial stream-json is classified as error", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const adapter = createClaudeAdapter();
+    const stream = adapter.invoke("prompt");
+
+    // Emit partial JSONL without a result event, then crash.
+    const partial = [
+      JSON.stringify({
+        type: "system",
+        subtype: "init",
+        session_id: "sess-partial",
+      }),
+      JSON.stringify({
+        type: "assistant",
+        session_id: "sess-partial",
+        message: { content: [{ type: "text", text: "partial" }] },
+      }),
+    ].join("\n");
+    emitStdout(child, partial);
+    child.emit("close", 1);
+
+    const result = await stream.result;
+    // Must be error despite partial output parsing as "success" in JSONL.
+    expect(result.status).toBe("error");
+    expect(result.sessionId).toBe("sess-partial");
   });
 });
 
@@ -597,7 +934,7 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
     expect(spawnArgs).toContain("model_reasoning_effort=medium");
   });
 
-  test("resume uses plain text parsing with -c config overrides", async () => {
+  test("resume uses plain text parsing without --json flag", async () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child);
 
@@ -670,34 +1007,6 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
     expect(result.sessionId).toBe("sess-err");
   });
 
-  test("resume prefers parsed sessionId over input when banner has one", async () => {
-    const child = createMockChild();
-    mockSpawn.mockReturnValue(child);
-
-    const adapter = createCodexAdapter();
-    // Pass "old-sess" as input, but the CLI output contains "new-sess".
-    const stream = adapter.resume("old-sess", "keep going");
-
-    const resumeOutput = [
-      "OpenAI Codex v0.46.0 (research preview)",
-      "--------",
-      "session id: new-sess",
-      "--------",
-      "user",
-      "keep going",
-      "codex",
-      "Done.",
-      "tokens used",
-      "50",
-    ].join("\n");
-
-    emitStdout(child, resumeOutput);
-    child.emit("close", 0);
-
-    const result = await stream.result;
-    expect(result.sessionId).toBe("new-sess");
-  });
-
   test("invoke with cwd passes working directory", () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child);
@@ -747,8 +1056,9 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
     child.emit("close", 0);
 
     const result = await stream.result;
+    // Invalid JSONL lines are skipped; result has empty responseText.
     expect(result.status).toBe("success");
-    expect(result.responseText).toBe("not json");
+    expect(result.responseText).toBe("");
   });
 
   test("invoke handles invalid JSONL output with non-zero exit", async () => {
@@ -762,9 +1072,9 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
     child.emit("close", 1);
 
     const result = await stream.result;
+    // Invalid JSONL skipped; non-zero exit triggers error status.
     expect(result.status).toBe("error");
     expect(result.errorType).toBe("unknown");
-    expect(result.responseText).toBe("garbage output");
   });
 
   test("captures stderr in result for diagnostics", async () => {

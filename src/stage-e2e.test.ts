@@ -2467,3 +2467,212 @@ describe("Pipeline event emitter integration", () => {
     ]);
   });
 });
+
+// ---- Streaming: agent:chunk events during stage execution --------------------
+
+describe("agent:chunk events emitted during stage execution", () => {
+  test("implement stage emits agent:chunk events for both invoke and follow-up", async () => {
+    const implResult = makeResult({ sessionId: "s1", responseText: "impl" });
+    const checkResult = makeResult({ responseText: "COMPLETED" });
+    const agent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStreamWithChunks(implResult, ["impl-c1", "impl-c2"]),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStreamWithChunks(checkResult, ["check-c1", "check-c2"]),
+        ),
+    };
+
+    const emitter = new PipelineEventEmitter();
+    const agentChunks: AgentChunkEvent[] = [];
+    emitter.on("agent:chunk", (ev) => agentChunks.push({ ...ev }));
+
+    const stage = createImplementStageHandler({ agent, ...ISSUE_CTX });
+    await runPipeline(makePipelineOpts({ stages: [stage], events: emitter }));
+
+    // Allow fire-and-forget drainToSink to flush.
+    await new Promise((r) => setTimeout(r, 20));
+
+    // All chunks should be tagged as agent "a".
+    expect(agentChunks.length).toBeGreaterThanOrEqual(2);
+    for (const ev of agentChunks) {
+      expect(ev.agent).toBe("a");
+    }
+    // Verify content includes chunks from both invoke and resume.
+    const allText = agentChunks.map((e) => e.chunk).join("");
+    expect(allText).toContain("impl-c1");
+    expect(allText).toContain("check-c1");
+  });
+
+  test("review stage emits chunks for both agent A and agent B", async () => {
+    // Agent B reviews, Agent A fixes, Agent A self-checks.
+    const reviewResult = makeResult({
+      sessionId: "sb1",
+      responseText: "APPROVED",
+    });
+    const agentA: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn(),
+    };
+    const agentB: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(makeStreamWithChunks(reviewResult, ["review-chunk"])),
+      resume: vi.fn(),
+    };
+
+    const emitter = new PipelineEventEmitter();
+    const seenAgents = new Set<string>();
+    emitter.on("agent:chunk", (ev) => seenAgents.add(ev.agent));
+
+    const stage = createReviewStageHandler({
+      agentA,
+      agentB,
+      ...ISSUE_CTX,
+    });
+    await runPipeline(makePipelineOpts({ stages: [stage], events: emitter }));
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    // At minimum, agent B chunks should appear (reviewer).
+    expect(seenAgents.has("b")).toBe(true);
+  });
+
+  test("stage:enter fires before agent:chunk, stage:exit fires after", async () => {
+    const implResult = makeResult({ sessionId: "s1", responseText: "ok" });
+    const checkResult = makeResult({ responseText: "COMPLETED" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStreamWithChunks(implResult, ["c1"])),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStreamWithChunks(checkResult, ["c2"])),
+    };
+
+    const emitter = new PipelineEventEmitter();
+    const timeline: string[] = [];
+    emitter.on("stage:enter", (ev) => timeline.push(`enter:${ev.stageNumber}`));
+    emitter.on("agent:chunk", () => timeline.push("chunk"));
+    emitter.on("stage:exit", (ev) => timeline.push(`exit:${ev.stageNumber}`));
+
+    const stage = createImplementStageHandler({ agent, ...ISSUE_CTX });
+    await runPipeline(makePipelineOpts({ stages: [stage], events: emitter }));
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Enter must come before any chunk, exit must come after handler returns.
+    const enterIdx = timeline.indexOf("enter:2");
+    const firstChunkIdx = timeline.indexOf("chunk");
+    const exitIdx = timeline.indexOf("exit:2");
+
+    expect(enterIdx).toBeLessThan(firstChunkIdx);
+    expect(firstChunkIdx).toBeLessThan(exitIdx);
+  });
+});
+
+// ---- Inactivity timeout → auto-resume through pipeline ----------------------
+
+describe("Inactivity timeout auto-resume through pipeline", () => {
+  test("implement stage auto-resumes on timeout and completes", async () => {
+    // First invoke: returns successfully (implementation phase).
+    // First resume (completion check): times out.
+    // Auto-resume: succeeds with COMPLETED.
+    const implResult = makeResult({ sessionId: "s1", responseText: "Done." });
+    const timeoutResult = makeResult({
+      sessionId: "s1",
+      status: "error",
+      errorType: "inactivity_timeout",
+    });
+    const completedResult = makeResult({ responseText: "COMPLETED" });
+
+    let resumeCount = 0;
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(implResult)),
+      resume: vi.fn().mockImplementation(() => {
+        resumeCount++;
+        if (resumeCount === 1) {
+          // First resume = completion check → timeout.
+          return makeStream(timeoutResult);
+        }
+        // Second resume = auto-resume after timeout → success.
+        return makeStream(completedResult);
+      }),
+    };
+
+    const stage = createImplementStageHandler({ agent, ...ISSUE_CTX });
+    const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
+
+    expect(result.success).toBe(true);
+    // invoke(1) + resume for completion check(1) + auto-resume(1) = 2 resumes
+    expect(agent.resume).toHaveBeenCalledTimes(2);
+  });
+
+  test("timeout exhausts retries → pipeline error → user aborts", async () => {
+    const implResult = makeResult({ sessionId: "s1", responseText: "Done." });
+    const timeoutResult = makeResult({
+      sessionId: "s1",
+      status: "error",
+      errorType: "inactivity_timeout",
+    });
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(implResult)),
+      resume: vi.fn().mockReturnValue(makeStream(timeoutResult)),
+    };
+    const prompt = makePrompt({
+      handleError: vi.fn().mockResolvedValue({ action: "abort" }),
+    });
+
+    const stage = createImplementStageHandler({ agent, ...ISSUE_CTX });
+    const result = await runPipeline(
+      makePipelineOpts({ stages: [stage], prompt }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.stoppedAt).toBe(2);
+    // Error handler should have been called once.
+    expect(prompt.handleError).toHaveBeenCalledOnce();
+    const errorMsg = (prompt.handleError as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    expect(errorMsg).toContain("inactivity");
+  });
+
+  test("timeout exhausts retries → user retries → succeeds", async () => {
+    const implResult = makeResult({ sessionId: "s1", responseText: "Done." });
+    const timeoutResult = makeResult({
+      sessionId: "s1",
+      status: "error",
+      errorType: "inactivity_timeout",
+    });
+    const completedResult = makeResult({ responseText: "COMPLETED" });
+
+    let totalResumes = 0;
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(implResult)),
+      resume: vi.fn().mockImplementation(() => {
+        totalResumes++;
+        // First 4 resumes time out (completion check + 3 auto-retries).
+        // After user retries the stage, the 5th resume succeeds.
+        if (totalResumes <= 4) {
+          return makeStream(timeoutResult);
+        }
+        return makeStream(completedResult);
+      }),
+    };
+    const prompt = makePrompt({
+      handleError: vi.fn().mockResolvedValueOnce({ action: "retry" }),
+    });
+
+    const stage = createImplementStageHandler({ agent, ...ISSUE_CTX });
+    const result = await runPipeline(
+      makePipelineOpts({ stages: [stage], prompt }),
+    );
+
+    expect(result.success).toBe(true);
+    // invoke was called twice (first attempt + retry after user approval).
+    expect(agent.invoke).toHaveBeenCalledTimes(2);
+  });
+});

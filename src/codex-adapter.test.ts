@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   buildCodexInvokeArgs,
   buildCodexResumeArgs,
+  CodexStreamTransformer,
   extractCodexResumeResponse,
   extractSessionId,
   parseCodexJsonl,
@@ -114,8 +115,19 @@ describe("parseCodexJsonl", () => {
     expect(result.responseText).toBe("ok");
   });
 
-  test("throws on invalid JSON line", () => {
-    expect(() => parseCodexJsonl("not json")).toThrow();
+  test("skips malformed JSON lines gracefully", () => {
+    const lines = [
+      JSON.stringify({ type: "thread.started", thread_id: "sess-7" }),
+      "not json",
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item_0", type: "agent_message", text: "ok" },
+      }),
+    ].join("\n");
+
+    const result = parseCodexJsonl(lines);
+    expect(result.sessionId).toBe("sess-7");
+    expect(result.responseText).toBe("ok");
   });
 
   test("handles missing thread.started (sessionId is undefined)", () => {
@@ -359,7 +371,6 @@ describe("parseCodexPlainText", () => {
   });
 
   test("extracts sessionId from banner even on error exit", () => {
-    // The CLI may print the banner before crashing.
     const text = buildResumeOutput("partial output");
     const result = parseCodexPlainText(text, 1, "");
     expect(result.sessionId).toBe("sess-1");
@@ -499,6 +510,85 @@ describe("extractSessionId", () => {
 });
 
 // ---------------------------------------------------------------------------
+// CodexStreamTransformer
+// ---------------------------------------------------------------------------
+describe("CodexStreamTransformer", () => {
+  test("extracts agent_message text from item.completed events", () => {
+    const t = new CodexStreamTransformer();
+
+    const chunk = [
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item_0", type: "agent_message", text: "Hello" },
+      }),
+      "",
+    ].join("\n");
+
+    expect(t.push(chunk)).toBe("Hello");
+  });
+
+  test("ignores reasoning items", () => {
+    const t = new CodexStreamTransformer();
+
+    const chunk = [
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item_0", type: "reasoning", text: "Thinking..." },
+      }),
+      "",
+    ].join("\n");
+
+    expect(t.push(chunk)).toBe("");
+  });
+
+  test("ignores non-item events", () => {
+    const t = new CodexStreamTransformer();
+
+    const chunk = [
+      JSON.stringify({ type: "thread.started", thread_id: "s1" }),
+      JSON.stringify({ type: "turn.started" }),
+      "",
+    ].join("\n");
+
+    expect(t.push(chunk)).toBe("");
+  });
+
+  test("buffers incomplete lines across pushes", () => {
+    const t = new CodexStreamTransformer();
+    const line = JSON.stringify({
+      type: "item.completed",
+      item: { id: "item_0", type: "agent_message", text: "Buffered" },
+    });
+
+    const half = line.slice(0, 20);
+    expect(t.push(half)).toBe("");
+    expect(t.push(`${line.slice(20)}\n`)).toBe("Buffered");
+  });
+
+  test("flush emits buffered content", () => {
+    const t = new CodexStreamTransformer();
+    const line = JSON.stringify({
+      type: "item.completed",
+      item: { id: "item_0", type: "agent_message", text: "end" },
+    });
+
+    t.push(line); // no trailing newline
+    expect(t.flush()).toBe("end");
+  });
+
+  test("flush returns empty string when buffer is empty", () => {
+    const t = new CodexStreamTransformer();
+    expect(t.flush()).toBe("");
+  });
+
+  test("flush handles non-JSON content in buffer", () => {
+    const t = new CodexStreamTransformer();
+    t.push("garbage without newline");
+    expect(t.flush()).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildCodexInvokeArgs
 // ---------------------------------------------------------------------------
 describe("buildCodexInvokeArgs", () => {
@@ -566,6 +656,11 @@ describe("buildCodexResumeArgs", () => {
     expect(args).toContain("sandbox_mode=danger-full-access");
   });
 
+  test("does not include --json (resume outputs plain text)", () => {
+    const args = buildCodexResumeArgs("sess-abc", "continue", {});
+    expect(args).not.toContain("--json");
+  });
+
   test("includes -c model override when model is specified", () => {
     const args = buildCodexResumeArgs("sess-abc", "continue", {
       model: "gpt-5.3-codex",
@@ -594,11 +689,6 @@ describe("buildCodexResumeArgs", () => {
     // Both should come after all -c flags
     const lastCIdx = args.lastIndexOf("-c");
     expect(sessIdx).toBeGreaterThan(lastCIdx + 1);
-  });
-
-  test("does not include --json (resume outputs plain text)", () => {
-    const args = buildCodexResumeArgs("sess-abc", "continue", {});
-    expect(args).not.toContain("--json");
   });
 
   test("does not include -s flag (uses -c for sandbox instead)", () => {

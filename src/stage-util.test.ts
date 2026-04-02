@@ -533,3 +533,396 @@ describe("drainToSink", () => {
     expect(collected).toEqual(["first", "second", "third"]);
   });
 });
+
+// ---- inactivity auto-resume -------------------------------------------------
+
+describe("invokeOrResume inactivity auto-resume", () => {
+  test("auto-resumes on inactivity timeout up to max attempts", async () => {
+    const timeoutResult = makeResult({
+      sessionId: "sess-timeout",
+      status: "error",
+      errorType: "inactivity_timeout",
+    });
+    const successResult = makeResult({
+      sessionId: "sess-timeout",
+      responseText: "finally done",
+    });
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(timeoutResult)),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(timeoutResult))
+        .mockReturnValueOnce(makeStream(successResult)),
+    };
+
+    const out = await invokeOrResume(
+      agent,
+      undefined,
+      "prompt",
+      "/cwd",
+      undefined,
+      3,
+    );
+
+    // invoke was called once, then 2 resumes (first timeout, second success).
+    expect(agent.invoke).toHaveBeenCalledOnce();
+    expect(agent.resume).toHaveBeenCalledTimes(2);
+    expect(out.responseText).toBe("finally done");
+    expect(out.status).toBe("success");
+  });
+
+  test("returns timeout error when all auto-resume attempts exhausted", async () => {
+    const timeoutResult = makeResult({
+      sessionId: "sess-stuck",
+      status: "error",
+      errorType: "inactivity_timeout",
+    });
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(timeoutResult)),
+      resume: vi.fn().mockReturnValue(makeStream(timeoutResult)),
+    };
+
+    const out = await invokeOrResume(
+      agent,
+      undefined,
+      "prompt",
+      "/cwd",
+      undefined,
+      2,
+    );
+
+    // invoke once + 2 resume retries = 2 resume calls.
+    expect(agent.invoke).toHaveBeenCalledOnce();
+    expect(agent.resume).toHaveBeenCalledTimes(2);
+    expect(out.errorType).toBe("inactivity_timeout");
+  });
+
+  test("does not auto-resume when sessionId is missing", async () => {
+    const timeoutResult = makeResult({
+      sessionId: undefined,
+      status: "error",
+      errorType: "inactivity_timeout",
+    });
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(timeoutResult)),
+      resume: vi.fn(),
+    };
+
+    const out = await invokeOrResume(
+      agent,
+      undefined,
+      "prompt",
+      "/cwd",
+      undefined,
+      3,
+    );
+
+    expect(agent.resume).not.toHaveBeenCalled();
+    expect(out.errorType).toBe("inactivity_timeout");
+  });
+});
+
+describe("sendFollowUp inactivity auto-resume", () => {
+  test("auto-resumes on inactivity timeout", async () => {
+    const timeoutResult = makeResult({
+      sessionId: "sess-1",
+      status: "error",
+      errorType: "inactivity_timeout",
+    });
+    const successResult = makeResult({
+      sessionId: "sess-1",
+      responseText: "resumed ok",
+    });
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(timeoutResult))
+        .mockReturnValueOnce(makeStream(successResult)),
+    };
+
+    const out = await sendFollowUp(
+      agent,
+      "sess-1",
+      "prompt",
+      "/cwd",
+      undefined,
+      3,
+    );
+
+    // First resume (original call) + 1 retry resume.
+    expect(agent.resume).toHaveBeenCalledTimes(2);
+    expect(out.responseText).toBe("resumed ok");
+  });
+
+  test("returns timeout error after exhausting retries", async () => {
+    const timeoutResult = makeResult({
+      sessionId: "sess-1",
+      status: "error",
+      errorType: "inactivity_timeout",
+    });
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn().mockReturnValue(makeStream(timeoutResult)),
+    };
+
+    const out = await sendFollowUp(
+      agent,
+      "sess-1",
+      "prompt",
+      "/cwd",
+      undefined,
+      1,
+    );
+
+    // Original call + 1 retry = 2 total.
+    expect(agent.resume).toHaveBeenCalledTimes(2);
+    expect(out.errorType).toBe("inactivity_timeout");
+  });
+});
+
+describe("invokeOrResume: timeout does not fall through to fresh invoke", () => {
+  test("returns timeout error without invoking fresh when resume times out", async () => {
+    const timeoutResult = makeResult({
+      sessionId: "sess-saved",
+      status: "error",
+      errorType: "inactivity_timeout",
+    });
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn().mockReturnValue(makeStream(timeoutResult)),
+    };
+
+    // With maxAutoResumes=0 to isolate the fallthrough behavior.
+    const out = await invokeOrResume(
+      agent,
+      "sess-saved",
+      "prompt",
+      "/cwd",
+      undefined,
+      0,
+    );
+
+    // Should NOT fall through to invoke — must return the timeout error.
+    expect(agent.invoke).not.toHaveBeenCalled();
+    expect(out.errorType).toBe("inactivity_timeout");
+    expect(out.sessionId).toBe("sess-saved");
+  });
+
+  test("auto-resumes timeout from resumed session without losing state", async () => {
+    const timeoutResult = makeResult({
+      sessionId: "sess-saved",
+      status: "error",
+      errorType: "inactivity_timeout",
+    });
+    const successResult = makeResult({
+      sessionId: "sess-saved",
+      responseText: "recovered",
+    });
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(timeoutResult))
+        .mockReturnValueOnce(makeStream(successResult)),
+    };
+
+    const out = await invokeOrResume(
+      agent,
+      "sess-saved",
+      "prompt",
+      "/cwd",
+      undefined,
+      3,
+    );
+
+    // Should resume twice (original + retry), never invoke fresh.
+    expect(agent.invoke).not.toHaveBeenCalled();
+    expect(agent.resume).toHaveBeenCalledTimes(2);
+    expect(out.responseText).toBe("recovered");
+  });
+});
+
+describe("invokeOrResume inactivity auto-resume edge cases", () => {
+  test("stops retrying when resume returns non-timeout error", async () => {
+    const timeoutResult = makeResult({
+      sessionId: "sess-1",
+      status: "error",
+      errorType: "inactivity_timeout",
+    });
+    const execError = makeResult({
+      sessionId: "sess-1",
+      status: "error",
+      errorType: "execution_error",
+      stderrText: "segfault",
+    });
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(timeoutResult)),
+      resume: vi.fn().mockReturnValue(makeStream(execError)),
+    };
+
+    const out = await invokeOrResume(
+      agent,
+      undefined,
+      "prompt",
+      "/cwd",
+      undefined,
+      3,
+    );
+
+    // Should stop after first resume returns execution_error.
+    expect(agent.resume).toHaveBeenCalledOnce();
+    expect(out.errorType).toBe("execution_error");
+  });
+
+  test("uses sessionId from retry result for next retry", async () => {
+    const timeout1 = makeResult({
+      sessionId: "sess-v1",
+      status: "error",
+      errorType: "inactivity_timeout",
+    });
+    const timeout2 = makeResult({
+      sessionId: "sess-v2",
+      status: "error",
+      errorType: "inactivity_timeout",
+    });
+    const success = makeResult({
+      sessionId: "sess-v2",
+      responseText: "done",
+    });
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(timeout1)),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(timeout2))
+        .mockReturnValueOnce(makeStream(success)),
+    };
+
+    const out = await invokeOrResume(
+      agent,
+      undefined,
+      "prompt",
+      "/cwd",
+      undefined,
+      3,
+    );
+
+    expect(out.responseText).toBe("done");
+    // Second resume should use "sess-v2" (from timeout2), not "sess-v1".
+    expect(agent.resume).toHaveBeenCalledTimes(2);
+    const secondResumeArgs = (agent.resume as ReturnType<typeof vi.fn>).mock
+      .calls[1];
+    expect(secondResumeArgs[0]).toBe("sess-v2");
+  });
+});
+
+describe("sendFollowUp inactivity auto-resume edge cases", () => {
+  test("uses fallback sessionId when retry result has no sessionId", async () => {
+    const timeoutResult = makeResult({
+      sessionId: undefined,
+      status: "error",
+      errorType: "inactivity_timeout",
+    });
+    const successResult = makeResult({
+      sessionId: "sess-orig",
+      responseText: "resumed",
+    });
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(timeoutResult))
+        .mockReturnValueOnce(makeStream(successResult)),
+    };
+
+    const out = await sendFollowUp(
+      agent,
+      "sess-orig",
+      "prompt",
+      "/cwd",
+      undefined,
+      3,
+    );
+
+    expect(out.responseText).toBe("resumed");
+    // Retry should use original sessionId "sess-orig" as fallback.
+    const retryCall = (agent.resume as ReturnType<typeof vi.fn>).mock.calls[1];
+    expect(retryCall[0]).toBe("sess-orig");
+  });
+
+  test("stops retrying on non-timeout error during retry", async () => {
+    const timeoutResult = makeResult({
+      sessionId: "sess-1",
+      status: "error",
+      errorType: "inactivity_timeout",
+    });
+    const cliNotFound = makeResult({
+      sessionId: undefined,
+      status: "error",
+      errorType: "cli_not_found",
+    });
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(timeoutResult))
+        .mockReturnValueOnce(makeStream(cliNotFound)),
+    };
+
+    const out = await sendFollowUp(
+      agent,
+      "sess-1",
+      "prompt",
+      "/cwd",
+      undefined,
+      3,
+    );
+
+    // Should stop after cli_not_found, not retry further.
+    expect(agent.resume).toHaveBeenCalledTimes(2);
+    expect(out.errorType).toBe("cli_not_found");
+  });
+});
+
+// ---- mapAgentError for inactivity_timeout -----------------------------------
+
+describe("mapAgentError inactivity_timeout", () => {
+  test("maps inactivity_timeout to descriptive message", () => {
+    const result = mapAgentError({
+      sessionId: undefined,
+      responseText: "",
+      status: "error",
+      errorType: "inactivity_timeout",
+      stderrText: "",
+    });
+    expect(result.outcome).toBe("error");
+    expect(result.message).toBe("Agent process timed out due to inactivity.");
+  });
+
+  test("includes context with inactivity_timeout", () => {
+    const result = mapAgentError(
+      {
+        sessionId: undefined,
+        responseText: "",
+        status: "error",
+        errorType: "inactivity_timeout",
+        stderrText: "",
+      },
+      "during implementation",
+    );
+    expect(result.message).toBe(
+      "Agent process timed out due to inactivity during implementation.",
+    );
+  });
+});

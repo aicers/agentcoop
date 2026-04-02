@@ -40,7 +40,7 @@ describe("loadConfig", () => {
       pipelineSettings: {
         selfCheckAutoIterations: 3,
         reviewAutoRounds: 3,
-        inactivityTimeoutMinutes: 15,
+        inactivityTimeoutMinutes: 20,
         autoResumeAttempts: 3,
       },
     });
@@ -57,7 +57,7 @@ describe("loadConfig", () => {
       pipelineSettings: {
         selfCheckAutoIterations: 3,
         reviewAutoRounds: 3,
-        inactivityTimeoutMinutes: 15,
+        inactivityTimeoutMinutes: 20,
         autoResumeAttempts: 3,
       },
     });
@@ -87,7 +87,7 @@ describe("loadConfig", () => {
     expect(config.pipelineSettings).toEqual({
       selfCheckAutoIterations: 3,
       reviewAutoRounds: 3,
-      inactivityTimeoutMinutes: 15,
+      inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
   });
@@ -265,7 +265,7 @@ describe("loadConfig", () => {
     expect(config.pipelineSettings).toEqual({
       selfCheckAutoIterations: 3,
       reviewAutoRounds: 3,
-      inactivityTimeoutMinutes: 15,
+      inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
   });
@@ -279,7 +279,7 @@ describe("loadConfig", () => {
     expect(config.pipelineSettings).toEqual({
       selfCheckAutoIterations: 3,
       reviewAutoRounds: 3,
-      inactivityTimeoutMinutes: 15,
+      inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
   });
@@ -310,8 +310,115 @@ describe("loadConfig", () => {
     const config = loadConfig();
     expect(config.pipelineSettings.selfCheckAutoIterations).toBe(10);
     expect(config.pipelineSettings.reviewAutoRounds).toBe(3);
-    expect(config.pipelineSettings.inactivityTimeoutMinutes).toBe(15);
+    expect(config.pipelineSettings.inactivityTimeoutMinutes).toBe(20);
     expect(config.pipelineSettings.autoResumeAttempts).toBe(5);
+  });
+
+  test("zero values fall back to defaults (must be positive)", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        pipelineSettings: {
+          selfCheckAutoIterations: 0,
+          reviewAutoRounds: 0,
+          inactivityTimeoutMinutes: 0,
+          autoResumeAttempts: 0,
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.pipelineSettings).toEqual({
+      selfCheckAutoIterations: 3,
+      reviewAutoRounds: 3,
+      inactivityTimeoutMinutes: 20,
+      autoResumeAttempts: 3,
+    });
+  });
+
+  test("very large values are accepted", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        pipelineSettings: {
+          selfCheckAutoIterations: 999999,
+          reviewAutoRounds: 100,
+          inactivityTimeoutMinutes: 1440,
+          autoResumeAttempts: 50,
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.pipelineSettings.selfCheckAutoIterations).toBe(999999);
+    expect(config.pipelineSettings.inactivityTimeoutMinutes).toBe(1440);
+  });
+
+  test("float values fall back to defaults (must be integer)", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        pipelineSettings: {
+          selfCheckAutoIterations: 3.5,
+          reviewAutoRounds: 2.1,
+          inactivityTimeoutMinutes: 20.5,
+          autoResumeAttempts: 1.9,
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.pipelineSettings).toEqual({
+      selfCheckAutoIterations: 3,
+      reviewAutoRounds: 3,
+      inactivityTimeoutMinutes: 20,
+      autoResumeAttempts: 3,
+    });
+  });
+
+  test("string number values fall back to defaults (type check)", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        pipelineSettings: {
+          selfCheckAutoIterations: "3",
+          reviewAutoRounds: "3",
+          inactivityTimeoutMinutes: "20",
+          autoResumeAttempts: "3",
+        },
+      }),
+    );
+    const config = loadConfig();
+    // Strings are not valid — all should fall back.
+    expect(config.pipelineSettings).toEqual({
+      selfCheckAutoIterations: 3,
+      reviewAutoRounds: 3,
+      inactivityTimeoutMinutes: 20,
+      autoResumeAttempts: 3,
+    });
+  });
+
+  test("boolean values fall back to defaults", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        pipelineSettings: {
+          selfCheckAutoIterations: true,
+          reviewAutoRounds: false,
+          inactivityTimeoutMinutes: true,
+          autoResumeAttempts: false,
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.pipelineSettings).toEqual({
+      selfCheckAutoIterations: 3,
+      reviewAutoRounds: 3,
+      inactivityTimeoutMinutes: 20,
+      autoResumeAttempts: 3,
+    });
   });
 
   test("pipelineSettings null falls back to defaults", () => {
@@ -323,7 +430,7 @@ describe("loadConfig", () => {
     expect(config.pipelineSettings).toEqual({
       selfCheckAutoIterations: 3,
       reviewAutoRounds: 3,
-      inactivityTimeoutMinutes: 15,
+      inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
   });
@@ -337,7 +444,7 @@ describe("loadConfig", () => {
     expect(config.pipelineSettings).toEqual({
       selfCheckAutoIterations: 3,
       reviewAutoRounds: 3,
-      inactivityTimeoutMinutes: 15,
+      inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
   });
@@ -351,7 +458,7 @@ describe("saveConfig", () => {
   const defaultPS = {
     selfCheckAutoIterations: 3,
     reviewAutoRounds: 3,
-    inactivityTimeoutMinutes: 15,
+    inactivityTimeoutMinutes: 20,
     autoResumeAttempts: 3,
   };
 
