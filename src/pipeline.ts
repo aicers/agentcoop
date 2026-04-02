@@ -90,6 +90,11 @@ export interface StageContext {
   worktreePath: string;
   /** Current loop iteration (0-based). */
   iteration: number;
+  /**
+   * `true` when this is the last iteration before the auto-budget is
+   * exhausted and the user will be prompted to continue.
+   */
+  lastAutoIteration: boolean;
   /** Instruction injected by the user after a "instruct" action. */
   userInstruction: string | undefined;
 }
@@ -209,7 +214,7 @@ export interface PipelineOptions {
   stages: StageDefinition[];
   prompt: UserPrompt;
   /** Shared context fields injected into every `StageContext`. */
-  context: Omit<StageContext, "iteration" | "userInstruction">;
+  context: Omit<StageContext, "iteration" | "lastAutoIteration" | "userInstruction">;
 }
 
 export interface PipelineResult {
@@ -359,7 +364,7 @@ async function dispatchError(
 
 async function runStage(
   stage: StageDefinition,
-  baseCtx: Omit<StageContext, "iteration" | "userInstruction">,
+  baseCtx: Omit<StageContext, "iteration" | "lastAutoIteration" | "userInstruction">,
   prompt: UserPrompt,
 ): Promise<StageRunResult> {
   const lc = createLoopControl(stage.autoBudget);
@@ -371,6 +376,7 @@ async function runStage(
     const ctx: StageContext = {
       ...baseCtx,
       iteration: lc.iteration,
+      lastAutoIteration: lc.autoRemaining === 1,
       userInstruction,
     };
 

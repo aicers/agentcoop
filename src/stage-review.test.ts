@@ -57,6 +57,7 @@ const BASE_CTX: StageContext = {
   branch: "issue-42",
   worktreePath: "/tmp/wt",
   iteration: 0,
+  lastAutoIteration: false,
   userInstruction: undefined,
 };
 
@@ -891,6 +892,152 @@ describe("createReviewStageHandler", () => {
     expect(result.message).toContain("still pending");
 
     vi.restoreAllMocks();
+  });
+
+  // -- CI passes after fix on second attempt ----------------------------------
+
+  // -- unresolved summary on budget-exhausted NOT_APPROVED ---------------------
+
+  test("requests unresolved summary on NOT_APPROVED when lastAutoIteration is true", async () => {
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "Needs changes.\n\nNOT_APPROVED",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            responseText:
+              "**[Unresolved Round 1]**\n- Missing validation in handler",
+          }),
+        ),
+      ),
+    };
+
+    const opts = makeOpts({ agentB });
+    const stage = createReviewStageHandler(opts);
+    const ctx = { ...BASE_CTX, lastAutoIteration: true };
+    const result = await stage.handler(ctx);
+
+    expect(result.outcome).toBe("not_approved");
+    expect(result.message).toContain("Unresolved items:");
+    expect(result.message).toContain("Missing validation in handler");
+    expect(agentB.resume).toHaveBeenCalledWith(
+      "sess-b",
+      expect.stringContaining("unresolved"),
+      { cwd: "/tmp/wt" },
+    );
+  });
+
+  test("skips unresolved summary on NOT_APPROVED when lastAutoIteration is false", async () => {
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "Needs changes.\n\nNOT_APPROVED",
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+
+    const opts = makeOpts({ agentB });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("not_approved");
+    expect(result.message).not.toContain("Unresolved items:");
+    // Agent B resume should not be called (no unresolved summary request).
+    expect(agentB.resume).not.toHaveBeenCalled();
+  });
+
+  test("returns error when unresolved summary fails on lastAutoIteration", async () => {
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "NOT_APPROVED",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            status: "error",
+            errorType: "execution_error",
+            stderrText: "crash",
+            responseText: "",
+          }),
+        ),
+      ),
+    };
+
+    const opts = makeOpts({ agentB });
+    const stage = createReviewStageHandler(opts);
+    const ctx = { ...BASE_CTX, lastAutoIteration: true };
+    const result = await stage.handler(ctx);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("unresolved summary");
+  });
+
+  test("omits unresolved section on NOT_APPROVED lastAutoIteration when B responds NONE", async () => {
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "NOT_APPROVED",
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+    };
+
+    const opts = makeOpts({ agentB });
+    const stage = createReviewStageHandler(opts);
+    const ctx = { ...BASE_CTX, lastAutoIteration: true };
+    const result = await stage.handler(ctx);
+
+    expect(result.outcome).toBe("not_approved");
+    expect(result.message).not.toContain("Unresolved items:");
+  });
+
+  test("invokes fresh when sessionId is undefined for unresolved summary on lastAutoIteration", async () => {
+    const agentB: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValueOnce(
+          makeStream(
+            makeResult({
+              sessionId: undefined,
+              responseText: "NOT_APPROVED",
+            }),
+          ),
+        )
+        .mockReturnValueOnce(
+          makeStream(makeResult({ responseText: "NONE" })),
+        ),
+      resume: vi.fn(),
+    };
+
+    const opts = makeOpts({ agentB });
+    const stage = createReviewStageHandler(opts);
+    const ctx = { ...BASE_CTX, lastAutoIteration: true };
+    const result = await stage.handler(ctx);
+
+    expect(result.outcome).toBe("not_approved");
+    // invoke called twice: once for review, once for unresolved summary (fresh)
+    expect(agentB.invoke).toHaveBeenCalledTimes(2);
+    expect(agentB.resume).not.toHaveBeenCalled();
   });
 
   // -- CI passes after fix on second attempt ----------------------------------
