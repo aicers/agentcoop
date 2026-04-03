@@ -38,8 +38,8 @@ interface AgentPaneProps {
   color: string;
   /** Whether this pane currently has keyboard focus for scrolling. */
   isFocused?: boolean;
-  /** Whether scroll keyboard shortcuts are active (false when input area is active). */
-  scrollEnabled?: boolean;
+  /** Whether up/down arrow scrolling is active (false during input prompts). */
+  arrowScrollEnabled?: boolean;
 }
 
 export function AgentPane({
@@ -49,7 +49,7 @@ export function AgentPane({
   emitter,
   color,
   isFocused = false,
-  scrollEnabled = false,
+  arrowScrollEnabled = false,
 }: AgentPaneProps) {
   const { lines, pendingLine } = useAgentLines(emitter, agent);
   const containerRef = useRef<DOMElement>(null);
@@ -121,20 +121,28 @@ export function AgentPane({
     }
   }, [scrollOffset, maxOffset]);
 
-  // Handle scroll keyboard input.
+  // PageUp/PageDown: always active when focused (no conflict with text input).
   useInput(
     (_input, key) => {
       if (key.pageUp) {
         setScrollOffset((o) => o + visibleRows);
       } else if (key.pageDown) {
         setScrollOffset((o) => Math.max(0, o - visibleRows));
-      } else if (key.upArrow) {
+      }
+    },
+    { isActive: isFocused },
+  );
+
+  // Up/Down arrows: disabled during input prompts to avoid conflicts.
+  useInput(
+    (_input, key) => {
+      if (key.upArrow) {
         setScrollOffset((o) => o + 1);
       } else if (key.downArrow) {
         setScrollOffset((o) => Math.max(0, o - 1));
       }
     },
-    { isActive: isFocused && scrollEnabled },
+    { isActive: isFocused && arrowScrollEnabled },
   );
 
   // Compute the visible window from the flat row array.
@@ -189,8 +197,8 @@ export function AgentPane({
       ? t()["agentPane.linesAbove"](linesAbove)
       : undefined;
 
-  // Dim unfocused pane border when scroll mode is available.
-  const borderCol = scrollEnabled ? (isFocused ? color : "gray") : color;
+  // Dim unfocused pane border so the focused pane is always distinguishable.
+  const borderCol = isFocused ? color : "gray";
 
   return (
     <Box
@@ -205,6 +213,7 @@ export function AgentPane({
     >
       <Text bold color={borderCol}>
         {modelName ? `${label} \u2014 ${modelName}` : label}
+        {isFocused ? " [*]" : ""}
       </Text>
       {placeholder !== undefined ? (
         <Text dimColor>{placeholder}</Text>

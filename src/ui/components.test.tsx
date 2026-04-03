@@ -4,8 +4,9 @@
  * Uses ink-testing-library to render ink components in a test
  * environment and assert on the terminal output frames.
  */
-import { Box, Text, useStdout } from "ink";
+import { Box, Text, useInput, useStdout } from "ink";
 import { cleanup, render } from "ink-testing-library";
+import { useState } from "react";
 import { afterEach, describe, expect, test } from "vitest";
 import { PipelineEventEmitter } from "../pipeline-events.js";
 import { AgentPane, splitIntoRows } from "./AgentPane.js";
@@ -266,7 +267,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="blue"
           isFocused
-          scrollEnabled
+          arrowScrollEnabled
         />
       </Box>,
     );
@@ -301,7 +302,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="blue"
           isFocused
-          scrollEnabled
+          arrowScrollEnabled
         />
       </Box>,
     );
@@ -327,7 +328,7 @@ describe("AgentPane", () => {
     expect(frame).not.toContain("\u2191");
   });
 
-  test("scrolling is disabled when scrollEnabled is false", async () => {
+  test("Page Up still works when arrowScrollEnabled is false", async () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame, stdin } = render(
       <Box height={10}>
@@ -337,7 +338,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="blue"
           isFocused
-          scrollEnabled={false}
+          arrowScrollEnabled={false}
         />
       </Box>,
     );
@@ -348,10 +349,39 @@ describe("AgentPane", () => {
     emitter.emit("agent:chunk", { agent: "a", chunk });
     await new Promise((r) => setTimeout(r, 50));
 
-    stdin.write("\x1b[5~");
+    stdin.write("\x1b[5~"); // Page Up
     await new Promise((r) => setTimeout(r, 50));
 
-    // View should not have moved — still at bottom.
+    // Page keys work even during input prompts.
+    expect(lastFrame()).not.toContain("line20");
+    expect(lastFrame()).toContain("\u2191");
+  });
+
+  test("arrow scrolling is disabled when arrowScrollEnabled is false", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame, stdin } = render(
+      <Box height={10}>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isFocused
+          arrowScrollEnabled={false}
+        />
+      </Box>,
+    );
+
+    const chunk = Array.from({ length: 20 }, (_, i) => `line${i + 1}`)
+      .join("\n")
+      .concat("\n");
+    emitter.emit("agent:chunk", { agent: "a", chunk });
+    await new Promise((r) => setTimeout(r, 50));
+
+    stdin.write("\x1b[A"); // Up arrow
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Arrow keys should be disabled — still at bottom.
     expect(lastFrame()).toContain("line20");
     expect(lastFrame()).not.toContain("\u2191");
   });
@@ -366,7 +396,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="blue"
           isFocused={false}
-          scrollEnabled
+          arrowScrollEnabled
         />
       </Box>,
     );
@@ -394,7 +424,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="blue"
           isFocused
-          scrollEnabled
+          arrowScrollEnabled
         />
       </Box>,
     );
@@ -426,7 +456,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="blue"
           isFocused
-          scrollEnabled
+          arrowScrollEnabled
         />
       </Box>,
     );
@@ -465,7 +495,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="blue"
           isFocused
-          scrollEnabled
+          arrowScrollEnabled
         />
       </Box>,
     );
@@ -494,7 +524,7 @@ describe("AgentPane", () => {
     expect(frameAfter).not.toContain("line25");
   });
 
-  test("unfocused pane border dims when scrollEnabled", () => {
+  test("unfocused pane border dims to distinguish focus", () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(
       <Box>
@@ -504,7 +534,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="blue"
           isFocused={false}
-          scrollEnabled
+          arrowScrollEnabled
         />
         <AgentPane
           label="Agent B"
@@ -512,7 +542,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="green"
           isFocused
-          scrollEnabled
+          arrowScrollEnabled
         />
       </Box>,
     );
@@ -521,6 +551,35 @@ describe("AgentPane", () => {
     // Both labels must be present.
     expect(frame).toContain("Agent A");
     expect(frame).toContain("Agent B");
+  });
+
+  test("focused pane shows [*] indicator in header", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isFocused
+        />
+        <AgentPane
+          label="Agent B"
+          agent="b"
+          emitter={emitter}
+          color="green"
+          isFocused={false}
+        />
+      </Box>,
+    );
+
+    const frame = lastFrame() ?? "";
+    // Focused pane must show the [*] marker.
+    expect(frame).toContain("[*]");
+    // The marker must appear only once (only for the focused pane).
+    const markerCount = (frame.match(/\[\*\]/g) ?? []).length;
+    expect(markerCount).toBe(1);
   });
 });
 
@@ -838,6 +897,101 @@ describe("viewport height constraint", () => {
     expect(lastFrame()).toContain("h=none");
   });
 
+  test("Tab switches focus between panes during input prompts", async () => {
+    const emitter = new PipelineEventEmitter();
+
+    // Mini harness that mimics App's Tab handler and focus state.
+    function Harness({ hasInput }: { hasInput: boolean }) {
+      const [focusedPane, setFocusedPane] = useState<"a" | "b">("a");
+      useInput((_input, key) => {
+        if (key.tab) {
+          setFocusedPane((prev) => (prev === "a" ? "b" : "a"));
+        }
+      });
+      return (
+        <Box flexDirection="column" height={12}>
+          <Box flexDirection="row" flexGrow={1}>
+            <AgentPane
+              label="Agent A"
+              agent="a"
+              emitter={emitter}
+              color="blue"
+              isFocused={focusedPane === "a"}
+              arrowScrollEnabled={!hasInput}
+            />
+            <AgentPane
+              label="Agent B"
+              agent="b"
+              emitter={emitter}
+              color="green"
+              isFocused={focusedPane === "b"}
+              arrowScrollEnabled={!hasInput}
+            />
+          </Box>
+        </Box>
+      );
+    }
+
+    const { lastFrame, stdin } = render(<Harness hasInput />);
+
+    // Initially pane A is focused.
+    const before = lastFrame() ?? "";
+    expect(before).toContain("Agent A");
+    expect(before).toContain("Agent B");
+    // [*] should appear once, for Agent A.
+    expect((before.match(/\[\*\]/g) ?? []).length).toBe(1);
+
+    // Press Tab — focus should move to pane B even during input.
+    stdin.write("\t");
+    await new Promise((r) => setTimeout(r, 50));
+
+    const after = lastFrame() ?? "";
+    // Agent B header should now contain [*].
+    const bHeaderIdx = after.indexOf("Agent B");
+    const markerIdx = after.lastIndexOf("[*]");
+    expect(markerIdx).toBeGreaterThan(bHeaderIdx);
+  });
+
+  test("PageUp/PageDown work during active input prompts", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame, stdin } = render(
+      <Box flexDirection="column" height={12}>
+        <Box flexDirection="row" flexGrow={1}>
+          <AgentPane
+            label="Agent A"
+            agent="a"
+            emitter={emitter}
+            color="blue"
+            isFocused
+            arrowScrollEnabled={false}
+          />
+        </Box>
+      </Box>,
+    );
+
+    const chunk = Array.from({ length: 20 }, (_, i) => `line${i + 1}`)
+      .join("\n")
+      .concat("\n");
+    emitter.emit("agent:chunk", { agent: "a", chunk });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(lastFrame()).toContain("line20");
+
+    // Page Up during input prompt — should still scroll.
+    stdin.write("\x1b[5~");
+    await new Promise((r) => setTimeout(r, 50));
+
+    const scrolled = lastFrame() ?? "";
+    expect(scrolled).not.toContain("line20");
+    expect(scrolled).toContain("\u2191");
+
+    // Page Down — return to bottom.
+    stdin.write("\x1b[6~");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(lastFrame()).toContain("line20");
+  });
+
   test("fixed-height root constrains panes to viewport", async () => {
     const emitter = new PipelineEventEmitter();
 
@@ -854,7 +1008,7 @@ describe("viewport height constraint", () => {
             emitter={emitter}
             color="blue"
             isFocused
-            scrollEnabled
+            arrowScrollEnabled
           />
           <AgentPane
             label="Agent B"

@@ -77,15 +77,12 @@ export function App({
     setInputRequest(null);
   }, []);
 
-  // Switch focused pane with Tab when input area is not active.
-  useInput(
-    (_input, key) => {
-      if (key.tab) {
-        setFocusedPane((prev) => (prev === "a" ? "b" : "a"));
-      }
-    },
-    { isActive: !inputRequest },
-  );
+  // Switch focused pane with Tab (always active; no conflict with text input).
+  useInput((_input, key) => {
+    if (key.tab) {
+      setFocusedPane((prev) => (prev === "a" ? "b" : "a"));
+    }
+  });
 
   // Run the pipeline once on mount.
   useEffect(() => {
@@ -119,7 +116,7 @@ export function App({
           emitter={emitter}
           color="blue"
           isFocused={focusedPane === "a"}
-          scrollEnabled={!inputRequest}
+          arrowScrollEnabled={!inputRequest}
         />
         <AgentPane
           label={t()["agent.labelBRole"]}
@@ -128,7 +125,7 @@ export function App({
           emitter={emitter}
           color="green"
           isFocused={focusedPane === "b"}
-          scrollEnabled={!inputRequest}
+          arrowScrollEnabled={!inputRequest}
         />
       </Box>
 
