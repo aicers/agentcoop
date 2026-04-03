@@ -12,6 +12,7 @@ import { existsSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { t } from "./i18n/index.js";
+import { repoLockPath, withLock } from "./lock.js";
 
 // ---- public types --------------------------------------------------------
 
@@ -81,22 +82,27 @@ const EXEC_OPTS: ExecFileSyncOptions = { encoding: "utf-8", stdio: "pipe" };
  */
 export function bootstrapRepo(owner: string, repo: string): string {
   const dest = repoPath(owner, repo);
-  if (existsSync(dest)) {
-    // Ensure the fetch refspec exists — bare clones (including those
-    // created before this fix) lack one, making `git fetch` a no-op.
-    ensureFetchRefspec(dest);
-    execFileSync("git", ["fetch", "--all", "--prune"], {
-      ...EXEC_OPTS,
-      cwd: dest,
-    });
-  } else {
-    execFileSync(
-      "git",
-      ["clone", "--bare", `https://github.com/${owner}/${repo}.git`, dest],
-      EXEC_OPTS,
-    );
-    ensureFetchRefspec(dest);
-  }
+  const lockPath = repoLockPath(owner, repo);
+
+  withLock(lockPath, () => {
+    if (existsSync(dest)) {
+      // Ensure the fetch refspec exists — bare clones (including those
+      // created before this fix) lack one, making `git fetch` a no-op.
+      ensureFetchRefspec(dest);
+      execFileSync("git", ["fetch", "--all", "--prune"], {
+        ...EXEC_OPTS,
+        cwd: dest,
+      });
+    } else {
+      execFileSync(
+        "git",
+        ["clone", "--bare", `https://github.com/${owner}/${repo}.git`, dest],
+        EXEC_OPTS,
+      );
+      ensureFetchRefspec(dest);
+    }
+  });
+
   return dest;
 }
 
@@ -244,14 +250,17 @@ export function createWorktree(options: {
     }
 
     if (conflictChoice === "clean") {
-      forceRemoveWorktreeAndBranch(bare, wtPath, branch);
+      const lockPath = repoLockPath(owner, repo);
+      withLock(lockPath, () => {
+        forceRemoveWorktreeAndBranch(bare, wtPath, branch);
 
-      // Recreate.
-      execFileSync(
-        "git",
-        ["worktree", "add", "-b", branch, wtPath, baseBranch],
-        { ...EXEC_OPTS, cwd: bare },
-      );
+        // Recreate.
+        execFileSync(
+          "git",
+          ["worktree", "add", "-b", branch, wtPath, baseBranch],
+          { ...EXEC_OPTS, cwd: bare },
+        );
+      });
       return { path: wtPath, branch, hadUncommittedChanges: dirty };
     }
 
@@ -260,9 +269,12 @@ export function createWorktree(options: {
   }
 
   // Create the worktree with a new branch tracking the base branch.
-  execFileSync("git", ["worktree", "add", "-b", branch, wtPath, baseBranch], {
-    ...EXEC_OPTS,
-    cwd: bare,
+  const lockPath = repoLockPath(owner, repo);
+  withLock(lockPath, () => {
+    execFileSync("git", ["worktree", "add", "-b", branch, wtPath, baseBranch], {
+      ...EXEC_OPTS,
+      cwd: bare,
+    });
   });
 
   return { path: wtPath, branch, hadUncommittedChanges: false };
