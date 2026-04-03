@@ -543,6 +543,27 @@ describe("buildClaudeArgs", () => {
     expect(args).not.toContain("--effort");
   });
 
+  test("appends [1m] to model when contextWindow is 1m", () => {
+    const args = buildClaudeArgs("prompt", {
+      model: "opus",
+      permissionMode: "auto",
+      contextWindow: "1m",
+    });
+
+    expect(args).toContain("opus[1m]");
+  });
+
+  test("does not modify model when contextWindow is 200k", () => {
+    const args = buildClaudeArgs("prompt", {
+      model: "opus",
+      permissionMode: "auto",
+      contextWindow: "200k",
+    });
+
+    expect(args).toContain("opus");
+    expect(args).not.toContain("opus[1m]");
+  });
+
   test("includes --resume when sessionId is given", () => {
     const args = buildClaudeArgs(
       "continue",
