@@ -87,26 +87,28 @@ describe("mapAgentError", () => {
     );
   });
 
-  test("uses stderrText when available", () => {
+  test("includes errorType alongside stderrText", () => {
     const result = mapAgentError({
       ...base,
       errorType: "execution_error",
       stderrText: "segfault",
     });
-    expect(result.message).toBe("Agent error: segfault");
+    expect(result.message).toBe("Agent error: execution_error (segfault)");
   });
 
-  test("includes exit code alongside stderrText", () => {
+  test("includes errorType, stderrText, and exit code", () => {
     const result = mapAgentError({
       ...base,
       errorType: "execution_error",
       stderrText: "segfault",
       exitCode: 1,
     });
-    expect(result.message).toBe("Agent error: segfault (exit code 1)");
+    expect(result.message).toBe(
+      "Agent error: execution_error (segfault, exit code 1)",
+    );
   });
 
-  test("uses responseText when stderrText is empty", () => {
+  test("includes errorType alongside responseText when no process details", () => {
     const result = mapAgentError({
       ...base,
       errorType: "execution_error",
@@ -114,10 +116,12 @@ describe("mapAgentError", () => {
       exitCode: null,
       responseText: "claude exited with code 1",
     });
-    expect(result.message).toBe("Agent error: claude exited with code 1");
+    expect(result.message).toBe(
+      "Agent error: execution_error (claude exited with code 1)",
+    );
   });
 
-  test("shows exit code alone when stderr and responseText are empty", () => {
+  test("includes errorType alongside exit code", () => {
     const result = mapAgentError({
       ...base,
       errorType: "unknown",
@@ -125,7 +129,7 @@ describe("mapAgentError", () => {
       exitCode: 137,
       responseText: "",
     });
-    expect(result.message).toBe("Agent error: exit code 137");
+    expect(result.message).toBe("Agent error: unknown (exit code 137)");
   });
 
   test("falls back to errorType when all details are empty", () => {
@@ -148,7 +152,7 @@ describe("mapAgentError", () => {
     expect(result.message).toBe("Agent error during fix: oops");
   });
 
-  test("shows signal when process is killed by signal", () => {
+  test("includes errorType alongside signal", () => {
     const result = mapAgentError({
       ...base,
       errorType: "unknown",
@@ -157,10 +161,10 @@ describe("mapAgentError", () => {
       signal: "SIGKILL",
       responseText: "",
     });
-    expect(result.message).toBe("Agent error: signal SIGKILL");
+    expect(result.message).toBe("Agent error: unknown (signal SIGKILL)");
   });
 
-  test("shows signal alongside stderr and exit code", () => {
+  test("includes errorType, stderr, and signal", () => {
     const result = mapAgentError({
       ...base,
       errorType: "unknown",
@@ -168,7 +172,9 @@ describe("mapAgentError", () => {
       exitCode: null,
       signal: "SIGKILL",
     });
-    expect(result.message).toBe("Agent error: out of memory (signal SIGKILL)");
+    expect(result.message).toBe(
+      "Agent error: unknown (out of memory, signal SIGKILL)",
+    );
   });
 
   test("logs full diagnostics to stderr on error", () => {

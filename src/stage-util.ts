@@ -81,6 +81,10 @@ export function mapAgentError(
 export function buildErrorDetail(result: AgentResult): string {
   const parts: string[] = [];
 
+  if (result.errorType) {
+    parts.push(result.errorType);
+  }
+
   if (result.stderrText) {
     parts.push(result.stderrText.trim());
   }
@@ -93,12 +97,16 @@ export function buildErrorDetail(result: AgentResult): string {
     parts.push(`exit code ${result.exitCode}`);
   }
 
-  if (parts.length === 0 && result.responseText) {
+  const hasProcessDetails =
+    !!result.stderrText?.trim() ||
+    !!result.signal ||
+    (result.exitCode !== undefined && result.exitCode !== null);
+  if (!hasProcessDetails && result.responseText) {
     parts.push(result.responseText.trim());
   }
 
   if (parts.length === 0) {
-    parts.push(result.errorType ?? "unknown");
+    parts.push("unknown");
   }
 
   const [primary, ...rest] = parts;
