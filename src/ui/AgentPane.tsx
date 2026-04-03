@@ -1,5 +1,6 @@
 import { Box, type DOMElement, measureElement, Text, useInput } from "ink";
 import { useEffect, useRef, useState } from "react";
+import wrapAnsi from "wrap-ansi";
 import { t } from "../i18n/index.js";
 import type {
   PipelineEventEmitter,
@@ -15,13 +16,10 @@ import {
 const REVIEW_STAGE = 7;
 
 /** Split a logical line into terminal rows of the given width. */
-function splitIntoRows(line: string, width: number): string[] {
-  if (line.length <= width) return [line];
-  const rows: string[] = [];
-  for (let i = 0; i < line.length; i += width) {
-    rows.push(line.slice(i, i + width));
-  }
-  return rows;
+export function splitIntoRows(line: string, width: number): string[] {
+  if (width < 1) return [line];
+  const wrapped = wrapAnsi(line, width, { hard: true, trim: false });
+  return wrapped.split("\n");
 }
 
 /** A single terminal row tagged with display metadata. */

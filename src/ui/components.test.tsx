@@ -8,7 +8,7 @@ import { Box } from "ink";
 import { cleanup, render } from "ink-testing-library";
 import { afterEach, describe, expect, test } from "vitest";
 import { PipelineEventEmitter } from "../pipeline-events.js";
-import { AgentPane } from "./AgentPane.js";
+import { AgentPane, splitIntoRows } from "./AgentPane.js";
 import { InputArea, type InputRequest } from "./InputArea.js";
 import { StatusBar } from "./StatusBar.js";
 
@@ -520,6 +520,36 @@ describe("AgentPane", () => {
     // Both labels must be present.
     expect(frame).toContain("Agent A");
     expect(frame).toContain("Agent B");
+  });
+});
+
+// ---- splitIntoRows -----------------------------------------------------------
+
+describe("splitIntoRows", () => {
+  test("wraps at word boundaries instead of mid-word", () => {
+    const rows = splitIntoRows("No code changes were needed.", 15);
+    expect(rows).toEqual(["No code changes", " were needed."]);
+  });
+
+  test("hard-breaks a single word longer than width", () => {
+    const rows = splitIntoRows("abcdefghij", 4);
+    expect(rows).toEqual(["abcd", "efgh", "ij"]);
+  });
+
+  test("returns single row for text shorter than width", () => {
+    expect(splitIntoRows("short", 80)).toEqual(["short"]);
+  });
+
+  test("preserves empty string", () => {
+    expect(splitIntoRows("", 40)).toEqual([""]);
+  });
+
+  test("preserves leading whitespace (trim: false)", () => {
+    const rows = splitIntoRows("  indented text", 20);
+    expect(rows).toEqual(["  indented text"]);
+    // Ensure indentation survives wrapping when the line must break.
+    const wrapped = splitIntoRows("  indented text here", 10);
+    expect(wrapped[0]).toMatch(/^\s{2}/);
   });
 });
 
