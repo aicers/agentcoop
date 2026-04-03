@@ -281,7 +281,33 @@ describe("StatusBar", () => {
 
     const frame = lastFrame();
     expect(frame).toContain("Stage 3: Self-check");
+    expect(frame).toContain("Round: 2 (done)");
     expect(frame).toContain("Last: not approved");
+  });
+
+  test("shows in-progress then done on successive events", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(<StatusBar emitter={emitter} />);
+
+    emitter.emit("stage:enter", {
+      stageNumber: 3,
+      stageName: "Self-check",
+      iteration: 0,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastFrame()).toContain("Round: 1 (in progress)");
+
+    emitter.emit("stage:exit", { stageNumber: 3, outcome: "not_approved" });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastFrame()).toContain("Round: 1 (done)");
+
+    emitter.emit("stage:enter", {
+      stageNumber: 3,
+      stageName: "Self-check",
+      iteration: 1,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastFrame()).toContain("Round: 2 (in progress)");
   });
 
   test("clears outcome on new stage:enter", async () => {
