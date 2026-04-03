@@ -89,7 +89,12 @@ export function App({
       </Box>
 
       {/* Bottom: status bar + input area */}
-      <StatusBar emitter={emitter} />
+      <StatusBar
+        emitter={emitter}
+        owner={pipelineOptions.context.owner}
+        repo={pipelineOptions.context.repo}
+        issueNumber={pipelineOptions.context.issueNumber}
+      />
       <InputArea request={inputRequest} onSubmit={handleSubmit} />
     </Box>
   );

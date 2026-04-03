@@ -9,9 +9,17 @@ import type {
 
 interface StatusBarProps {
   emitter: PipelineEventEmitter;
+  owner: string;
+  repo: string;
+  issueNumber: number;
 }
 
-export function StatusBar({ emitter }: StatusBarProps) {
+export function StatusBar({
+  emitter,
+  owner,
+  repo,
+  issueNumber,
+}: StatusBarProps) {
   const [stage, setStage] = useState<StageEnterEvent | null>(null);
   const [lastOutcome, setLastOutcome] = useState<string | null>(null);
   const [roundDone, setRoundDone] = useState(false);
@@ -55,8 +63,14 @@ export function StatusBar({ emitter }: StatusBarProps) {
     outcomeKey && outcomeKey in m ? (m[outcomeKey] as string) : lastOutcome;
   const outcomeText = outcomeLabel ? m["statusBar.last"](outcomeLabel) : "";
 
+  const issueLabel = `${owner}/${repo}#${issueNumber}`;
+
   return (
     <Box borderStyle="single" borderColor="gray" paddingX={1}>
+      <Text bold color="cyan">
+        {issueLabel}
+      </Text>
+      <Text>{"  |  "}</Text>
       <Text bold>{stageText}</Text>
       {iterText && (
         <Text>

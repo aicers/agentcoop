@@ -245,14 +245,29 @@ describe("AgentPane", () => {
 describe("StatusBar", () => {
   test("shows Initialising before any events", () => {
     const emitter = new PipelineEventEmitter();
-    const { lastFrame } = render(<StatusBar emitter={emitter} />);
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={49}
+      />,
+    );
 
     expect(lastFrame()).toContain("Initialising...");
+    expect(lastFrame()).toContain("aicers/agentcoop#49");
   });
 
   test("updates stage display on stage:enter", async () => {
     const emitter = new PipelineEventEmitter();
-    const { lastFrame } = render(<StatusBar emitter={emitter} />);
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={49}
+      />,
+    );
 
     emitter.emit("stage:enter", {
       stageNumber: 2,
@@ -269,7 +284,14 @@ describe("StatusBar", () => {
 
   test("shows last outcome after stage:exit", async () => {
     const emitter = new PipelineEventEmitter();
-    const { lastFrame } = render(<StatusBar emitter={emitter} />);
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={49}
+      />,
+    );
 
     emitter.emit("stage:enter", {
       stageNumber: 3,
@@ -287,7 +309,14 @@ describe("StatusBar", () => {
 
   test("shows in-progress then done on successive events", async () => {
     const emitter = new PipelineEventEmitter();
-    const { lastFrame } = render(<StatusBar emitter={emitter} />);
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={49}
+      />,
+    );
 
     emitter.emit("stage:enter", {
       stageNumber: 3,
@@ -312,7 +341,14 @@ describe("StatusBar", () => {
 
   test("clears outcome on new stage:enter", async () => {
     const emitter = new PipelineEventEmitter();
-    const { lastFrame } = render(<StatusBar emitter={emitter} />);
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={49}
+      />,
+    );
 
     emitter.emit("stage:enter", {
       stageNumber: 2,
