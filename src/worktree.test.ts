@@ -13,6 +13,13 @@ vi.mock("node:fs", () => ({
   rmSync: vi.fn(),
 }));
 
+vi.mock("./lock.js", () => ({
+  withLock: vi.fn((_path: string, fn: () => unknown) => fn()),
+  repoLockPath: vi.fn(
+    (owner: string, repo: string) => `/mock/lock/${owner}/${repo}.lock`,
+  ),
+}));
+
 const {
   worktreePath,
   repoPath,
