@@ -106,15 +106,80 @@ describe("bootstrapRepo", () => {
     );
   });
 
+  test("sets fetch refspec after cloning", () => {
+    mockExistsSync.mockReturnValue(false);
+    // git config read will throw (no refspec yet)
+    mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "config" && args.length === 2)
+        throw new Error("key missing");
+      return "" as never;
+    }) as typeof execFileSync);
+    const dest = bootstrapRepo("org", "repo");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"],
+      expect.objectContaining({ encoding: "utf-8", cwd: dest }),
+    );
+  });
+
   test("fetches when repo already exists", () => {
     const dest = repoPath("org", "repo");
     mockExistsSync.mockReturnValue(true);
+    // Return existing refspec so ensureFetchRefspec is a no-op
+    mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "config" && args.length === 2)
+        return "+refs/heads/*:refs/heads/*\n";
+      return "" as never;
+    }) as typeof execFileSync);
     bootstrapRepo("org", "repo");
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "git",
       ["fetch", "--all", "--prune"],
       expect.objectContaining({ encoding: "utf-8", cwd: dest }),
     );
+  });
+
+  test("repairs missing refspec on existing bare repo before fetching", () => {
+    const dest = repoPath("org", "repo");
+    mockExistsSync.mockReturnValue(true);
+    const calls: string[][] = [];
+    // Simulate a legacy bare repo with no refspec
+    mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
+      calls.push([cmd, ...args]);
+      if (cmd === "git" && args[0] === "config" && args.length === 2)
+        throw new Error("key missing");
+      return "" as never;
+    }) as typeof execFileSync);
+    bootstrapRepo("org", "repo");
+    // Should set the refspec before fetching
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"],
+      expect.objectContaining({ cwd: dest }),
+    );
+    const configSetIdx = calls.findIndex(
+      (c) => c[0] === "git" && c[1] === "config" && c.length === 4,
+    );
+    const fetchIdx = calls.findIndex((c) => c[0] === "git" && c[1] === "fetch");
+    expect(configSetIdx).toBeLessThan(fetchIdx);
+  });
+
+  test("skips setting refspec when it already exists", () => {
+    mockExistsSync.mockReturnValue(true);
+    mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "config" && args.length === 2)
+        return "+refs/heads/*:refs/heads/*\n";
+      return "" as never;
+    }) as typeof execFileSync);
+    bootstrapRepo("org", "repo");
+    // Should NOT have called config with 3 args (the setter)
+    const configSetCalls = mockExecFileSync.mock.calls.filter(
+      (c) =>
+        c[0] === "git" &&
+        (c[1] as string[])[0] === "config" &&
+        (c[1] as string[]).length === 3,
+    );
+    expect(configSetCalls).toHaveLength(0);
   });
 });
 

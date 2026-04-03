@@ -82,6 +82,9 @@ const EXEC_OPTS: ExecFileSyncOptions = { encoding: "utf-8", stdio: "pipe" };
 export function bootstrapRepo(owner: string, repo: string): string {
   const dest = repoPath(owner, repo);
   if (existsSync(dest)) {
+    // Ensure the fetch refspec exists — bare clones (including those
+    // created before this fix) lack one, making `git fetch` a no-op.
+    ensureFetchRefspec(dest);
     execFileSync("git", ["fetch", "--all", "--prune"], {
       ...EXEC_OPTS,
       cwd: dest,
@@ -92,8 +95,35 @@ export function bootstrapRepo(owner: string, repo: string): string {
       ["clone", "--bare", `https://github.com/${owner}/${repo}.git`, dest],
       EXEC_OPTS,
     );
+    ensureFetchRefspec(dest);
   }
   return dest;
+}
+
+const FETCH_REFSPEC = "+refs/heads/*:refs/heads/*";
+
+/**
+ * Set `remote.origin.fetch` if it is missing or empty.
+ *
+ * `git clone --bare` does not create this config entry, so without it
+ * `git fetch --all` has nothing to fetch and local refs stay stale.
+ */
+function ensureFetchRefspec(cwd: string): void {
+  try {
+    const current = (
+      execFileSync("git", ["config", "remote.origin.fetch"], {
+        ...EXEC_OPTS,
+        cwd,
+      }) as string
+    ).trim();
+    if (current) return;
+  } catch {
+    // Config key missing — fall through to set it.
+  }
+  execFileSync("git", ["config", "remote.origin.fetch", FETCH_REFSPEC], {
+    ...EXEC_OPTS,
+    cwd,
+  });
 }
 
 // ---- HEAD SHA capture ----------------------------------------------------
