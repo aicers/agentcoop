@@ -2,23 +2,9 @@
 
 A multi-agent pipeline that takes a GitHub issue and autonomously implements, reviews, and merges the fix using two AI agents.
 
-```
-┌ Agent A (implementer) — claude-sonnet ─┬─ Agent B (reviewer) — claude-sonnet ┐
-│                                        │                                     │
-│ I'll start by reading the issue and    │ (waiting for output)                │
-│ exploring the repository structure.    │                                     │
-│                                        │                                     │
-│ ╌╌╌╌╌╌╌╌╌ Prompt ╌╌╌╌╌╌╌╌╌           │                                     │
-│ ▶ Implement the following GitHub       │                                     │
-│ ▶ issue in a new git branch…           │                                     │
-│ ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌            │                                     │
-│                                        │                                     │
-├────────────────────────────────────────┴─────────────────────────────────────┤
-│ owner/repo#42  |  Stage 1: Implement  |  Round: 1 (in progress)            │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ Pipeline running...                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="assets/tui-demo.svg" alt="AgentCoop TUI showing two agent panes, status bar, and input area" width="820">
+</p>
 
 ## How it works
 
