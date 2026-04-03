@@ -21,6 +21,7 @@ export function AgentPane({ label, agent, emitter, color }: AgentPaneProps) {
   const { lines, pendingLine } = useAgentLines(emitter, agent);
   const containerRef = useRef<DOMElement>(null);
   const [visibleRows, setVisibleRows] = useState(20);
+  const [contentWidth, setContentWidth] = useState(80);
   const [currentStage, setCurrentStage] = useState<number | null>(null);
 
   // Track the current pipeline stage for idle status display.
@@ -38,19 +39,37 @@ export function AgentPane({ label, agent, emitter, color }: AgentPaneProps) {
   // exactly how many lines fit without relying on heuristics.
   useEffect(() => {
     if (containerRef.current) {
-      const { height } = measureElement(containerRef.current);
+      const { height, width } = measureElement(containerRef.current);
       // Reserve 2 rows for the top/bottom border and 1 for the label.
       setVisibleRows(height > 3 ? height - 3 : 0);
+      // Subtract 2 for paddingX={1} (left + right).
+      setContentWidth(width > 2 ? width - 2 : 1);
     }
   });
 
   const allLines = pendingLine ? [...lines, pendingLine] : lines;
-  const visible =
-    visibleRows === 0
-      ? []
-      : allLines.length > visibleRows
-        ? allLines.slice(-visibleRows)
-        : allLines;
+
+  // Tail by rendered rows, not logical lines. Each logical line may
+  // wrap into multiple terminal rows when wrap="wrap" is active.
+  let visible: string[];
+  if (visibleRows === 0) {
+    visible = [];
+  } else {
+    let rowBudget = visibleRows;
+    let startIdx = allLines.length;
+    while (startIdx > 0 && rowBudget > 0) {
+      startIdx--;
+      const lineRows = Math.max(
+        1,
+        Math.ceil(allLines[startIdx].length / contentWidth),
+      );
+      rowBudget -= lineRows;
+    }
+    // If the first included line overflows the budget, still include it
+    // (Ink will clip the top via overflow="hidden", showing the tail).
+    if (startIdx < 0) startIdx = 0;
+    visible = allLines.slice(startIdx);
+  }
 
   const hasOutput = allLines.length > 0;
 

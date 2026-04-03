@@ -198,6 +198,26 @@ describe("AgentPane", () => {
     expect(frame).not.toContain("idle");
   });
 
+  test("shows newest content of a long wrapped line (auto-scroll)", async () => {
+    const emitter = new PipelineEventEmitter();
+    // Render in a narrow (40 cols), short (8 rows) container so one long
+    // line wraps into many terminal rows and must be tailed correctly.
+    const { lastFrame } = render(
+      <Box width={40} height={8}>
+        <AgentPane label="Agent A" agent="a" emitter={emitter} color="blue" />
+      </Box>,
+    );
+
+    // Build a single long line (no newlines) that exceeds the pane width.
+    // The tail marker must remain visible after wrapping.
+    const longLine = `${"x".repeat(200)}LATEST_TOKEN`;
+    emitter.emit("agent:chunk", { agent: "a", chunk: longLine });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("LATEST_TOKEN");
+  });
+
   test("shows 'pane too small' instead of log lines in a tiny pane", async () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(
