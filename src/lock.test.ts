@@ -99,6 +99,29 @@ describe("withLock", () => {
     }
   });
 
+  test("cleans up fd and lock file when writeFileSync throws", () => {
+    mockOpenSync.mockReturnValue(42 as never);
+    const writeErr = new Error("ENOSPC");
+    mockWriteFileSync.mockImplementation(() => {
+      throw writeErr;
+    });
+
+    expect(() => withLock("/tmp/test.lock", () => "ok")).toThrow("ENOSPC");
+    expect(mockCloseSync).toHaveBeenCalledWith(42);
+    expect(mockUnlinkSync).toHaveBeenCalledWith("/tmp/test.lock");
+  });
+
+  test("cleans up lock file when closeSync throws", () => {
+    mockOpenSync.mockReturnValue(42 as never);
+    const closeErr = new Error("EIO");
+    mockCloseSync.mockImplementation(() => {
+      throw closeErr;
+    });
+
+    expect(() => withLock("/tmp/test.lock", () => "ok")).toThrow("EIO");
+    expect(mockUnlinkSync).toHaveBeenCalledWith("/tmp/test.lock");
+  });
+
   test("propagates non-EEXIST errors from open", () => {
     const eperm = Object.assign(new Error("EPERM"), { code: "EPERM" });
     mockOpenSync.mockImplementation(() => {

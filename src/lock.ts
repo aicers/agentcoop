@@ -36,8 +36,25 @@ function acquireLock(lockPath: string): void {
   for (;;) {
     try {
       const fd = openSync(lockPath, "wx");
-      writeFileSync(fd, String(process.pid));
-      closeSync(fd);
+      try {
+        writeFileSync(fd, String(process.pid));
+      } catch (writeErr) {
+        try {
+          closeSync(fd);
+        } catch {}
+        try {
+          unlinkSync(lockPath);
+        } catch {}
+        throw writeErr;
+      }
+      try {
+        closeSync(fd);
+      } catch (closeErr) {
+        try {
+          unlinkSync(lockPath);
+        } catch {}
+        throw closeErr;
+      }
       return;
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
