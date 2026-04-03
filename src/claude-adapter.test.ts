@@ -292,7 +292,7 @@ describe("ClaudeStreamTransformer", () => {
       "",
     ].join("\n");
 
-    expect(t.push(chunk)).toBe("Hello world");
+    expect(t.push(chunk)).toBe("Hello world\n");
   });
 
   test("concatenates multiple text blocks in one assistant event", () => {
@@ -313,7 +313,7 @@ describe("ClaudeStreamTransformer", () => {
       "",
     ].join("\n");
 
-    expect(t.push(chunk)).toBe("Part 1. Part 2.");
+    expect(t.push(chunk)).toBe("Part 1. Part 2.\n");
   });
 
   test("ignores non-assistant events", () => {
@@ -365,7 +365,7 @@ describe("ClaudeStreamTransformer", () => {
     expect(t.push(half)).toBe("");
 
     // Send second half with newline
-    expect(t.push(`${line.slice(20)}\n`)).toBe("Hi");
+    expect(t.push(`${line.slice(20)}\n`)).toBe("Hi\n");
   });
 
   test("flush emits buffered content", () => {
@@ -377,12 +377,40 @@ describe("ClaudeStreamTransformer", () => {
     });
 
     t.push(line); // no trailing newline, stays in buffer
-    expect(t.flush()).toBe("end");
+    expect(t.flush()).toBe("end\n");
   });
 
   test("flush returns empty string when buffer is empty", () => {
     const t = new ClaudeStreamTransformer();
     expect(t.flush()).toBe("");
+  });
+
+  test("flushed final event followed by new streamed event stays separated", () => {
+    const t = new ClaudeStreamTransformer();
+    const event1 = JSON.stringify({
+      type: "assistant",
+      session_id: "s1",
+      message: { content: [{ type: "text", text: "First run done." }] },
+    });
+    const event2 = JSON.stringify({
+      type: "assistant",
+      session_id: "s1",
+      message: {
+        content: [{ type: "text", text: "Second run starting." }],
+      },
+    });
+
+    // First event sits in buffer (no trailing newline), then flushed
+    t.push(event1);
+    const flushed = t.flush();
+    expect(flushed).toBe("First run done.\n");
+
+    // Second event arrives as a new stream
+    const pushed = t.push(`${event2}\n`);
+    expect(pushed).toBe("Second run starting.\n");
+
+    // Concatenating the two should have a clear separator
+    expect(flushed + pushed).toBe("First run done.\nSecond run starting.\n");
   });
 
   test("handles JSON split mid-character across multiple pushes", () => {
@@ -396,7 +424,7 @@ describe("ClaudeStreamTransformer", () => {
     const parts = [line.slice(0, 5), line.slice(5, 30), `${line.slice(30)}\n`];
     expect(t.push(parts[0])).toBe("");
     expect(t.push(parts[1])).toBe("");
-    expect(t.push(parts[2])).toBe("split");
+    expect(t.push(parts[2])).toBe("split\n");
   });
 
   test("handles multiple assistant events in a single push", () => {
@@ -420,7 +448,7 @@ describe("ClaudeStreamTransformer", () => {
       "",
     ].join("\n");
 
-    expect(t.push(events)).toBe("Turn 1Turn 2");
+    expect(t.push(events)).toBe("Turn 1\nTurn 2\n");
   });
 
   test("handles assistant event with empty content array", () => {
