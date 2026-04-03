@@ -20,6 +20,7 @@ import {
 } from "./ci.js";
 import { type CiPollResult, pollCiAndFix } from "./ci-poll.js";
 import { t } from "./i18n/index.js";
+import { buildPrSyncInstructions } from "./issue-sync.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
   invokeOrResume,
@@ -77,12 +78,13 @@ export function buildSquashPrompt(
     ``,
     `## Instructions`,
     ``,
-    `1. Squash all commits on this branch into a single commit.  Use an`,
+    `1. ${buildPrSyncInstructions(ctx.issueNumber)}`,
+    `2. Squash all commits on this branch into a single commit.  Use an`,
     `   interactive rebase or reset-based approach — whichever is simpler.`,
-    `2. Write a clear, concise commit message that summarises all changes`,
+    `3. Write a clear, concise commit message that summarises all changes`,
     `   made for this issue.  Reference the issue number`,
     `   (e.g. "Implement widget rendering (#42)").`,
-    `3. Force-push the branch (\`git push --force-with-lease\`).`,
+    `4. Force-push the branch (\`git push --force-with-lease\`).`,
   ];
 
   if (ctx.userInstruction) {

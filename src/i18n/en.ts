@@ -189,6 +189,17 @@ export const en: Messages = {
   "stageError.agentError": (context, detail) =>
     `Agent error${context}: ${detail}`,
 
+  // ---- issue sync ---------------------------------------------------------
+
+  "issueSync.summaryHeader": (issueNumber) => `Issue #${issueNumber}:`,
+  "issueSync.summaryMinor": (description) =>
+    `  - Updated (minor): ${description}`,
+  "issueSync.summaryMajor": (description) =>
+    `  - Comment added (major): ${description}`,
+  "issueSync.summaryNoChanges": "  - No changes",
+  "issueSync.summarySkipped": "  - Sync skipped",
+  "issueSync.summaryFailed": "  - Sync failed",
+
   // ---- worktree errors ---------------------------------------------------
 
   "worktree.alreadyExists": (path) =>

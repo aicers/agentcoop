@@ -110,6 +110,12 @@ describe("buildSquashPrompt", () => {
     expect(prompt).toContain("Force-push the branch");
   });
 
+  test("includes PR description sync instructions", () => {
+    const prompt = buildSquashPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("gh pr view");
+    expect(prompt).toContain("gh pr edit");
+  });
+
   test("includes user instruction when present", () => {
     const ctx = { ...BASE_CTX, userInstruction: "Keep merge commits" };
     const prompt = buildSquashPrompt(ctx, makeOpts());

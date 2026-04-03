@@ -11,6 +11,11 @@ import type { PipelineSettings } from "./config.js";
 import { loadConfig } from "./config.js";
 import { getGitHubUsername, getIssue } from "./github.js";
 import { initI18n, t } from "./i18n/index.js";
+import {
+  formatIssueSyncSummary,
+  type IssueChange,
+  type IssueSyncStatus,
+} from "./issue-sync.js";
 import type {
   PipelineOptions,
   PipelineResult,
@@ -164,7 +169,7 @@ try {
   const { owner, repo, issueNumber } = target;
 
   // Phase 2: check for resumable state and collect run parameters.
-  const savedState = loadRunState(owner, repo, issueNumber);
+  let savedState = loadRunState(owner, repo, issueNumber);
   let params: RunParams;
   let userChoseFresh = false;
 
@@ -219,6 +224,10 @@ try {
         }
       }
       deleteRunState(owner, repo, issueNumber);
+      // Clear the in-memory reference so downstream code does not
+      // hydrate stale issue-sync state (or any other fields) from a
+      // previous run into the fresh pipeline.
+      savedState = undefined;
       userChoseFresh = true;
     }
   }
@@ -314,6 +323,9 @@ try {
   );
 
   const issueCtx = { issueTitle, issueBody };
+  const issueChanges: IssueChange[] = [...(savedState?.issueChanges ?? [])];
+  let issueSyncStatus: IssueSyncStatus =
+    savedState?.issueSyncStatus ?? "skipped";
 
   const implementStage = createImplementStageHandler({
     agent: agentA,
@@ -324,6 +336,16 @@ try {
     ...createSelfCheckStageHandler({
       agent: agentA,
       ...issueCtx,
+      onIssueChange: (change) => {
+        issueChanges.push(change);
+        runState.issueChanges = [...issueChanges];
+        saveRunState(runState);
+      },
+      onIssueSyncStatus: (status) => {
+        issueSyncStatus = status;
+        runState.issueSyncStatus = status;
+        saveRunState(runState);
+      },
     }),
     autoBudget: pipelineSettings.selfCheckAutoIterations,
   };
@@ -389,6 +411,8 @@ try {
       effortLevel: agentBConfig.effortLevel,
       sessionId: undefined,
     },
+    issueSyncStatus: "skipped",
+    issueChanges: [],
   };
 
   // Save initial state.
@@ -487,6 +511,15 @@ try {
 
   console.log();
   console.log(pipelineResult.message);
+
+  console.log();
+  for (const line of formatIssueSyncSummary(
+    issueNumber,
+    issueChanges,
+    issueSyncStatus,
+  )) {
+    console.log(line);
+  }
 
   if (pipelineResult.success) {
     deleteRunState(owner, repo, issueNumber);

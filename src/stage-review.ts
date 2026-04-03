@@ -27,6 +27,7 @@ import {
 } from "./ci.js";
 import { pollCiAndFix } from "./ci-poll.js";
 import { t } from "./i18n/index.js";
+import { buildPrSyncInstructions } from "./issue-sync.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
   drainToSink,
@@ -145,7 +146,8 @@ export function buildAuthorFixPrompt(
     `3. Fix all agreed-upon items from the review.`,
     `4. Post a response as a PR comment prefixed with`,
     `   \`**[Author Round ${round}]**\` summarising what you changed.`,
-    `5. Commit and push your changes so a new CI run is triggered.`,
+    `5. ${buildPrSyncInstructions(ctx.issueNumber)}`,
+    `6. Commit and push your changes so a new CI run is triggered.`,
   ];
 
   return lines.join("\n");

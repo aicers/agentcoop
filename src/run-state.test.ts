@@ -48,6 +48,8 @@ function makeRunState(overrides: Partial<RunState> = {}): RunState {
       effortLevel: undefined,
       sessionId: undefined,
     },
+    issueSyncStatus: "skipped",
+    issueChanges: [],
     ...overrides,
   };
 }
@@ -324,5 +326,104 @@ describe("resume preserves contextWindow and effortLevel", () => {
     expect(loaded?.agentA.effortLevel).toBeUndefined();
     expect(loaded?.agentB.contextWindow).toBeUndefined();
     expect(loaded?.agentB.effortLevel).toBeUndefined();
+  });
+});
+
+describe("start-fresh clears issue sync state", () => {
+  test("loadRunState returns undefined after deleteRunState so stale sync data is not hydrated", () => {
+    const state = makeRunState({
+      issueSyncStatus: "completed",
+      issueChanges: [
+        { type: "minor", description: "corrected file path" },
+        { type: "major", description: "scope expanded to include API" },
+      ],
+    });
+    saveRunState(state);
+    expect(loadRunState("org", "repo", 42)).toBeDefined();
+
+    // Simulate "Start fresh" path: delete on disk, then verify
+    // the hydration pattern from index.ts yields clean defaults.
+    deleteRunState("org", "repo", 42);
+    const afterFresh = loadRunState("org", "repo", 42);
+    expect(afterFresh).toBeUndefined();
+
+    // This mirrors the hydration in index.ts (lines 322-324):
+    //   const issueChanges = [...(savedState?.issueChanges ?? [])];
+    //   let issueSyncStatus = savedState?.issueSyncStatus ?? "skipped";
+    const issueChanges = [...(afterFresh?.issueChanges ?? [])];
+    const issueSyncStatus = afterFresh?.issueSyncStatus ?? "skipped";
+    expect(issueChanges).toEqual([]);
+    expect(issueSyncStatus).toBe("skipped");
+  });
+});
+
+describe("resume preserves issue sync state", () => {
+  test("round-trips issueSyncStatus and issueChanges", () => {
+    const state = makeRunState({
+      currentStage: 5,
+      issueSyncStatus: "completed",
+      issueChanges: [
+        { type: "minor", description: "corrected file path" },
+        { type: "major", description: "scope expanded to include API" },
+      ],
+    });
+    saveRunState(state);
+    const loaded = loadRunState("org", "repo", 42);
+
+    expect(loaded?.issueSyncStatus).toBe("completed");
+    expect(loaded?.issueChanges).toEqual([
+      { type: "minor", description: "corrected file path" },
+      { type: "major", description: "scope expanded to include API" },
+    ]);
+  });
+
+  test("round-trips completed status with empty changes", () => {
+    const state = makeRunState({
+      currentStage: 5,
+      issueSyncStatus: "completed",
+      issueChanges: [],
+    });
+    saveRunState(state);
+    const loaded = loadRunState("org", "repo", 42);
+
+    expect(loaded?.issueSyncStatus).toBe("completed");
+    expect(loaded?.issueChanges).toEqual([]);
+  });
+
+  test("round-trips failed status", () => {
+    const state = makeRunState({
+      currentStage: 5,
+      issueSyncStatus: "failed",
+      issueChanges: [],
+    });
+    saveRunState(state);
+    const loaded = loadRunState("org", "repo", 42);
+
+    expect(loaded?.issueSyncStatus).toBe("failed");
+  });
+
+  test("defaults to skipped and empty changes for old state files", () => {
+    // Simulate a state file written before issue sync fields existed.
+    const { issueSyncStatus: _, issueChanges: __, ...raw } = makeRunState();
+    const path = runStatePath("org", "repo", 42);
+    mkdirSync(join(tmpHome, ".agentcoop", "runs", "org", "repo"), {
+      recursive: true,
+    });
+    writeFileSync(path, JSON.stringify(raw));
+    const loaded = loadRunState("org", "repo", 42);
+
+    expect(loaded).toBeDefined();
+    expect(loaded?.issueSyncStatus).toBe("skipped");
+    expect(loaded?.issueChanges).toEqual([]);
+  });
+
+  test("rejects invalid issueSyncStatus value", () => {
+    const raw = { ...makeRunState(), issueSyncStatus: "unknown" };
+    const path = runStatePath("org", "repo", 42);
+    mkdirSync(join(tmpHome, ".agentcoop", "runs", "org", "repo"), {
+      recursive: true,
+    });
+    writeFileSync(path, JSON.stringify(raw));
+    expect(loadRunState("org", "repo", 42)).toBeUndefined();
   });
 });

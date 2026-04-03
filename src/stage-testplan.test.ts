@@ -92,6 +92,13 @@ describe("buildTestPlanVerifyPrompt", () => {
     expect(prompt).toContain("commit and push");
   });
 
+  test("includes PR sync instructions before pushing", () => {
+    const prompt = buildTestPlanVerifyPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("gh pr view");
+    expect(prompt).toContain("gh pr edit");
+    expect(prompt).toContain("#42");
+  });
+
   test("includes user instruction when present", () => {
     const ctx = { ...BASE_CTX, userInstruction: "Skip flaky tests" };
     const prompt = buildTestPlanVerifyPrompt(ctx, makeOpts());
