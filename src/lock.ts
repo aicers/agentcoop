@@ -2,8 +2,10 @@
  * File-based locking for serialising access to shared bare repos.
  *
  * Uses atomic `open(…, "wx")` (O_CREAT | O_EXCL) to create a lock file
- * and writes the owning PID so stale locks from crashed processes can be
- * detected and removed automatically.
+ * and writes `pid:timestamp` so stale locks from crashed processes can be
+ * detected and removed automatically.  The structured format ensures that
+ * a partially written (truncated) lock file is never mistaken for a valid
+ * owner.
  */
 
 import {
@@ -37,7 +39,7 @@ function acquireLock(lockPath: string): void {
     try {
       const fd = openSync(lockPath, "wx");
       try {
-        writeFileSync(fd, String(process.pid));
+        writeFileSync(fd, `${process.pid}:${Date.now()}`);
       } catch (writeErr) {
         try {
           closeSync(fd);
@@ -60,9 +62,12 @@ function acquireLock(lockPath: string): void {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
 
       // Check for stale lock left by a crashed process.
+      // Lock format is "pid:timestamp"; anything else is treated as
+      // stale (e.g. truncated writes from a killed process).
       try {
         const raw = readFileSync(lockPath, "utf-8").trim();
-        const pid = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+        const match = /^(\d+):(\d+)$/.exec(raw);
+        const pid = match ? Number(match[1]) : Number.NaN;
         if (Number.isNaN(pid) || !isProcessAlive(pid)) {
           try {
             unlinkSync(lockPath);

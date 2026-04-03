@@ -56,7 +56,10 @@ describe("withLock", () => {
     expect(result).toBe("result");
     expect(mockMkdirSync).toHaveBeenCalledWith("/tmp", { recursive: true });
     expect(mockOpenSync).toHaveBeenCalledWith("/tmp/test.lock", "wx");
-    expect(mockWriteFileSync).toHaveBeenCalledWith(42, String(process.pid));
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      42,
+      expect.stringMatching(new RegExp(`^${process.pid}:\\d+$`)),
+    );
     expect(mockCloseSync).toHaveBeenCalledWith(42);
     expect(fn).toHaveBeenCalledTimes(1);
     expect(mockUnlinkSync).toHaveBeenCalledWith("/tmp/test.lock");
@@ -81,8 +84,8 @@ describe("withLock", () => {
         throw eexist;
       })
       .mockReturnValue(42 as never);
-    // Stale lock: PID that is not alive
-    mockReadFileSync.mockReturnValue("999999999" as never);
+    // Stale lock: PID that is not alive, in pid:timestamp format
+    mockReadFileSync.mockReturnValue("999999999:1700000000000" as never);
 
     // Mock process.kill to indicate process is not alive
     const origKill = process.kill;
@@ -162,6 +165,22 @@ describe("withLock", () => {
       .mockReturnValue(42 as never);
     // Truncated PID — e.g. original was "12345" but only "12" was written
     mockReadFileSync.mockReturnValue("12garbage" as never);
+
+    const result = withLock("/tmp/test.lock", () => "ok");
+    expect(result).toBe("ok");
+    expect(mockUnlinkSync).toHaveBeenCalled();
+  });
+
+  test("treats pure-digit truncated PID as stale and retries", () => {
+    const eexist = Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+    mockOpenSync
+      .mockImplementationOnce(() => {
+        throw eexist;
+      })
+      .mockReturnValue(42 as never);
+    // Pure-digit truncation — e.g. original was "12345:1700000000000"
+    // but only "12345" was written before the process was killed.
+    mockReadFileSync.mockReturnValue("12345" as never);
 
     const result = withLock("/tmp/test.lock", () => "ok");
     expect(result).toBe("ok");
