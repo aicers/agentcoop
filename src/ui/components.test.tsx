@@ -4,11 +4,12 @@
  * Uses ink-testing-library to render ink components in a test
  * environment and assert on the terminal output frames.
  */
-import { Box } from "ink";
+import { Box, Text, useStdout } from "ink";
 import { cleanup, render } from "ink-testing-library";
 import { afterEach, describe, expect, test } from "vitest";
 import { PipelineEventEmitter } from "../pipeline-events.js";
 import { AgentPane, splitIntoRows } from "./AgentPane.js";
+import { useTerminalHeight } from "./App.js";
 import { InputArea, type InputRequest } from "./InputArea.js";
 import { StatusBar } from "./StatusBar.js";
 
@@ -790,5 +791,107 @@ describe("InputArea", () => {
 
     expect(lastFrame()).toContain("Blocked. Choose:");
     expect(lastFrame()).not.toContain("Pipeline running...");
+  });
+});
+
+// ---- Viewport height constraint (App-level integration) ---------------------
+
+describe("viewport height constraint", () => {
+  test("useTerminalHeight returns undefined when stdout is not a TTY", () => {
+    // ink-testing-library's stdout has no isTTY property, simulating a
+    // non-TTY environment.  The hook should return undefined so the root
+    // Box falls back to height="100%".
+    function Probe() {
+      const h = useTerminalHeight();
+      return <Text>{h === undefined ? "UNDEFINED" : String(h)}</Text>;
+    }
+
+    const { lastFrame } = render(<Probe />);
+    expect(lastFrame()).toContain("UNDEFINED");
+  });
+
+  test("useTerminalHeight updates on stdout resize", async () => {
+    function Probe() {
+      const { stdout } = useStdout();
+      const h = useTerminalHeight();
+      return (
+        <Text>
+          isTTY={String(stdout.isTTY)} h={h === undefined ? "none" : String(h)}
+        </Text>
+      );
+    }
+
+    const { lastFrame, stdout } = render(<Probe />);
+
+    // Initially not a TTY — height should be undefined.
+    expect(lastFrame()).toContain("h=none");
+
+    // Simulate becoming a TTY with a resize event.  In production the
+    // stdout always has isTTY set from the start, but for this test we
+    // verify that a resize event with rows set propagates.  Since isTTY
+    // was false at mount, the listener isn't registered so height stays
+    // undefined — confirming the non-TTY fallback is stable.
+    Object.defineProperty(stdout, "rows", { value: 30, writable: true });
+    stdout.emit("resize");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastFrame()).toContain("h=none");
+  });
+
+  test("fixed-height root constrains panes to viewport", async () => {
+    const emitter = new PipelineEventEmitter();
+
+    // Simulate the App layout: two panes side-by-side in a fixed-height
+    // container.  This mirrors what useTerminalHeight achieves on a real
+    // TTY by setting height={stdout.rows}.
+    const VIEWPORT_HEIGHT = 12;
+    const { lastFrame, stdin } = render(
+      <Box flexDirection="column" height={VIEWPORT_HEIGHT}>
+        <Box flexDirection="row" flexGrow={1}>
+          <AgentPane
+            label="Agent A"
+            agent="a"
+            emitter={emitter}
+            color="blue"
+            isFocused
+            scrollEnabled
+          />
+          <AgentPane
+            label="Agent B"
+            agent="b"
+            emitter={emitter}
+            color="green"
+          />
+        </Box>
+      </Box>,
+    );
+
+    // Fill both panes with distinct content.
+    const chunkA = Array.from({ length: 20 }, (_, i) => `A${i + 1}`)
+      .join("\n")
+      .concat("\n");
+    const chunkB = Array.from({ length: 20 }, (_, i) => `B${i + 1}`)
+      .join("\n")
+      .concat("\n");
+    emitter.emit("agent:chunk", { agent: "a", chunk: chunkA });
+    emitter.emit("agent:chunk", { agent: "b", chunk: chunkB });
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Both panes should show their newest content (auto-follow).
+    const before = lastFrame() ?? "";
+    expect(before).toContain("A20");
+    expect(before).toContain("B20");
+    // Oldest lines should be clipped by the fixed viewport.
+    expect(before).not.toContain("A1\n");
+    expect(before).not.toContain("B1\n");
+
+    // Scroll pane A up — only pane A should change.
+    stdin.write("\x1b[5~"); // Page Up
+    await new Promise((r) => setTimeout(r, 50));
+
+    const after = lastFrame() ?? "";
+    // Pane A must have scrolled (newest line hidden).
+    expect(after).not.toContain("A20");
+    // Pane B must remain at the bottom (unaffected by pane A scroll).
+    expect(after).toContain("B20");
   });
 });

@@ -1,4 +1,4 @@
-import { Box, useInput } from "ink";
+import { Box, useInput, useStdout } from "ink";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { t } from "../i18n/index.js";
 import type {
@@ -12,6 +12,26 @@ import { AgentPane } from "./AgentPane.js";
 import { InputArea, type InputRequest } from "./InputArea.js";
 import { StatusBar } from "./StatusBar.js";
 import { createTuiUserPrompt } from "./TuiUserPrompt.js";
+
+/** Read terminal height from stdout.rows, re-rendering on resize. */
+export function useTerminalHeight(): number | undefined {
+  const { stdout } = useStdout();
+  const isTTY = stdout.isTTY === true;
+  const [height, setHeight] = useState<number | undefined>(
+    isTTY ? stdout.rows : undefined,
+  );
+
+  useEffect(() => {
+    if (!isTTY) return;
+    const onResize = () => setHeight(stdout.rows);
+    stdout.on("resize", onResize);
+    return () => {
+      stdout.off("resize", onResize);
+    };
+  }, [stdout, isTTY]);
+
+  return height;
+}
 
 export interface AppProps {
   emitter: PipelineEventEmitter;
@@ -33,6 +53,7 @@ export function App({
   modelNameA,
   modelNameB,
 }: AppProps) {
+  const terminalHeight = useTerminalHeight();
   const [inputRequest, setInputRequest] = useState<InputRequest | null>(null);
   const resolveRef = useRef<((value: string) => void) | null>(null);
   const [focusedPane, setFocusedPane] = useState<"a" | "b">("a");
@@ -88,7 +109,7 @@ export function App({
   }, [dispatch]);
 
   return (
-    <Box flexDirection="column" width="100%" height="100%">
+    <Box flexDirection="column" width="100%" height={terminalHeight ?? "100%"}>
       {/* Top row: two agent panes side by side */}
       <Box flexDirection="row" flexGrow={1}>
         <AgentPane
