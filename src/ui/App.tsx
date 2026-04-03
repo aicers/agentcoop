@@ -75,13 +75,13 @@ export function App({
       {/* Top row: two agent panes side by side */}
       <Box flexDirection="row" flexGrow={1}>
         <AgentPane
-          label={t()["agent.labelA"]}
+          label={t()["agent.labelARole"]}
           agent="a"
           emitter={emitter}
           color="blue"
         />
         <AgentPane
-          label={t()["agent.labelB"]}
+          label={t()["agent.labelBRole"]}
           agent="b"
           emitter={emitter}
           color="green"
