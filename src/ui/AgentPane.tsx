@@ -1,4 +1,4 @@
-import { Box, type DOMElement, measureElement, Text } from "ink";
+import { Box, type DOMElement, measureElement, Text, useInput } from "ink";
 import { useEffect, useRef, useState } from "react";
 import { t } from "../i18n/index.js";
 import type {
@@ -14,12 +14,34 @@ import {
 /** Stage number at which Agent B becomes active. */
 const REVIEW_STAGE = 7;
 
+/** Split a logical line into terminal rows of the given width. */
+function splitIntoRows(line: string, width: number): string[] {
+  if (line.length <= width) return [line];
+  const rows: string[] = [];
+  for (let i = 0; i < line.length; i += width) {
+    rows.push(line.slice(i, i + width));
+  }
+  return rows;
+}
+
+/** A single terminal row tagged with display metadata. */
+interface RowEntry {
+  text: string;
+  isPrompt: boolean;
+  /** Index of the parent logical line in allLines. */
+  lineIdx: number;
+}
+
 interface AgentPaneProps {
   label: string;
   modelName?: string;
   agent: "a" | "b";
   emitter: PipelineEventEmitter;
   color: string;
+  /** Whether this pane currently has keyboard focus for scrolling. */
+  isFocused?: boolean;
+  /** Whether scroll keyboard shortcuts are active (false when input area is active). */
+  scrollEnabled?: boolean;
 }
 
 export function AgentPane({
@@ -28,12 +50,16 @@ export function AgentPane({
   agent,
   emitter,
   color,
+  isFocused = false,
+  scrollEnabled = false,
 }: AgentPaneProps) {
   const { lines, pendingLine } = useAgentLines(emitter, agent);
   const containerRef = useRef<DOMElement>(null);
   const [visibleRows, setVisibleRows] = useState(20);
   const [contentWidth, setContentWidth] = useState(80);
   const [currentStage, setCurrentStage] = useState<number | null>(null);
+  const [scrollOffset, setScrollOffset] = useState(0);
+  const prevTotalRowsRef = useRef(0);
 
   // Track the current pipeline stage for idle status display.
   useEffect(() => {
@@ -60,32 +86,92 @@ export function AgentPane({
 
   const allLines = pendingLine ? [...lines, pendingLine] : lines;
 
-  // Tail by rendered rows, not logical lines. Each logical line may
-  // wrap into multiple terminal rows when wrap="wrap" is active.
-  let visible: string[];
-  if (visibleRows === 0) {
-    visible = [];
-  } else {
-    let rowBudget = visibleRows;
-    let startIdx = allLines.length;
-    while (startIdx > 0 && rowBudget > 0) {
-      startIdx--;
-      const lineRows = Math.max(
-        1,
-        Math.ceil(allLines[startIdx].length / contentWidth),
-      );
-      rowBudget -= lineRows;
+  // Build a flat array of terminal rows from logical lines so that
+  // scrolling operates at the row level, correctly handling wrapped
+  // lines that span multiple terminal rows.
+  const allRows: RowEntry[] = [];
+  for (let i = 0; i < allLines.length; i++) {
+    const line = allLines[i];
+    const isPrompt =
+      line.startsWith(PROMPT_LINE_PREFIX) ||
+      line.startsWith(PROMPT_SEPARATOR_CHAR);
+    for (const row of splitIntoRows(line, contentWidth)) {
+      allRows.push({ text: row, isPrompt, lineIdx: i });
     }
-    // If the first included line overflows the budget, still include it
-    // (Ink will clip the top via overflow="hidden", showing the tail).
-    if (startIdx < 0) startIdx = 0;
-    visible = allLines.slice(startIdx);
+  }
+
+  const totalRows = allRows.length;
+  const maxOffset = Math.max(0, totalRows - visibleRows);
+  const effectiveOffset = Math.min(scrollOffset, maxOffset);
+
+  // Auto-adjust scrollOffset when total rows grow (new completed lines
+  // or pendingLine wrapping further) to keep the viewport stable while
+  // the user is scrolled up.
+  useEffect(() => {
+    const prev = prevTotalRowsRef.current;
+    prevTotalRowsRef.current = totalRows;
+    if (totalRows > prev && prev > 0) {
+      setScrollOffset((o) => (o > 0 ? o + (totalRows - prev) : 0));
+    }
+  }, [totalRows]);
+
+  // Clamp scrollOffset when it exceeds the valid range (e.g. after
+  // the pane is resized or the user over-scrolls with Page Up).
+  useEffect(() => {
+    if (scrollOffset > 0 && scrollOffset > maxOffset) {
+      setScrollOffset(Math.max(0, maxOffset));
+    }
+  }, [scrollOffset, maxOffset]);
+
+  // Handle scroll keyboard input.
+  useInput(
+    (_input, key) => {
+      if (key.pageUp) {
+        setScrollOffset((o) => o + visibleRows);
+      } else if (key.pageDown) {
+        setScrollOffset((o) => Math.max(0, o - visibleRows));
+      } else if (key.upArrow) {
+        setScrollOffset((o) => o + 1);
+      } else if (key.downArrow) {
+        setScrollOffset((o) => Math.max(0, o - 1));
+      }
+    },
+    { isActive: isFocused && scrollEnabled },
+  );
+
+  // Compute the visible window from the flat row array.
+  let visibleRowEntries: RowEntry[];
+  let linesAbove = 0;
+
+  if (visibleRows === 0) {
+    visibleRowEntries = [];
+  } else if (effectiveOffset === 0) {
+    // Bottom-pinned (auto-follow).
+    const startRow = Math.max(0, totalRows - visibleRows);
+    visibleRowEntries = allRows.slice(startRow);
+    linesAbove = startRow > 0 ? allRows[startRow].lineIdx : 0;
+  } else {
+    // Scrolled up: row-level window.
+    const endRow = totalRows - effectiveOffset;
+
+    // First pass: fill the viewport without the indicator.
+    let startRow = Math.max(0, endRow - visibleRows);
+    linesAbove = startRow > 0 ? allRows[startRow].lineIdx : 0;
+
+    // If there are logical lines fully above the viewport the scroll
+    // indicator will be rendered, so reclaim 1 row for it.
+    if (linesAbove > 0) {
+      startRow = Math.max(0, endRow - (visibleRows - 1));
+      linesAbove = allRows[startRow].lineIdx;
+    }
+
+    visibleRowEntries = allRows.slice(startRow, endRow);
   }
 
   const hasOutput = allLines.length > 0;
 
   let placeholder: string | undefined;
-  if (visible.length === 0) {
+  if (visibleRowEntries.length === 0 && effectiveOffset === 0) {
     const m = t();
     if (hasOutput) {
       placeholder = m["agentPane.tooSmall"];
@@ -100,6 +186,14 @@ export function AgentPane({
     }
   }
 
+  const scrollIndicator =
+    effectiveOffset > 0 && linesAbove > 0
+      ? t()["agentPane.linesAbove"](linesAbove)
+      : undefined;
+
+  // Dim unfocused pane border when scroll mode is available.
+  const borderCol = scrollEnabled ? (isFocused ? color : "gray") : color;
+
   return (
     <Box
       ref={containerRef}
@@ -107,27 +201,25 @@ export function AgentPane({
       flexGrow={1}
       flexBasis={0}
       borderStyle="single"
-      borderColor={color}
+      borderColor={borderCol}
       paddingX={1}
       overflow="hidden"
     >
-      <Text bold color={color}>
+      <Text bold color={borderCol}>
         {modelName ? `${label} \u2014 ${modelName}` : label}
       </Text>
       {placeholder !== undefined ? (
         <Text dimColor>{placeholder}</Text>
       ) : (
-        visible.map((line, i) => {
-          const isPromptLine =
-            line.startsWith(PROMPT_LINE_PREFIX) ||
-            line.startsWith(PROMPT_SEPARATOR_CHAR);
-          return (
-            // biome-ignore lint/suspicious/noArrayIndexKey: lines are plain strings without stable IDs
-            <Text key={i} wrap="wrap" dimColor={isPromptLine}>
-              {line}
+        <>
+          {scrollIndicator && <Text dimColor>{scrollIndicator}</Text>}
+          {visibleRowEntries.map((row, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: rows are derived without stable IDs
+            <Text key={i} dimColor={row.isPrompt}>
+              {row.text}
             </Text>
-          );
-        })
+          ))}
+        </>
       )}
     </Box>
   );
