@@ -126,8 +126,22 @@ function formatStateSummary(state: RunState): string {
   }
   lines.push(
     m["resume.mode"](state.executionMode),
-    m["resume.agentA"](`${state.agentA.cli}/${state.agentA.model}`),
-    m["resume.agentB"](`${state.agentB.cli}/${state.agentB.model}`),
+    m["resume.agentA"](
+      modelDisplayName({
+        cli: state.agentA.cli as "claude" | "codex",
+        model: state.agentA.model,
+        contextWindow: state.agentA.contextWindow,
+        effortLevel: state.agentA.effortLevel,
+      }),
+    ),
+    m["resume.agentB"](
+      modelDisplayName({
+        cli: state.agentB.cli as "claude" | "codex",
+        model: state.agentB.model,
+        contextWindow: state.agentB.contextWindow,
+        effortLevel: state.agentB.effortLevel,
+      }),
+    ),
   );
   return lines.join("\n");
 }
@@ -173,10 +187,14 @@ try {
         agentAConfig: {
           cli: savedState.agentA.cli as "claude" | "codex",
           model: savedState.agentA.model,
+          contextWindow: savedState.agentA.contextWindow,
+          effortLevel: savedState.agentA.effortLevel,
         },
         agentBConfig: {
           cli: savedState.agentB.cli as "claude" | "codex",
           model: savedState.agentB.model,
+          contextWindow: savedState.agentB.contextWindow,
+          effortLevel: savedState.agentB.effortLevel,
         },
         executionMode: savedState.executionMode,
         claudePermissionMode: savedState.claudePermissionMode,
@@ -358,11 +376,15 @@ try {
     agentA: {
       cli: agentAConfig.cli,
       model: agentAConfig.model,
+      contextWindow: agentAConfig.contextWindow,
+      effortLevel: agentAConfig.effortLevel,
       sessionId: undefined,
     },
     agentB: {
       cli: agentBConfig.cli,
       model: agentBConfig.model,
+      contextWindow: agentBConfig.contextWindow,
+      effortLevel: agentBConfig.effortLevel,
       sessionId: undefined,
     },
   };

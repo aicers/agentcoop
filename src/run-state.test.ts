@@ -28,8 +28,20 @@ function makeRunState(overrides: Partial<RunState> = {}): RunState {
     reviewRound: 0,
     executionMode: "auto",
     claudePermissionMode: "auto",
-    agentA: { cli: "claude", model: "opus", sessionId: "sess-a" },
-    agentB: { cli: "claude", model: "sonnet", sessionId: undefined },
+    agentA: {
+      cli: "claude",
+      model: "opus",
+      contextWindow: undefined,
+      effortLevel: undefined,
+      sessionId: "sess-a",
+    },
+    agentB: {
+      cli: "claude",
+      model: "sonnet",
+      contextWindow: undefined,
+      effortLevel: undefined,
+      sessionId: undefined,
+    },
     ...overrides,
   };
 }
@@ -79,8 +91,20 @@ describe("saveRunState / loadRunState round-trip", () => {
 
   test("preserves agent sessionIds", () => {
     const state = makeRunState({
-      agentA: { cli: "claude", model: "opus", sessionId: "abc-123" },
-      agentB: { cli: "codex", model: "gpt-5.4", sessionId: undefined },
+      agentA: {
+        cli: "claude",
+        model: "opus",
+        contextWindow: "1m",
+        effortLevel: "high",
+        sessionId: "abc-123",
+      },
+      agentB: {
+        cli: "codex",
+        model: "gpt-5.4",
+        contextWindow: undefined,
+        effortLevel: "xhigh",
+        sessionId: undefined,
+      },
     });
     saveRunState(state);
     const loaded = loadRunState("org", "repo", 42);
@@ -154,7 +178,13 @@ describe("loadRunState — missing / malformed", () => {
   test("normalises null sessionId to undefined", () => {
     const raw = {
       ...makeRunState(),
-      agentA: { cli: "claude", model: "opus", sessionId: null },
+      agentA: {
+        cli: "claude",
+        model: "opus",
+        contextWindow: null,
+        effortLevel: null,
+        sessionId: null,
+      },
     };
     const path = runStatePath("org", "repo", 42);
     mkdirSync(join(tmpHome, ".agentcoop", "runs", "org", "repo"), {
@@ -177,5 +207,76 @@ describe("deleteRunState", () => {
 
   test("does not throw when file does not exist", () => {
     expect(() => deleteRunState("org", "repo", 999)).not.toThrow();
+  });
+});
+
+describe("resume preserves contextWindow and effortLevel", () => {
+  test("round-trips contextWindow and effortLevel for both agents", () => {
+    const state = makeRunState({
+      agentA: {
+        cli: "claude",
+        model: "claude-opus-4-6",
+        contextWindow: "1m",
+        effortLevel: "high",
+        sessionId: "sess-a",
+      },
+      agentB: {
+        cli: "codex",
+        model: "gpt-5.4",
+        contextWindow: undefined,
+        effortLevel: "xhigh",
+        sessionId: undefined,
+      },
+    });
+    saveRunState(state);
+    const loaded = loadRunState("org", "repo", 42);
+
+    expect(loaded?.agentA.contextWindow).toBe("1m");
+    expect(loaded?.agentA.effortLevel).toBe("high");
+    expect(loaded?.agentB.contextWindow).toBeUndefined();
+    expect(loaded?.agentB.effortLevel).toBe("xhigh");
+  });
+
+  test("normalises null contextWindow and effortLevel to undefined", () => {
+    const raw = {
+      ...makeRunState(),
+      agentA: {
+        cli: "claude",
+        model: "opus",
+        contextWindow: null,
+        effortLevel: null,
+        sessionId: null,
+      },
+    };
+    const path = runStatePath("org", "repo", 42);
+    mkdirSync(join(tmpHome, ".agentcoop", "runs", "org", "repo"), {
+      recursive: true,
+    });
+    writeFileSync(path, JSON.stringify(raw));
+    const loaded = loadRunState("org", "repo", 42);
+
+    expect(loaded).toBeDefined();
+    expect(loaded?.agentA.contextWindow).toBeUndefined();
+    expect(loaded?.agentA.effortLevel).toBeUndefined();
+  });
+
+  test("loads state saved without contextWindow/effortLevel (backward compat)", () => {
+    const raw = {
+      ...makeRunState(),
+      agentA: { cli: "claude", model: "opus", sessionId: "s1" },
+      agentB: { cli: "codex", model: "gpt-5.4", sessionId: undefined },
+    };
+    const path = runStatePath("org", "repo", 42);
+    mkdirSync(join(tmpHome, ".agentcoop", "runs", "org", "repo"), {
+      recursive: true,
+    });
+    writeFileSync(path, JSON.stringify(raw));
+    const loaded = loadRunState("org", "repo", 42);
+
+    expect(loaded).toBeDefined();
+    expect(loaded?.agentA.contextWindow).toBeUndefined();
+    expect(loaded?.agentA.effortLevel).toBeUndefined();
+    expect(loaded?.agentB.contextWindow).toBeUndefined();
+    expect(loaded?.agentB.effortLevel).toBeUndefined();
   });
 });

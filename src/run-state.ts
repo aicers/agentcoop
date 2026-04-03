@@ -21,6 +21,8 @@ import { dirname, join } from "node:path";
 export interface AgentState {
   cli: string;
   model: string;
+  contextWindow: string | undefined;
+  effortLevel: string | undefined;
   sessionId: string | undefined;
 }
 
@@ -67,15 +69,19 @@ export function saveRunState(state: RunState): void {
   renameSync(tmp, path);
 }
 
+function isOptionalString(v: unknown): boolean {
+  return v === undefined || v === null || typeof v === "string";
+}
+
 function isValidAgentState(v: unknown): v is AgentState {
   if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
   const r = v as Record<string, unknown>;
   return (
     typeof r.cli === "string" &&
     typeof r.model === "string" &&
-    (r.sessionId === undefined ||
-      r.sessionId === null ||
-      typeof r.sessionId === "string")
+    isOptionalString(r.contextWindow) &&
+    isOptionalString(r.effortLevel) &&
+    isOptionalString(r.sessionId)
   );
 }
 
@@ -125,10 +131,14 @@ export function loadRunState(
     prNumber: raw.prNumber ?? undefined,
     agentA: {
       ...raw.agentA,
+      contextWindow: raw.agentA.contextWindow ?? undefined,
+      effortLevel: raw.agentA.effortLevel ?? undefined,
       sessionId: raw.agentA.sessionId ?? undefined,
     },
     agentB: {
       ...raw.agentB,
+      contextWindow: raw.agentB.contextWindow ?? undefined,
+      effortLevel: raw.agentB.effortLevel ?? undefined,
       sessionId: raw.agentB.sessionId ?? undefined,
     },
   };
