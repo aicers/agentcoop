@@ -288,12 +288,17 @@ describe("createWorktree", () => {
 
   test("reuses existing worktree", () => {
     mockExistsSync.mockReturnValue(true);
-    mockExecFileSync.mockReturnValue(""); // git status --porcelain (clean)
+    // First call: git status --porcelain (clean)
+    // Second call: git rev-parse --abbrev-ref HEAD
+    mockExecFileSync
+      .mockReturnValueOnce("" as never)
+      .mockReturnValueOnce("issue-5\n" as never);
     const result = createWorktree({ ...baseOpts, conflictChoice: "reuse" });
     expect(result.path).toBe(worktreePath("org", "repo", 5));
+    expect(result.branch).toBe("issue-5");
     expect(result.hadUncommittedChanges).toBe(false);
-    // Only hasUncommittedChanges call, no git worktree add.
-    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+    // hasUncommittedChanges + getCheckedOutBranch, no git worktree add.
+    expect(mockExecFileSync).toHaveBeenCalledTimes(2);
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "git",
       ["status", "--porcelain"],
@@ -303,7 +308,11 @@ describe("createWorktree", () => {
 
   test("reuse reports hadUncommittedChanges when dirty", () => {
     mockExistsSync.mockReturnValue(true);
-    mockExecFileSync.mockReturnValue(" M file.ts\n");
+    // First call: git status --porcelain (dirty)
+    // Second call: git rev-parse --abbrev-ref HEAD
+    mockExecFileSync
+      .mockReturnValueOnce(" M file.ts\n" as never)
+      .mockReturnValueOnce("issue-5\n" as never);
     const result = createWorktree({ ...baseOpts, conflictChoice: "reuse" });
     expect(result.hadUncommittedChanges).toBe(true);
   });
@@ -319,6 +328,12 @@ describe("createWorktree", () => {
     // First call: existsSync for the worktree path → true (conflict)
     // Second call: existsSync inside the new worktree add → false
     mockExistsSync.mockReturnValueOnce(true).mockReturnValue(false);
+    // Call sequence: git status, git rev-parse, git worktree remove,
+    // git branch -D, git worktree add
+    mockExecFileSync
+      .mockReturnValueOnce("" as never)
+      .mockReturnValueOnce("issue-5\n" as never)
+      .mockImplementation(() => "" as never);
     const result = createWorktree({ ...baseOpts, conflictChoice: "clean" });
 
     expect(result.path).toBe(worktreePath("org", "repo", 5));
@@ -339,7 +354,11 @@ describe("createWorktree", () => {
 
   test("clean continues even if worktree remove fails", () => {
     mockExistsSync.mockReturnValueOnce(true).mockReturnValue(false);
+    // Call sequence: git status (clean), git rev-parse → branch,
+    // git worktree remove (fails), rmSync, git branch -D, git worktree add
     mockExecFileSync
+      .mockReturnValueOnce("" as never) // git status
+      .mockReturnValueOnce("issue-5\n" as never) // git rev-parse
       .mockImplementationOnce(() => {
         throw new Error("worktree remove failed");
       })
@@ -410,6 +429,85 @@ describe("removeWorktree", () => {
 });
 
 // ---------------------------------------------------------------------------
+// createWorktree — legacy worktree reuse/clean
+// ---------------------------------------------------------------------------
+describe("createWorktree — legacy worktree branch detection", () => {
+  const baseOpts = {
+    owner: "org",
+    repo: "repo",
+    issueNumber: 5,
+    baseBranch: "main",
+  };
+
+  test("reuse returns actual checked-out branch, not requested branch", () => {
+    mockExistsSync.mockReturnValue(true);
+    // First call: git status --porcelain (clean)
+    // Second call: git rev-parse --abbrev-ref HEAD → legacy branch
+    mockExecFileSync
+      .mockReturnValueOnce("" as never)
+      .mockReturnValueOnce("issue-5\n" as never);
+    const result = createWorktree({
+      ...baseOpts,
+      branch: "alice/issue-5",
+      conflictChoice: "reuse",
+    });
+    expect(result.branch).toBe("issue-5");
+  });
+
+  test("clean removes the actual checked-out branch, not the requested one", () => {
+    mockExistsSync.mockReturnValue(true);
+    // Call sequence:
+    // 1. git status --porcelain (clean)
+    // 2. git rev-parse --abbrev-ref HEAD → legacy branch
+    // 3. git worktree remove (forceRemove)
+    // 4. git branch -D (forceRemove)
+    // 5. git worktree add (recreate)
+    mockExecFileSync
+      .mockReturnValueOnce("" as never)
+      .mockReturnValueOnce("issue-5\n" as never)
+      .mockImplementation(() => "" as never);
+    const result = createWorktree({
+      ...baseOpts,
+      branch: "alice/issue-5",
+      conflictChoice: "clean",
+    });
+    // The old branch (issue-5) should be deleted, not alice/issue-5.
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["branch", "-D", "issue-5"],
+      expect.objectContaining({ cwd: repoPath("org", "repo") }),
+    );
+    // The new worktree is created with the requested branch name.
+    expect(result.branch).toBe("alice/issue-5");
+  });
+
+  test("clean tolerates non-git directory and falls back to requested branch", () => {
+    mockExistsSync.mockReturnValue(true);
+    // Call sequence:
+    // 1. git status --porcelain → fails (not a git dir) → hasUncommittedChanges returns false
+    // 2. git rev-parse --abbrev-ref HEAD → fails (not a git dir)
+    // 3. git worktree remove (forceRemove, may fail)
+    // 4. git branch -D (forceRemove, may fail)
+    // 5. git worktree add (recreate)
+    mockExecFileSync
+      .mockImplementationOnce(() => {
+        throw new Error("not a git repository");
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("not a git repository");
+      })
+      .mockImplementation(() => "" as never);
+    const result = createWorktree({
+      ...baseOpts,
+      branch: "alice/issue-5",
+      conflictChoice: "clean",
+    });
+    // Should not throw — falls back to the requested branch.
+    expect(result.branch).toBe("alice/issue-5");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // createWorktree — hadUncommittedChanges
 // ---------------------------------------------------------------------------
 describe("createWorktree — uncommitted changes detection", () => {
@@ -421,12 +519,12 @@ describe("createWorktree — uncommitted changes detection", () => {
   };
 
   test("clean reports hadUncommittedChanges when dirty", () => {
-    // existsSync: true (worktree exists), true (hasUncommittedChanges path check)
     mockExistsSync.mockReturnValue(true);
-    // First call: git status --porcelain (dirty)
-    // Subsequent calls: worktree remove, branch -D, worktree add
+    // Call sequence: git status (dirty), git rev-parse, worktree remove,
+    // branch -D, worktree add
     mockExecFileSync
       .mockReturnValueOnce(" M dirty.ts\n" as never)
+      .mockReturnValueOnce("issue-5\n" as never)
       .mockImplementation(() => "" as never);
     const result = createWorktree({ ...baseOpts, conflictChoice: "clean" });
     expect(result.hadUncommittedChanges).toBe(true);
@@ -434,7 +532,11 @@ describe("createWorktree — uncommitted changes detection", () => {
 
   test("clean reports hadUncommittedChanges false when clean", () => {
     mockExistsSync.mockReturnValue(true);
-    mockExecFileSync.mockImplementation(() => "" as never);
+    // Call sequence: git status (clean), git rev-parse, ...
+    mockExecFileSync
+      .mockReturnValueOnce("" as never)
+      .mockReturnValueOnce("issue-5\n" as never)
+      .mockImplementation(() => "" as never);
     const result = createWorktree({ ...baseOpts, conflictChoice: "clean" });
     expect(result.hadUncommittedChanges).toBe(false);
   });

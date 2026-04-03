@@ -9,7 +9,7 @@ import { createClaudeAdapter } from "./claude-adapter.js";
 import { createCodexAdapter } from "./codex-adapter.js";
 import type { PipelineSettings } from "./config.js";
 import { loadConfig } from "./config.js";
-import { getIssue } from "./github.js";
+import { getGitHubUsername, getIssue } from "./github.js";
 import { initI18n, t } from "./i18n/index.js";
 import type {
   PipelineOptions,
@@ -233,11 +233,13 @@ try {
   bootstrapRepo(owner, repo);
 
   const defaultBranch = detectDefaultBranch(owner, repo);
+  const username = getGitHubUsername();
   const wt = createWorktree({
     owner,
     repo,
     issueNumber,
     baseBranch: defaultBranch,
+    branch: `${username}/issue-${issueNumber}`,
     conflictChoice: startFresh ? "clean" : "reuse",
   });
   console.log(m["boot.worktreeReady"](wt.path, wt.branch));

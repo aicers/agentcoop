@@ -1,5 +1,20 @@
 import { execFileSync } from "node:child_process";
 
+/**
+ * Returns the login of the currently authenticated GitHub user.
+ */
+export function getGitHubUsername(): string {
+  try {
+    return execFileSync("gh", ["api", "user", "--jq", ".login"], {
+      encoding: "utf-8",
+    }).trim();
+  } catch {
+    throw new Error(
+      "Failed to determine GitHub username. Ensure `gh` is installed and authenticated (`gh auth login`).",
+    );
+  }
+}
+
 export interface Repository {
   name: string;
   description: string | null;

@@ -5,12 +5,41 @@ vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
 }));
 
-const { listRepositories, getIssue } = await import("./github.js");
+const { getGitHubUsername, listRepositories, getIssue } = await import(
+  "./github.js"
+);
 
 const mockExecFileSync = vi.mocked(execFileSync);
 
 afterEach(() => {
   mockExecFileSync.mockReset();
+});
+
+// ---------------------------------------------------------------------------
+// getGitHubUsername
+// ---------------------------------------------------------------------------
+describe("getGitHubUsername", () => {
+  test("calls gh api user and returns trimmed login", () => {
+    mockExecFileSync.mockReturnValue("  octocat\n");
+
+    const result = getGitHubUsername();
+
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "gh",
+      ["api", "user", "--jq", ".login"],
+      { encoding: "utf-8" },
+    );
+    expect(result).toBe("octocat");
+  });
+
+  test("throws descriptive error when gh command fails", () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error("gh: auth required");
+    });
+    expect(() => getGitHubUsername()).toThrow(
+      "Failed to determine GitHub username",
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

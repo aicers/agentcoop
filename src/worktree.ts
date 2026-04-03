@@ -149,6 +149,18 @@ export function getHeadSha(cwd: string): string {
   ).trim();
 }
 
+/**
+ * Return the branch currently checked out in a worktree.
+ */
+function getCheckedOutBranch(wtPath: string): string {
+  return (
+    execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      ...EXEC_OPTS,
+      cwd: wtPath,
+    }) as string
+  ).trim();
+}
+
 // ---- branch commit count -------------------------------------------------
 
 /**
@@ -250,9 +262,19 @@ export function createWorktree(options: {
     }
 
     if (conflictChoice === "clean") {
+      // Detect the actual branch so we remove the right one (it may
+      // differ from the requested name for legacy worktrees).
+      // Fall back to the requested branch when detection fails (e.g.
+      // the path exists but is not a valid git worktree).
+      let oldBranch: string;
+      try {
+        oldBranch = getCheckedOutBranch(wtPath);
+      } catch {
+        oldBranch = branch;
+      }
       const lockPath = repoLockPath(owner, repo);
       withLock(lockPath, () => {
-        forceRemoveWorktreeAndBranch(bare, wtPath, branch);
+        forceRemoveWorktreeAndBranch(bare, wtPath, oldBranch);
 
         // Recreate.
         execFileSync(
@@ -264,8 +286,10 @@ export function createWorktree(options: {
       return { path: wtPath, branch, hadUncommittedChanges: dirty };
     }
 
-    // "reuse"
-    return { path: wtPath, branch, hadUncommittedChanges: dirty };
+    // "reuse" — detect the actual branch in the worktree, which may
+    // differ from the requested name (e.g. legacy `issue-N` worktrees).
+    const actualBranch = getCheckedOutBranch(wtPath);
+    return { path: wtPath, branch: actualBranch, hadUncommittedChanges: dirty };
   }
 
   // Create the worktree with a new branch tracking the base branch.
