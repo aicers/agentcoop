@@ -361,23 +361,44 @@ function parseCodexInvokeOutput(
 
 /**
  * Wrap an AgentStream so that when `xhigh` is rejected by the CLI
- * (config_parsing error), the result falls back to a retry with `high`.
- * The async iterator and child process come from the initial attempt;
- * only the result promise is wrapped.
+ * (config_parsing error), the stream transparently retries with `high`.
+ *
+ * Both the async iterator and the result promise are wired through the
+ * retry: the iterator first drains the failed attempt, then — on
+ * fallback — continues yielding chunks from the retry stream so that
+ * the pipeline UI keeps receiving output.
  */
 function withXhighFallback(
   stream: AgentStream,
   retryFn: () => AgentStream,
 ): AgentStream {
+  // Shared state: if the first attempt fails with config_parsing, the
+  // retry stream is stored here so both the iterator and result can
+  // reference it.
+  let retryStream: AgentStream | undefined;
+
+  const result = stream.result.then((r) => {
+    if (r.status === "error" && r.errorType === "config_parsing") {
+      retryStream = retryFn();
+      return retryStream.result;
+    }
+    return r;
+  });
+
+  async function* chunks(): AsyncGenerator<string> {
+    yield* stream;
+    // After the first stream finishes, await the result to know whether
+    // a fallback was triggered.
+    await result;
+    if (retryStream) {
+      yield* retryStream;
+    }
+  }
+
   return {
-    [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
+    [Symbol.asyncIterator]: () => chunks(),
     child: stream.child,
-    result: stream.result.then((result) => {
-      if (result.status === "error" && result.errorType === "config_parsing") {
-        return retryFn().result;
-      }
-      return result;
-    }),
+    result,
   };
 }
 
