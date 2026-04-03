@@ -2,7 +2,23 @@
 
 A multi-agent pipeline that takes a GitHub issue and autonomously implements, reviews, and merges the fix using two AI agents.
 
-<!-- screenshot: capture the TUI during a pipeline run and add it here -->
+```
+┌ Agent A (implementer) — claude-sonnet ─┬─ Agent B (reviewer) — claude-sonnet ┐
+│                                        │                                     │
+│ I'll start by reading the issue and    │ (waiting for output)                │
+│ exploring the repository structure.    │                                     │
+│                                        │                                     │
+│ ╌╌╌╌╌╌╌╌╌ Prompt ╌╌╌╌╌╌╌╌╌           │                                     │
+│ ▶ Implement the following GitHub       │                                     │
+│ ▶ issue in a new git branch…           │                                     │
+│ ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌            │                                     │
+│                                        │                                     │
+├────────────────────────────────────────┴─────────────────────────────────────┤
+│ owner/repo#42  |  Stage 1: Implement  |  Round: 1 (in progress)            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Pipeline running...                                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ## How it works
 
@@ -31,7 +47,7 @@ Each stage loops automatically within a configurable iteration budget before ask
 ```bash
 pnpm install
 pnpm build
-agentcoop
+node dist/index.js
 ```
 
 The interactive prompts walk you through:
