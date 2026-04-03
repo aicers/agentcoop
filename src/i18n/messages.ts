@@ -156,6 +156,7 @@ export interface Messages {
   "ci.fixLoopExhausted": string;
   "ci.agentError": (detail: string) => string;
   "squash.completed": string;
+  "squash.singleCommitSkip": string;
   "review.approved": (round: number) => string;
   "review.unresolvedItems": (base: string, summary: string) => string;
   "review.fixesApplied": (round: number) => string;

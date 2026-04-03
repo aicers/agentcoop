@@ -143,6 +143,21 @@ export function getHeadSha(cwd: string): string {
   ).trim();
 }
 
+// ---- branch commit count -------------------------------------------------
+
+/**
+ * Return the number of commits on the current branch relative to
+ * `baseBranch`.  Used to decide whether squashing is necessary.
+ */
+export function countBranchCommits(cwd: string, baseBranch: string): number {
+  const output = execFileSync(
+    "git",
+    ["rev-list", "--count", `${baseBranch}..HEAD`],
+    { ...EXEC_OPTS, cwd },
+  ) as string;
+  return Number.parseInt(output.trim(), 10);
+}
+
 // ---- worktree management -------------------------------------------------
 
 /**

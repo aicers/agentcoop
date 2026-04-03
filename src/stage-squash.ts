@@ -28,6 +28,7 @@ import {
   sendFollowUp,
 } from "./stage-util.js";
 import { buildClarificationPrompt } from "./step-parser.js";
+import { countBranchCommits as defaultCountBranchCommits } from "./worktree.js";
 
 // ---- public types ------------------------------------------------------------
 
@@ -35,6 +36,8 @@ export interface SquashStageOptions {
   agent: AgentAdapter;
   issueTitle: string;
   issueBody: string;
+  /** The default branch name (e.g. "main"). Used to count commits. */
+  defaultBranch: string;
   /** Injected for testability. */
   getCiStatus?: GetCiStatusFn;
   /** Injected for testability. */
@@ -49,6 +52,8 @@ export interface SquashStageOptions {
   maxFixAttempts?: number;
   /** Injected for testability. */
   delay?: (ms: number) => Promise<void>;
+  /** Injected for testability. Defaults to `worktree.countBranchCommits`. */
+  countBranchCommits?: (cwd: string, baseBranch: string) => number;
 }
 
 // ---- prompt builders ---------------------------------------------------------
@@ -110,6 +115,18 @@ export function createSquashStageHandler(
     number: 7,
     requiresArtifact: true,
     handler: async (ctx: StageContext): Promise<StageResult> => {
+      // Skip squash when the branch has only one commit.
+      const count = (opts.countBranchCommits ?? defaultCountBranchCommits)(
+        ctx.worktreePath,
+        opts.defaultBranch,
+      );
+      if (count <= 1) {
+        return {
+          outcome: "completed",
+          message: t()["squash.singleCommitSkip"],
+        };
+      }
+
       // Step 1: Send the squash prompt (resume if saved session).
       const prompt = buildSquashPrompt(ctx, opts);
       const squashResult = await invokeOrResume(

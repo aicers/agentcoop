@@ -316,6 +316,7 @@ try {
   const squashStage = createSquashStageHandler({
     agent: agentA,
     ...issueCtx,
+    defaultBranch,
   });
 
   const reviewStage = {
