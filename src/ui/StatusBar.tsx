@@ -60,9 +60,13 @@ export function StatusBar({
     ? m["statusBar.stage"](stage.stageNumber, stage.stageName)
     : m["statusBar.initialising"];
 
-  // Show current round (1-based) with in-progress/done status.
+  // Show current round (1-based) only on stages that can iterate.
+  const showRound =
+    stage !== null &&
+    (stage.stageNumber === SELF_CHECK_STAGE ||
+      stage.stageNumber === REVIEW_STAGE);
   const round = stage ? stage.iteration + 1 : 0;
-  const iterText = stage
+  const iterText = showRound
     ? roundDone
       ? m["statusBar.roundDone"](round)
       : m["statusBar.roundInProgress"](round)

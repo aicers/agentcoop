@@ -163,8 +163,8 @@ export const ko: Messages = {
   "statusBar.roundDone": (round) =>
     `\uB77C\uC6B4\uB4DC: ${round} (\uC644\uB8CC)`,
   "statusBar.last": (outcome) => `\uC774\uC804: ${outcome}`,
-  "statusBar.selfCheck": (count: number) => `SC: ${count}`,
-  "statusBar.review": (count: number) => `RV: ${count}`,
+  "statusBar.selfCheck": (count: number) => `셀프 체크: ${count}`,
+  "statusBar.review": (count: number) => `리뷰: ${count}`,
 
   "outcome.completed": "완료",
   "outcome.fixed": "수정됨",
