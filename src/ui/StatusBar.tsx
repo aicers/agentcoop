@@ -7,6 +7,11 @@ import type {
   StageExitEvent,
 } from "../pipeline-events.js";
 
+/** Stage number for the self-check stage. */
+const SELF_CHECK_STAGE = 3;
+/** Stage number for the review stage. */
+const REVIEW_STAGE = 7;
+
 interface StatusBarProps {
   emitter: PipelineEventEmitter;
   owner: string;
@@ -23,6 +28,8 @@ export function StatusBar({
   const [stage, setStage] = useState<StageEnterEvent | null>(null);
   const [lastOutcome, setLastOutcome] = useState<string | null>(null);
   const [roundDone, setRoundDone] = useState(false);
+  const [selfCheckCount, setSelfCheckCount] = useState(0);
+  const [reviewCount, setReviewCount] = useState(0);
 
   useEffect(() => {
     const onEnter = (ev: StageEnterEvent) => {
@@ -33,6 +40,11 @@ export function StatusBar({
     const onExit = (ev: StageExitEvent) => {
       setLastOutcome(ev.outcome);
       setRoundDone(true);
+      if (ev.stageNumber === SELF_CHECK_STAGE) {
+        setSelfCheckCount((c) => c + 1);
+      } else if (ev.stageNumber === REVIEW_STAGE) {
+        setReviewCount((c) => c + 1);
+      }
     };
     emitter.on("stage:enter", onEnter);
     emitter.on("stage:exit", onExit);
@@ -82,6 +94,14 @@ export function StatusBar({
         <Text>
           {"  |  "}
           {outcomeText}
+        </Text>
+      )}
+      {(selfCheckCount > 0 || reviewCount > 0) && (
+        <Text>
+          {"  |  "}
+          {m["statusBar.selfCheck"](selfCheckCount)}
+          {"  |  "}
+          {m["statusBar.review"](reviewCount)}
         </Text>
       )}
     </Box>

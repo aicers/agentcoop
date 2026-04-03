@@ -19,6 +19,10 @@ export interface AppProps {
   onExit: (result: PipelineResult) => void;
   /** Called once the TUI prompt is ready, so callers can late-bind to it. */
   onPromptReady?: (prompt: UserPrompt) => void;
+  /** Short model identifier for Agent A (e.g., "opus"). */
+  modelNameA?: string;
+  /** Short model identifier for Agent B (e.g., "gpt-5.4"). */
+  modelNameB?: string;
 }
 
 export function App({
@@ -26,6 +30,8 @@ export function App({
   pipelineOptions,
   onExit,
   onPromptReady,
+  modelNameA,
+  modelNameB,
 }: AppProps) {
   const [inputRequest, setInputRequest] = useState<InputRequest | null>(null);
   const resolveRef = useRef<((value: string) => void) | null>(null);
@@ -76,12 +82,14 @@ export function App({
       <Box flexDirection="row" flexGrow={1}>
         <AgentPane
           label={t()["agent.labelARole"]}
+          modelName={modelNameA}
           agent="a"
           emitter={emitter}
           color="blue"
         />
         <AgentPane
           label={t()["agent.labelBRole"]}
+          modelName={modelNameB}
           agent="b"
           emitter={emitter}
           color="green"
