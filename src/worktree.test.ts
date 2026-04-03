@@ -124,7 +124,7 @@ describe("bootstrapRepo", () => {
     const dest = bootstrapRepo("org", "repo");
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "git",
-      ["config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"],
+      ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
       expect.objectContaining({ encoding: "utf-8", cwd: dest }),
     );
   });
@@ -135,7 +135,7 @@ describe("bootstrapRepo", () => {
     // Return existing refspec so ensureFetchRefspec is a no-op
     mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
       if (cmd === "git" && args[0] === "config" && args.length === 2)
-        return "+refs/heads/*:refs/heads/*\n";
+        return "+refs/heads/*:refs/remotes/origin/*\n";
       return "" as never;
     }) as typeof execFileSync);
     bootstrapRepo("org", "repo");
@@ -161,7 +161,7 @@ describe("bootstrapRepo", () => {
     // Should set the refspec before fetching
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "git",
-      ["config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"],
+      ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
       expect.objectContaining({ cwd: dest }),
     );
     const configSetIdx = calls.findIndex(
@@ -175,7 +175,7 @@ describe("bootstrapRepo", () => {
     mockExistsSync.mockReturnValue(true);
     mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
       if (cmd === "git" && args[0] === "config" && args.length === 2)
-        return "+refs/heads/*:refs/heads/*\n";
+        return "+refs/heads/*:refs/remotes/origin/*\n";
       return "" as never;
     }) as typeof execFileSync);
     bootstrapRepo("org", "repo");
@@ -187,6 +187,47 @@ describe("bootstrapRepo", () => {
         (c[1] as string[]).length === 3,
     );
     expect(configSetCalls).toHaveLength(0);
+  });
+
+  test("fetches after clone to populate remote-tracking refs", () => {
+    const dest = repoPath("org", "repo");
+    mockExistsSync.mockReturnValue(false);
+    const calls: string[][] = [];
+    mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
+      calls.push([cmd, ...args]);
+      if (cmd === "git" && args[0] === "config" && args.length === 2)
+        throw new Error("key missing");
+      return "" as never;
+    }) as typeof execFileSync);
+    bootstrapRepo("org", "repo");
+    // A fetch must follow the refspec config set so that
+    // refs/remotes/origin/* is populated for createWorktree().
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["fetch", "--all", "--prune"],
+      expect.objectContaining({ cwd: dest }),
+    );
+    const configSetIdx = calls.findIndex(
+      (c) => c[0] === "git" && c[1] === "config" && c.length === 4,
+    );
+    const fetchIdx = calls.findIndex((c) => c[0] === "git" && c[1] === "fetch");
+    expect(configSetIdx).toBeLessThan(fetchIdx);
+  });
+
+  test("replaces legacy refspec on existing bare repo", () => {
+    const dest = repoPath("org", "repo");
+    mockExistsSync.mockReturnValue(true);
+    mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "config" && args.length === 2)
+        return "+refs/heads/*:refs/heads/*\n";
+      return "" as never;
+    }) as typeof execFileSync);
+    bootstrapRepo("org", "repo");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+      expect.objectContaining({ cwd: dest }),
+    );
   });
 });
 
@@ -261,7 +302,7 @@ describe("createWorktree", () => {
     expect(result.branch).toBe("issue-5");
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "git",
-      ["worktree", "add", "-b", "issue-5", result.path, "main"],
+      ["worktree", "add", "-b", "issue-5", result.path, "origin/main"],
       expect.objectContaining({ cwd: repoPath("org", "repo") }),
     );
   });
@@ -276,7 +317,7 @@ describe("createWorktree", () => {
     expect(result.branch).toBe("alice/issue-5");
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "git",
-      ["worktree", "add", "-b", "alice/issue-5", result.path, "main"],
+      ["worktree", "add", "-b", "alice/issue-5", result.path, "origin/main"],
       expect.objectContaining({ cwd: repoPath("org", "repo") }),
     );
   });
