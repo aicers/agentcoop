@@ -260,7 +260,6 @@ const CLI_DEFAULTS: Record<"claude" | "codex", AgentConfig> = {
 };
 
 const DEFAULT_AGENT_A = CLI_DEFAULTS.claude;
-const DEFAULT_AGENT_B = CLI_DEFAULTS.codex;
 
 async function selectAgent(
   label: string,
