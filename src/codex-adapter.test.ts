@@ -3,10 +3,12 @@ import {
   buildCodexInvokeArgs,
   buildCodexResumeArgs,
   CodexStreamTransformer,
+  detectCodexError,
   extractCodexResumeResponse,
   extractSessionId,
   parseCodexJsonl,
   parseCodexPlainText,
+  validateCodexReasoningEffort,
 } from "./codex-adapter.js";
 
 // ---------------------------------------------------------------------------
@@ -85,6 +87,24 @@ describe("parseCodexJsonl", () => {
     expect(result.status).toBe("error");
     expect(result.responseText).toBe("unexpected status 400");
     expect(result.sessionId).toBe("sess-fail");
+  });
+
+  test("detects turn.failed with config parsing message as config_parsing error", () => {
+    const lines = [
+      JSON.stringify({ type: "thread.started", thread_id: "sess-cfg" }),
+      JSON.stringify({
+        type: "turn.failed",
+        error: {
+          message:
+            "unknown variant `xhigh`, expected one of `minimal`, `low`, `medium`, `high`",
+        },
+      }),
+    ].join("\n");
+
+    const result = parseCodexJsonl(lines);
+    expect(result.status).toBe("error");
+    expect(result.errorType).toBe("config_parsing");
+    expect(result.sessionId).toBe("sess-cfg");
   });
 
   test("handles JSONL with only thread.started (no items)", () => {
@@ -320,6 +340,24 @@ describe("parseCodexPlainText", () => {
   test("detects 'execution error' keyword", () => {
     const result = parseCodexPlainText("An execution error occurred", 1, "");
     expect(result.errorType).toBe("execution_error");
+  });
+
+  test("detects 'unknown variant' as config_parsing error", () => {
+    const result = parseCodexPlainText(
+      "",
+      1,
+      "Error: unknown variant `xhigh`, expected one of `minimal`, `low`, `medium`, `high`\nin `model_reasoning_effort`",
+    );
+    expect(result.errorType).toBe("config_parsing");
+  });
+
+  test("detects 'invalid value' as config_parsing error", () => {
+    const result = parseCodexPlainText(
+      "",
+      1,
+      "Error: invalid value for model_reasoning_effort",
+    );
+    expect(result.errorType).toBe("config_parsing");
   });
 
   test("keyword detection is case-insensitive", () => {
@@ -715,5 +753,87 @@ describe("buildCodexResumeArgs", () => {
     const args = buildCodexResumeArgs("sess-1", "prompt", {});
     const reArgs = args.filter((a) => a.includes("model_reasoning_effort"));
     expect(reArgs).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// detectCodexError — error classification
+// ---------------------------------------------------------------------------
+describe("detectCodexError", () => {
+  test("returns max_turns for 'max turns' text", () => {
+    expect(detectCodexError("Error: max turns reached")).toBe("max_turns");
+  });
+
+  test("returns max_turns for 'turn limit' text", () => {
+    expect(detectCodexError("Stopped: turn limit exceeded")).toBe("max_turns");
+  });
+
+  test("returns execution_error for 'error during execution'", () => {
+    expect(detectCodexError("error during execution of command")).toBe(
+      "execution_error",
+    );
+  });
+
+  test("returns execution_error for 'execution error'", () => {
+    expect(detectCodexError("An execution error occurred")).toBe(
+      "execution_error",
+    );
+  });
+
+  test("returns config_parsing for 'unknown variant'", () => {
+    expect(
+      detectCodexError(
+        "Error: unknown variant `xhigh`, expected one of `minimal`, `low`, `medium`, `high`",
+      ),
+    ).toBe("config_parsing");
+  });
+
+  test("returns config_parsing for 'invalid value'", () => {
+    expect(
+      detectCodexError("Error: invalid value for model_reasoning_effort"),
+    ).toBe("config_parsing");
+  });
+
+  test("is case-insensitive for config_parsing patterns", () => {
+    expect(detectCodexError("Unknown Variant `foo`")).toBe("config_parsing");
+    expect(detectCodexError("INVALID VALUE in config")).toBe("config_parsing");
+  });
+
+  test("returns unknown for unrecognized errors", () => {
+    expect(detectCodexError("something went wrong")).toBe("unknown");
+  });
+
+  test("is case-insensitive for all patterns", () => {
+    expect(detectCodexError("MAX TURNS reached")).toBe("max_turns");
+    expect(detectCodexError("Error During Execution")).toBe("execution_error");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateCodexReasoningEffort — runtime validation
+// ---------------------------------------------------------------------------
+describe("validateCodexReasoningEffort", () => {
+  test.each([
+    "minimal",
+    "low",
+    "medium",
+    "high",
+  ] as const)("accepts valid value: %s", (value) => {
+    expect(validateCodexReasoningEffort(value)).toBe(value);
+  });
+
+  test("rejects unsupported value with descriptive error", () => {
+    expect(() => validateCodexReasoningEffort("xhigh")).toThrow(
+      /Unsupported Codex reasoning effort "xhigh"/,
+    );
+  });
+
+  test("error message lists supported values", () => {
+    expect(() => validateCodexReasoningEffort("none")).toThrow(/minimal/);
+    expect(() => validateCodexReasoningEffort("none")).toThrow(/high/);
+  });
+
+  test("rejects empty string", () => {
+    expect(() => validateCodexReasoningEffort("")).toThrow(/Unsupported/);
   });
 });

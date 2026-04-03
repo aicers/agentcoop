@@ -23,7 +23,7 @@ describe("AgentPane", () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(
       <AgentPane
-        label="Agent A (Implementer)"
+        label="Agent A (implementer)"
         agent="a"
         emitter={emitter}
         color="blue"
@@ -31,7 +31,7 @@ describe("AgentPane", () => {
     );
 
     const frame = lastFrame();
-    expect(frame).toContain("Agent A (Implementer)");
+    expect(frame).toContain("Agent A (implementer)");
     expect(frame).toContain("(waiting for output)");
   });
 
@@ -40,13 +40,13 @@ describe("AgentPane", () => {
     const { lastFrame } = render(
       <Box>
         <AgentPane
-          label="Agent A (Implementer)"
+          label="Agent A (implementer)"
           agent="a"
           emitter={emitter}
           color="blue"
         />
         <AgentPane
-          label="Agent B (Reviewer)"
+          label="Agent B (reviewer)"
           agent="b"
           emitter={emitter}
           color="green"
@@ -55,8 +55,8 @@ describe("AgentPane", () => {
     );
 
     const frame = lastFrame();
-    expect(frame).toContain("Agent A (Implementer)");
-    expect(frame).toContain("Agent B (Reviewer)");
+    expect(frame).toContain("Agent A (implementer)");
+    expect(frame).toContain("Agent B (reviewer)");
   });
 
   test("renders streamed lines after agent:chunk events", async () => {
@@ -207,7 +207,7 @@ describe("StatusBar", () => {
 
     const frame = lastFrame();
     expect(frame).toContain("Stage 3: Self-check");
-    expect(frame).toContain("Last: not_approved");
+    expect(frame).toContain("Last: not approved");
   });
 
   test("clears outcome on new stage:enter", async () => {

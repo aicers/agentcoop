@@ -26,6 +26,7 @@ import {
   getCiStatus as defaultGetCiStatus,
 } from "./ci.js";
 import { pollCiAndFix } from "./ci-poll.js";
+import { t } from "./i18n/index.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
   drainToSink,
@@ -177,7 +178,7 @@ export function createReviewStageHandler(
   opts: ReviewStageOptions,
 ): StageDefinition {
   return {
-    name: "Review",
+    name: t()["stage.review"],
     number: 8,
     handler: async (ctx: StageContext): Promise<StageResult> => {
       const round = ctx.iteration + 1; // 1-based for display
@@ -214,9 +215,10 @@ export function createReviewStageHandler(
         );
         if (error) return error;
 
-        const base = `Review approved at round ${round}.`;
+        const m = t();
+        const base = m["review.approved"](round);
         const message = summary
-          ? `${base}\n\nUnresolved items:\n${summary}`
+          ? m["review.unresolvedItems"](base, summary)
           : base;
 
         return { outcome: "completed", message };
@@ -322,7 +324,7 @@ export function createReviewStageHandler(
       }
 
       // CI passed — return not_approved so the engine loops for next round.
-      let message = `Round ${round} fixes applied, CI passed. Proceeding to next review round.`;
+      let message = t()["review.fixesApplied"](round);
 
       if (ctx.lastAutoIteration) {
         const { error, summary } = await handleUnresolvedSummary(
@@ -334,7 +336,7 @@ export function createReviewStageHandler(
         );
         if (error) return error;
         if (summary) {
-          message += `\n\nUnresolved items:\n${summary}`;
+          message = t()["review.unresolvedItems"](message, summary);
         }
       }
 

@@ -6,6 +6,7 @@ export type AgentErrorType =
   | "max_turns"
   | "execution_error"
   | "cli_not_found"
+  | "config_parsing"
   | "inactivity_timeout"
   | "unknown";
 

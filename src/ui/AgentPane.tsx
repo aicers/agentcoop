@@ -1,5 +1,6 @@
 import { Box, type DOMElement, measureElement, Text } from "ink";
 import { useEffect, useRef, useState } from "react";
+import { t } from "../i18n/index.js";
 import type { PipelineEventEmitter } from "../pipeline-events.js";
 import { useAgentLines } from "./useEventEmitter.js";
 
@@ -37,7 +38,8 @@ export function AgentPane({ label, agent, emitter, color }: AgentPaneProps) {
 
   let placeholder: string | undefined;
   if (visible.length === 0) {
-    placeholder = hasOutput ? "(pane too small)" : "(waiting for output)";
+    const m = t();
+    placeholder = hasOutput ? m["agentPane.tooSmall"] : m["agentPane.waiting"];
   }
 
   return (

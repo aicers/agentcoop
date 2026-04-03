@@ -18,6 +18,7 @@ import {
   getCiStatus as defaultGetCiStatus,
   normaliseCiConclusion,
 } from "./ci.js";
+import { t } from "./i18n/index.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import { invokeOrResume, mapAgentError } from "./stage-util.js";
 import { getHeadSha as defaultGetHeadSha } from "./worktree.js";
@@ -113,7 +114,7 @@ export function createCiCheckStageHandler(
   const delay = opts.delay ?? defaultDelay;
 
   return {
-    name: "CI check",
+    name: t()["stage.ciCheck"],
     number: 5,
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // ---- poll for CI completion ------------------------------------------
@@ -139,9 +140,7 @@ export function createCiCheckStageHandler(
         if (elapsed >= pollTimeout) {
           return {
             outcome: "error",
-            message:
-              `CI checks still pending after ${Math.round(pollTimeout / 1000)}s. ` +
-              `The pipeline cannot proceed until CI completes.`,
+            message: t()["ci.pendingTimeout"](Math.round(pollTimeout / 1000)),
           };
         }
 
@@ -151,7 +150,7 @@ export function createCiCheckStageHandler(
       // ---- CI passed -------------------------------------------------------
 
       if (ciStatus.verdict === "pass") {
-        return { outcome: "completed", message: "CI checks passed." };
+        return { outcome: "completed", message: t()["ci.passed"] };
       }
 
       // ---- CI failed — collect logs and send to agent ----------------------
