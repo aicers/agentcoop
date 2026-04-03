@@ -125,7 +125,8 @@ export interface Messages {
 
   "statusBar.initialising": string;
   "statusBar.stage": (number: number, name: string) => string;
-  "statusBar.loop": (iteration: number) => string;
+  "statusBar.roundInProgress": (round: number) => string;
+  "statusBar.roundDone": (round: number) => string;
   "statusBar.last": (outcome: string) => string;
   "outcome.completed": string;
   "outcome.fixed": string;
@@ -143,6 +144,7 @@ export interface Messages {
 
   "agentPane.tooSmall": string;
   "agentPane.waiting": string;
+  "agentPane.idle": string;
   "agent.labelA": string;
   "agent.labelB": string;
   "agent.labelARole": string;

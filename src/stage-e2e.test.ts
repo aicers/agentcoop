@@ -1904,7 +1904,7 @@ describe("Stage 8 (Review) through pipeline", () => {
         makeStream(
           makeResult({
             responseText:
-              "**[Unresolved Round 3]**\n- Missing error handling in parser",
+              "**[Reviewer Unresolved Round 3]**\n- Missing error handling in parser",
           }),
         ),
       ),

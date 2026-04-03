@@ -144,6 +144,80 @@ describe("AgentPane", () => {
     expect(frame).not.toContain("line2\n");
   });
 
+  test("shows idle status for agent B before review stage", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <AgentPane label="Agent B" agent="b" emitter={emitter} color="green" />,
+    );
+
+    emitter.emit("stage:enter", {
+      stageNumber: 2,
+      stageName: "Implement",
+      iteration: 0,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("idle");
+    expect(frame).not.toContain("waiting for output");
+  });
+
+  test("shows waiting status for agent B at review stage", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <AgentPane label="Agent B" agent="b" emitter={emitter} color="green" />,
+    );
+
+    emitter.emit("stage:enter", {
+      stageNumber: 8,
+      stageName: "Review",
+      iteration: 0,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("waiting for output");
+    expect(frame).not.toContain("idle");
+  });
+
+  test("shows waiting status for agent A regardless of stage", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <AgentPane label="Agent A" agent="a" emitter={emitter} color="blue" />,
+    );
+
+    emitter.emit("stage:enter", {
+      stageNumber: 2,
+      stageName: "Implement",
+      iteration: 0,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("waiting for output");
+    expect(frame).not.toContain("idle");
+  });
+
+  test("shows newest content of a long wrapped line (auto-scroll)", async () => {
+    const emitter = new PipelineEventEmitter();
+    // Render in a narrow (40 cols), short (8 rows) container so one long
+    // line wraps into many terminal rows and must be tailed correctly.
+    const { lastFrame } = render(
+      <Box width={40} height={8}>
+        <AgentPane label="Agent A" agent="a" emitter={emitter} color="blue" />
+      </Box>,
+    );
+
+    // Build a single long line (no newlines) that exceeds the pane width.
+    // The tail marker must remain visible after wrapping.
+    const longLine = `${"x".repeat(200)}LATEST_TOKEN`;
+    emitter.emit("agent:chunk", { agent: "a", chunk: longLine });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("LATEST_TOKEN");
+  });
+
   test("shows 'pane too small' instead of log lines in a tiny pane", async () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(
@@ -189,7 +263,7 @@ describe("StatusBar", () => {
 
     const frame = lastFrame();
     expect(frame).toContain("Stage 2: Implement");
-    expect(frame).toContain("Loop: 0");
+    expect(frame).toContain("Round: 1 (in progress)");
     expect(frame).not.toContain("Initialising");
   });
 

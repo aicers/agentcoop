@@ -162,7 +162,7 @@ describe("buildAuthorCompletionCheckPrompt", () => {
 describe("buildUnresolvedSummaryPrompt", () => {
   test("includes round number and NONE keyword", () => {
     const prompt = buildUnresolvedSummaryPrompt(3);
-    expect(prompt).toContain("[Unresolved Round 3]");
+    expect(prompt).toContain("[Reviewer Unresolved Round 3]");
     expect(prompt).toContain("NONE");
   });
 });
@@ -737,7 +737,7 @@ describe("createReviewStageHandler", () => {
         makeStream(
           makeResult({
             responseText:
-              "**[Unresolved Round 1]**\n- Error handling in module X\n- Missing test for edge case Y",
+              "**[Reviewer Unresolved Round 1]**\n- Error handling in module X\n- Missing test for edge case Y",
           }),
         ),
       ),
@@ -912,7 +912,7 @@ describe("createReviewStageHandler", () => {
         makeStream(
           makeResult({
             responseText:
-              "**[Unresolved Round 1]**\n- Missing validation in handler",
+              "**[Reviewer Unresolved Round 1]**\n- Missing validation in handler",
           }),
         ),
       ),

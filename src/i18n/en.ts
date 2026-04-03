@@ -128,7 +128,8 @@ export const en: Messages = {
 
   "statusBar.initialising": "Initialising...",
   "statusBar.stage": (number, name) => `Stage ${number}: ${name}`,
-  "statusBar.loop": (iteration) => `Loop: ${iteration}`,
+  "statusBar.roundInProgress": (round) => `Round: ${round} (in progress)`,
+  "statusBar.roundDone": (round) => `Round: ${round} (done)`,
   "statusBar.last": (outcome) => `Last: ${outcome}`,
   "outcome.completed": "completed",
   "outcome.fixed": "fixed",
@@ -146,6 +147,7 @@ export const en: Messages = {
 
   "agentPane.tooSmall": "(pane too small)",
   "agentPane.waiting": "(waiting for output)",
+  "agentPane.idle": "(idle — active in review stage)",
   "agent.labelA": "Agent A",
   "agent.labelB": "Agent B",
   "agent.labelARole": "Agent A (implementer)",

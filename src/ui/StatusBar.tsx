@@ -14,14 +14,17 @@ interface StatusBarProps {
 export function StatusBar({ emitter }: StatusBarProps) {
   const [stage, setStage] = useState<StageEnterEvent | null>(null);
   const [lastOutcome, setLastOutcome] = useState<string | null>(null);
+  const [roundDone, setRoundDone] = useState(false);
 
   useEffect(() => {
     const onEnter = (ev: StageEnterEvent) => {
       setStage(ev);
       setLastOutcome(null);
+      setRoundDone(false);
     };
     const onExit = (ev: StageExitEvent) => {
       setLastOutcome(ev.outcome);
+      setRoundDone(true);
     };
     emitter.on("stage:enter", onEnter);
     emitter.on("stage:exit", onExit);
@@ -37,7 +40,13 @@ export function StatusBar({ emitter }: StatusBarProps) {
     ? m["statusBar.stage"](stage.stageNumber, stage.stageName)
     : m["statusBar.initialising"];
 
-  const iterText = stage ? m["statusBar.loop"](stage.iteration) : "";
+  // Show current round (1-based) with in-progress/done status.
+  const round = stage ? stage.iteration + 1 : 0;
+  const iterText = stage
+    ? roundDone
+      ? m["statusBar.roundDone"](round)
+      : m["statusBar.roundInProgress"](round)
+    : "";
 
   const outcomeKey = lastOutcome
     ? (`outcome.${lastOutcome}` as keyof typeof m)
