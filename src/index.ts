@@ -72,7 +72,7 @@ function createAdapter(
     return createClaudeAdapter({
       model: agentConfig.model,
       permissionMode,
-      thinkingBudget: agentConfig.effortLevel as
+      effortLevel: agentConfig.effortLevel as
         | "low"
         | "medium"
         | "high"
