@@ -13,6 +13,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -21,6 +22,13 @@ import { dirname, join } from "node:path";
 
 const RETRY_INTERVAL_MS = 500;
 const MAX_WAIT_MS = 120_000;
+
+/**
+ * A lock file younger than this is assumed to be mid-initialisation
+ * (created by `openSync("wx")` but not yet fully written). We must
+ * NOT delete it — the owner is still alive and writing contents.
+ */
+const YOUNG_FILE_MS = 2_000;
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -68,7 +76,24 @@ function acquireLock(lockPath: string): void {
         const raw = readFileSync(lockPath, "utf-8").trim();
         const match = /^(\d+):(\d+)$/.exec(raw);
         const pid = match ? Number(match[1]) : Number.NaN;
-        if (Number.isNaN(pid) || !isProcessAlive(pid)) {
+        if (Number.isNaN(pid)) {
+          // Malformed contents — could be a file that is still being
+          // initialised (between openSync("wx") and writeFileSync).
+          // Only delete if the file is old enough that the owner must
+          // have crashed before finishing the write.
+          try {
+            const age = Date.now() - statSync(lockPath).ctimeMs;
+            if (age < YOUNG_FILE_MS) {
+              // File is young — owner is likely still writing; wait.
+            } else {
+              unlinkSync(lockPath);
+              continue;
+            }
+          } catch {
+            // stat or unlink failed (e.g. file already gone) — retry.
+            continue;
+          }
+        } else if (!isProcessAlive(pid)) {
           try {
             unlinkSync(lockPath);
           } catch {
