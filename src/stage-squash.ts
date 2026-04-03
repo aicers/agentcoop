@@ -129,6 +129,7 @@ export function createSquashStageHandler(
 
       // Step 1: Send the squash prompt (resume if saved session).
       const prompt = buildSquashPrompt(ctx, opts);
+      ctx.promptSinks?.a?.(prompt);
       const squashResult = await invokeOrResume(
         opts.agent,
         ctx.savedAgentASessionId,
@@ -147,10 +148,12 @@ export function createSquashStageHandler(
 
       // Step 2: Completion check (same internal-clarification pattern as
       // stage 4).
+      const squashCheckPrompt = buildSquashCompletionCheckPrompt();
+      ctx.promptSinks?.a?.(squashCheckPrompt);
       let checkResult = await sendFollowUp(
         opts.agent,
         squashResult.sessionId,
-        buildSquashCompletionCheckPrompt(),
+        squashCheckPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
       );
@@ -162,10 +165,14 @@ export function createSquashStageHandler(
       let result = mapResponseToResult(checkResult.responseText);
 
       if (result.outcome === "needs_clarification" && checkResult.sessionId) {
+        const clarifyPrompt = buildClarificationPrompt(
+          checkResult.responseText,
+        );
+        ctx.promptSinks?.a?.(clarifyPrompt);
         const retryResult = await sendFollowUp(
           opts.agent,
           checkResult.sessionId,
-          buildClarificationPrompt(checkResult.responseText),
+          clarifyPrompt,
           ctx.worktreePath,
           ctx.streamSinks?.a,
         );

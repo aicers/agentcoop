@@ -33,6 +33,7 @@ import {
   invokeOrResume,
   mapAgentError,
   mapResponseToResult,
+  type PromptSink,
   type StreamSink,
   sendFollowUp,
 } from "./stage-util.js";
@@ -185,6 +186,7 @@ export function createReviewStageHandler(
 
       // Step 1: Agent B reviews (resume if saved session).
       const reviewPrompt = buildReviewPrompt(ctx, opts, round);
+      ctx.promptSinks?.b?.(reviewPrompt);
       const reviewResult = await invokeOrResume(
         opts.agentB,
         ctx.savedAgentBSessionId,
@@ -212,6 +214,7 @@ export function createReviewStageHandler(
           round,
           ctx.worktreePath,
           ctx.streamSinks?.b,
+          ctx.promptSinks?.b,
         );
         if (error) return error;
 
@@ -231,6 +234,7 @@ export function createReviewStageHandler(
 
       // Step 3: NOT_APPROVED — Agent A fixes (resume if saved session).
       const fixPrompt = buildAuthorFixPrompt(ctx, opts, round);
+      ctx.promptSinks?.a?.(fixPrompt);
       const fixResult = await invokeOrResume(
         opts.agentA,
         ctx.savedAgentASessionId,
@@ -249,10 +253,12 @@ export function createReviewStageHandler(
 
       // Completion check on Agent A (with clarification retry,
       // same pattern as stage 4 / stage 7).
+      const authorCheckPrompt = buildAuthorCompletionCheckPrompt();
+      ctx.promptSinks?.a?.(authorCheckPrompt);
       let checkResult = await sendFollowUp(
         opts.agentA,
         fixResult.sessionId,
-        buildAuthorCompletionCheckPrompt(),
+        authorCheckPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
       );
@@ -267,10 +273,12 @@ export function createReviewStageHandler(
         checkMapped.outcome === "needs_clarification" &&
         checkResult.sessionId
       ) {
+        const retryPrompt = buildAuthorCompletionCheckPrompt();
+        ctx.promptSinks?.a?.(retryPrompt);
         const retryResult = await sendFollowUp(
           opts.agentA,
           checkResult.sessionId,
-          buildAuthorCompletionCheckPrompt(),
+          retryPrompt,
           ctx.worktreePath,
           ctx.streamSinks?.a,
         );
@@ -333,6 +341,7 @@ export function createReviewStageHandler(
           round,
           ctx.worktreePath,
           ctx.streamSinks?.b,
+          ctx.promptSinks?.b,
         );
         if (error) return error;
         if (summary) {
@@ -365,8 +374,10 @@ async function handleUnresolvedSummary(
   round: number,
   cwd: string,
   sink?: StreamSink,
+  promptSink?: PromptSink,
 ): Promise<UnresolvedSummaryResult> {
   const summaryPrompt = buildUnresolvedSummaryPrompt(round);
+  promptSink?.(summaryPrompt);
 
   // If we have a session, resume; otherwise invoke fresh.
   let result: AgentResult;

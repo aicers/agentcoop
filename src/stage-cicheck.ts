@@ -176,6 +176,7 @@ export function createCiCheckStageHandler(
           : "No detailed failure logs available.";
 
       const prompt = buildCiFixPrompt(ctx, opts, failureLogs);
+      ctx.promptSinks?.a?.(prompt);
       const fixResult = await invokeOrResume(
         opts.agent,
         ctx.savedAgentASessionId,

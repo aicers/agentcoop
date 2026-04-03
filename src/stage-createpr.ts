@@ -99,6 +99,7 @@ export function createCreatePrStageHandler(
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send the PR creation prompt (resume if saved session).
       const prompt = buildCreatePrPrompt(ctx, opts);
+      ctx.promptSinks?.a?.(prompt);
       const prResult = await invokeOrResume(
         opts.agent,
         ctx.savedAgentASessionId,
@@ -119,10 +120,12 @@ export function createCreatePrStageHandler(
       // Clarification is handled internally by resuming the same
       // session, because re-entering the handler would re-run the
       // side-effectful PR creation step.
+      const prCheckPrompt = buildPrCompletionCheckPrompt();
+      ctx.promptSinks?.a?.(prCheckPrompt);
       let checkResult = await sendFollowUp(
         opts.agent,
         prResult.sessionId,
-        buildPrCompletionCheckPrompt(),
+        prCheckPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
       );
@@ -134,10 +137,14 @@ export function createCreatePrStageHandler(
       let result = mapResponseToResult(checkResult.responseText);
 
       if (result.outcome === "needs_clarification" && checkResult.sessionId) {
+        const clarifyPrompt = buildClarificationPrompt(
+          checkResult.responseText,
+        );
+        ctx.promptSinks?.a?.(clarifyPrompt);
         const retryResult = await sendFollowUp(
           opts.agent,
           checkResult.sessionId,
-          buildClarificationPrompt(checkResult.responseText),
+          clarifyPrompt,
           ctx.worktreePath,
           ctx.streamSinks?.a,
         );

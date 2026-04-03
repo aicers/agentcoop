@@ -14,6 +14,12 @@ import { type ParsedStep, parseStepStatus } from "./step-parser.js";
 export type StreamSink = (chunk: string) => void;
 
 /**
+ * Callback that receives the full prompt text before it is sent to the agent.
+ * Used by the UI to display outgoing prompts in the agent's pane.
+ */
+export type PromptSink = (prompt: string) => void;
+
+/**
  * Log full diagnostic details for an agent process failure so that
  * transient or hard-to-reproduce errors leave a durable trail.
  */

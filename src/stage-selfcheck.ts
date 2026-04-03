@@ -88,6 +88,7 @@ export function createSelfCheckStageHandler(
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send self-check prompt (resume if saved session).
       const checkPrompt = buildSelfCheckPrompt(ctx, opts);
+      ctx.promptSinks?.a?.(checkPrompt);
       const checkResult = await invokeOrResume(
         opts.agent,
         ctx.savedAgentASessionId,
@@ -105,10 +106,12 @@ export function createSelfCheckStageHandler(
       }
 
       // Step 2: Send fix-or-done prompt (resume the same session).
+      const fixPrompt = buildFixOrDonePrompt();
+      ctx.promptSinks?.a?.(fixPrompt);
       const fixResult = await sendFollowUp(
         opts.agent,
         checkResult.sessionId,
-        buildFixOrDonePrompt(),
+        fixPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
       );

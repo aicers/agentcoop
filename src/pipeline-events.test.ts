@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   type AgentChunkEvent,
   type AgentInvokeEvent,
+  type AgentPromptEvent,
   PipelineEventEmitter,
   type StageEnterEvent,
   type StageExitEvent,
@@ -52,6 +53,17 @@ describe("PipelineEventEmitter", () => {
 
     const event: AgentInvokeEvent = { agent: "b", type: "resume" };
     emitter.emit("agent:invoke", event);
+
+    expect(handler).toHaveBeenCalledWith(event);
+  });
+
+  test("emits and receives agent:prompt events", () => {
+    const emitter = new PipelineEventEmitter();
+    const handler = vi.fn();
+    emitter.on("agent:prompt", handler);
+
+    const event: AgentPromptEvent = { agent: "a", prompt: "Do the thing" };
+    emitter.emit("agent:prompt", event);
 
     expect(handler).toHaveBeenCalledWith(event);
   });

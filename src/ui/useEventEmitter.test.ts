@@ -6,6 +6,11 @@
  */
 import { describe, expect, test } from "vitest";
 import { PipelineEventEmitter } from "../pipeline-events.js";
+import {
+  formatPromptForDisplay,
+  PROMPT_LINE_PREFIX,
+  PROMPT_SEPARATOR_CHAR,
+} from "./useEventEmitter.js";
 
 // ---- line accumulation logic (mirrors useAgentLines) -------------------------
 
@@ -159,6 +164,75 @@ describe("line accumulation (useAgentLines logic)", () => {
 
     expect(acc.getLines()).toEqual([]);
     expect(acc.getBuffer()).toBe("one two three");
+  });
+});
+
+describe("formatPromptForDisplay", () => {
+  test("formats a short prompt with separator and prefix", () => {
+    const lines = formatPromptForDisplay("Hello\nWorld");
+
+    // First line is separator with "Prompt" label
+    expect(lines[0]).toContain("Prompt");
+    expect(lines[0]).toContain(PROMPT_SEPARATOR_CHAR);
+    // Content lines are prefixed
+    expect(lines[1]).toBe(`${PROMPT_LINE_PREFIX}Hello`);
+    expect(lines[2]).toBe(`${PROMPT_LINE_PREFIX}World`);
+    // Last line is closing separator
+    expect(lines[lines.length - 1]).toContain(PROMPT_SEPARATOR_CHAR);
+  });
+
+  test("truncates long prompts to 8 lines with remainder count", () => {
+    const prompt = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
+    const lines = formatPromptForDisplay(prompt);
+
+    // 1 header + 8 content + 1 truncation notice + 1 footer = 11
+    expect(lines).toHaveLength(11);
+    // First content line
+    expect(lines[1]).toBe(`${PROMPT_LINE_PREFIX}line 0`);
+    // Last content line shown
+    expect(lines[8]).toBe(`${PROMPT_LINE_PREFIX}line 7`);
+    // Truncation indicator
+    expect(lines[9]).toContain("12 more lines");
+  });
+
+  test("does not truncate prompt with exactly 8 lines", () => {
+    const prompt = Array.from({ length: 8 }, (_, i) => `line ${i}`).join("\n");
+    const lines = formatPromptForDisplay(prompt);
+
+    // 1 header + 8 content + 1 footer = 10, no truncation line
+    expect(lines).toHaveLength(10);
+    expect(lines.join("\n")).not.toContain("more lines");
+  });
+
+  test("handles single-line prompt", () => {
+    const lines = formatPromptForDisplay("Do the thing");
+
+    expect(lines[1]).toBe(`${PROMPT_LINE_PREFIX}Do the thing`);
+    expect(lines).toHaveLength(3); // header + 1 line + footer
+  });
+});
+
+describe("agent:prompt integration with line accumulator", () => {
+  test("prompt lines are injected into the accumulator", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "a");
+
+    // Simulate agent:prompt by manually injecting formatted lines
+    // (mirrors what the hook does).
+    emitter.emit("agent:chunk", { agent: "a", chunk: "output\n" });
+
+    const formatted = formatPromptForDisplay("hello");
+    // Inject formatted lines as if the hook did it.
+    for (const line of formatted) {
+      emitter.emit("agent:chunk", { agent: "a", chunk: `${line}\n` });
+    }
+
+    const lines = acc.getLines();
+    expect(lines[0]).toBe("output");
+    expect(lines[1]).toContain("Prompt");
+    expect(lines[2]).toBe(`${PROMPT_LINE_PREFIX}hello`);
+
+    acc.cleanup();
   });
 });
 

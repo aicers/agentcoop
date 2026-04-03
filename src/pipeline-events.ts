@@ -21,8 +21,14 @@ export interface AgentInvokeEvent {
   type: "invoke" | "resume";
 }
 
+export interface AgentPromptEvent {
+  agent: "a" | "b";
+  prompt: string;
+}
+
 interface PipelineEventMap {
   "agent:chunk": [AgentChunkEvent];
+  "agent:prompt": [AgentPromptEvent];
   "stage:enter": [StageEnterEvent];
   "stage:exit": [StageExitEvent];
   "agent:invoke": [AgentInvokeEvent];
