@@ -87,6 +87,12 @@ describe("buildCreatePrPrompt", () => {
     expect(prompt).toContain("Test plan");
   });
 
+  test("includes Closes and Part of issue references", () => {
+    const prompt = buildCreatePrPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("Closes #42");
+    expect(prompt).toContain("Part of #42");
+  });
+
   test("includes user instruction when present", () => {
     const ctx = { ...BASE_CTX, userInstruction: "Use a draft PR" };
     const prompt = buildCreatePrPrompt(ctx, makeOpts());
