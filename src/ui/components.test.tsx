@@ -59,6 +59,22 @@ describe("AgentPane", () => {
     expect(frame).toContain("Agent B (reviewer)");
   });
 
+  test("renders model name in header when provided", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <AgentPane
+        label="Agent A (implementer)"
+        modelName="opus"
+        agent="a"
+        emitter={emitter}
+        color="blue"
+      />,
+    );
+
+    const frame = lastFrame();
+    expect(frame).toContain("Agent A (implementer) \u2014 opus");
+  });
+
   test("renders streamed lines after agent:chunk events", async () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(
@@ -169,7 +185,7 @@ describe("AgentPane", () => {
     );
 
     emitter.emit("stage:enter", {
-      stageNumber: 8,
+      stageNumber: 7,
       stageName: "Review",
       iteration: 0,
     });
@@ -285,12 +301,14 @@ describe("StatusBar", () => {
   test("shows last outcome after stage:exit", async () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(
-      <StatusBar
-        emitter={emitter}
-        owner="aicers"
-        repo="agentcoop"
-        issueNumber={49}
-      />,
+      <Box width={200}>
+        <StatusBar
+          emitter={emitter}
+          owner="aicers"
+          repo="agentcoop"
+          issueNumber={49}
+        />
+      </Box>,
     );
 
     emitter.emit("stage:enter", {
@@ -305,17 +323,21 @@ describe("StatusBar", () => {
     expect(frame).toContain("Stage 3: Self-check");
     expect(frame).toContain("Round: 2 (done)");
     expect(frame).toContain("Last: not approved");
+    expect(frame).toContain("SC: 1");
+    expect(frame).toContain("RV: 0");
   });
 
   test("shows in-progress then done on successive events", async () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(
-      <StatusBar
-        emitter={emitter}
-        owner="aicers"
-        repo="agentcoop"
-        issueNumber={49}
-      />,
+      <Box width={200}>
+        <StatusBar
+          emitter={emitter}
+          owner="aicers"
+          repo="agentcoop"
+          issueNumber={49}
+        />
+      </Box>,
     );
 
     emitter.emit("stage:enter", {
@@ -366,6 +388,48 @@ describe("StatusBar", () => {
     const frame = lastFrame();
     expect(frame).toContain("Stage 3: Self-check");
     expect(frame).not.toContain("completed");
+  });
+
+  test("increments review count on stage:exit for review stage", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box width={200}>
+        <StatusBar
+          emitter={emitter}
+          owner="aicers"
+          repo="agentcoop"
+          issueNumber={49}
+        />
+      </Box>,
+    );
+
+    emitter.emit("stage:enter", {
+      stageNumber: 7,
+      stageName: "Review",
+      iteration: 0,
+    });
+    emitter.emit("stage:exit", { stageNumber: 7, outcome: "approved" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame();
+    expect(frame).toContain("SC: 0");
+    expect(frame).toContain("RV: 1");
+  });
+
+  test("hides cumulative counts when both are zero", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={49}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).not.toContain("SC:");
+    expect(frame).not.toContain("RV:");
   });
 });
 

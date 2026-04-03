@@ -12,16 +12,23 @@ import {
 } from "./useEventEmitter.js";
 
 /** Stage number at which Agent B becomes active. */
-const REVIEW_STAGE = 8;
+const REVIEW_STAGE = 7;
 
 interface AgentPaneProps {
   label: string;
+  modelName?: string;
   agent: "a" | "b";
   emitter: PipelineEventEmitter;
   color: string;
 }
 
-export function AgentPane({ label, agent, emitter, color }: AgentPaneProps) {
+export function AgentPane({
+  label,
+  modelName,
+  agent,
+  emitter,
+  color,
+}: AgentPaneProps) {
   const { lines, pendingLine } = useAgentLines(emitter, agent);
   const containerRef = useRef<DOMElement>(null);
   const [visibleRows, setVisibleRows] = useState(20);
@@ -105,7 +112,7 @@ export function AgentPane({ label, agent, emitter, color }: AgentPaneProps) {
       overflow="hidden"
     >
       <Text bold color={color}>
-        {label}
+        {modelName ? `${label} \u2014 ${modelName}` : label}
       </Text>
       {placeholder !== undefined ? (
         <Text dimColor>{placeholder}</Text>

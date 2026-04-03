@@ -80,6 +80,8 @@ describe("catalogs are complete", () => {
       "statusBar.roundInProgress": [2],
       "statusBar.roundDone": [2],
       "statusBar.last": ["ok"],
+      "statusBar.selfCheck": [2],
+      "statusBar.review": [3],
       "stageError.maxTurns": [" (stage 1)"],
       "stageError.inactivityTimeout": [" (stage 2)"],
       "stageError.configParsing": [" (stage 8)", "unknown variant"],

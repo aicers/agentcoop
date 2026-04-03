@@ -479,6 +479,8 @@ try {
         onPromptReady: (prompt) => {
           tuiPrompt = prompt;
         },
+        modelNameA: agentAConfig.model,
+        modelNameB: agentBConfig.model,
       }),
     );
   });
