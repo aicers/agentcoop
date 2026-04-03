@@ -160,10 +160,11 @@ export function buildClaudeArgs(
   // --verbose is required for --output-format stream-json.
   const args = ["-p", prompt, "--output-format", "stream-json", "--verbose"];
   if (opts.model) {
-    // Append context window variant to model ID when extended (1M).
+    // Append context window variant as a bracketed suffix (e.g. opus[1m])
+    // when the extended 1M window is selected.
     let modelId = opts.model;
     if (opts.contextWindow === "1m") {
-      modelId = `${modelId}-1m`;
+      modelId = `${modelId}[1m]`;
     }
     args.push("--model", modelId);
   }
