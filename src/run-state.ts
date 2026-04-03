@@ -24,7 +24,19 @@ export interface AgentState {
   sessionId: string | undefined;
 }
 
+/**
+ * Bump this when the stage order or semantics change so that
+ * {@link loadRunState} can migrate persisted files written by
+ * earlier versions.
+ *
+ * History:
+ *  1 — original order (stages 7=squash, 8=review)
+ *  2 — swapped stages 7↔8 (7=review, 8=squash)
+ */
+export const RUN_STATE_VERSION = 2;
+
 export interface RunState {
+  version: number;
   owner: string;
   repo: string;
   issueNumber: number;
@@ -79,10 +91,15 @@ function isValidAgentState(v: unknown): v is AgentState {
   );
 }
 
-function isValidRunState(v: unknown): v is RunState {
+/** Accept both versioned (v2+) and legacy (no version field) states. */
+function isValidRunState(
+  v: unknown,
+): v is RunState | Omit<RunState, "version"> {
   if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
   const r = v as Record<string, unknown>;
   return (
+    // version is optional for legacy files
+    (r.version === undefined || typeof r.version === "number") &&
     typeof r.owner === "string" &&
     typeof r.repo === "string" &&
     typeof r.issueNumber === "number" &&
@@ -102,6 +119,29 @@ function isValidRunState(v: unknown): v is RunState {
   );
 }
 
+/**
+ * Migrate a legacy (v1 / unversioned) run-state to the current version.
+ *
+ * v1 → v2: stages 7 (squash) and 8 (review) were swapped.  If
+ * `currentStage` is one of those two, remap it so the run resumes
+ * into the correct handler.
+ */
+function migrateRunState(state: RunState): RunState {
+  if (state.version >= RUN_STATE_VERSION) return state;
+
+  const migrated = { ...state };
+
+  // v1 → v2: swap stages 7 ↔ 8
+  if (migrated.currentStage === 7) {
+    migrated.currentStage = 8;
+  } else if (migrated.currentStage === 8) {
+    migrated.currentStage = 7;
+  }
+
+  migrated.version = RUN_STATE_VERSION;
+  return migrated;
+}
+
 export function loadRunState(
   owner: string,
   repo: string,
@@ -119,9 +159,10 @@ export function loadRunState(
 
   if (!isValidRunState(raw)) return undefined;
 
-  // Normalise null → undefined for optional fields.
-  return {
+  // Normalise null → undefined for optional fields and backfill version.
+  const normalised: RunState = {
     ...raw,
+    version: ((raw as Record<string, unknown>).version as number) ?? 1,
     prNumber: raw.prNumber ?? undefined,
     agentA: {
       ...raw.agentA,
@@ -132,6 +173,8 @@ export function loadRunState(
       sessionId: raw.agentB.sessionId ?? undefined,
     },
   };
+
+  return migrateRunState(normalised);
 }
 
 export function deleteRunState(

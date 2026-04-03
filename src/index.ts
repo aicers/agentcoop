@@ -22,6 +22,7 @@ import { findPrNumber } from "./pr.js";
 import {
   deleteRunState,
   loadRunState,
+  RUN_STATE_VERSION,
   type RunState,
   saveRunState,
 } from "./run-state.js";
@@ -332,6 +333,7 @@ try {
 
   // Mutable run state for persistence.
   const runState: RunState = savedState ?? {
+    version: RUN_STATE_VERSION,
     owner,
     repo,
     issueNumber,
