@@ -153,6 +153,21 @@ describe("withLock", () => {
     expect(mockUnlinkSync).toHaveBeenCalled();
   });
 
+  test("treats partially numeric lock file as stale and retries", () => {
+    const eexist = Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+    mockOpenSync
+      .mockImplementationOnce(() => {
+        throw eexist;
+      })
+      .mockReturnValue(42 as never);
+    // Truncated PID — e.g. original was "12345" but only "12" was written
+    mockReadFileSync.mockReturnValue("12garbage" as never);
+
+    const result = withLock("/tmp/test.lock", () => "ok");
+    expect(result).toBe("ok");
+    expect(mockUnlinkSync).toHaveBeenCalled();
+  });
+
   test("propagates non-EEXIST errors from open", () => {
     const eperm = Object.assign(new Error("EPERM"), { code: "EPERM" });
     mockOpenSync.mockImplementation(() => {

@@ -62,7 +62,7 @@ function acquireLock(lockPath: string): void {
       // Check for stale lock left by a crashed process.
       try {
         const raw = readFileSync(lockPath, "utf-8").trim();
-        const pid = Number.parseInt(raw, 10);
+        const pid = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
         if (Number.isNaN(pid) || !isProcessAlive(pid)) {
           try {
             unlinkSync(lockPath);
