@@ -136,9 +136,9 @@ describe("buildSquashCompletionCheckPrompt", () => {
 // ---- createSquashStageHandler ------------------------------------------------
 
 describe("createSquashStageHandler", () => {
-  test("returns stage definition with number 7 and correct name", () => {
+  test("returns stage definition with number 8 and correct name", () => {
     const stage = createSquashStageHandler(makeOpts());
-    expect(stage.number).toBe(7);
+    expect(stage.number).toBe(8);
     expect(stage.name).toBe("Squash commits");
     expect(stage.requiresArtifact).toBe(true);
   });

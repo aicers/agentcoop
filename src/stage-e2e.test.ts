@@ -1593,9 +1593,9 @@ describe("Multi-stage E2E: Stage 2 → Stage 3", () => {
   });
 });
 
-// ---- Stage 7 (Squash) through pipeline ---------------------------------------
+// ---- Stage 8 (Squash) through pipeline ---------------------------------------
 
-describe("Stage 7 (Squash) through pipeline", () => {
+describe("Stage 8 (Squash) through pipeline", () => {
   test("completes when squash succeeds and CI passes", async () => {
     const agent: AgentAdapter = {
       invoke: vi
@@ -1663,13 +1663,13 @@ describe("Stage 7 (Squash) through pipeline", () => {
       makePipelineOpts({ stages: [stage], prompt }),
     );
     expect(result.success).toBe(false);
-    expect(result.stoppedAt).toBe(7);
+    expect(result.stoppedAt).toBe(8);
   });
 });
 
-// ---- Stage 8 (Review) through pipeline ---------------------------------------
+// ---- Stage 7 (Review) through pipeline ---------------------------------------
 
-describe("Stage 8 (Review) through pipeline", () => {
+describe("Stage 7 (Review) through pipeline", () => {
   test("completes when Agent B approves on first round", async () => {
     const agentA: AgentAdapter = {
       invoke: vi.fn(),
@@ -2096,8 +2096,8 @@ describe("Stage 8 (Review) through pipeline", () => {
 
 // ---- Stages 7+8 combined through pipeline ------------------------------------
 
-describe("Stages 7+8 (Squash + Review) through pipeline", () => {
-  test("squash succeeds → CI passes → review approves: pipeline completes", async () => {
+describe("Stages 7+8 (Review + Squash) through pipeline", () => {
+  test("review approves → squash succeeds → CI passes: pipeline completes", async () => {
     const squashAgent: AgentAdapter = {
       invoke: vi
         .fn()
@@ -2160,15 +2160,15 @@ describe("Stages 7+8 (Squash + Review) through pipeline", () => {
     });
 
     const result = await runPipeline(
-      makePipelineOpts({ stages: [squashStage, reviewStage] }),
+      makePipelineOpts({ stages: [reviewStage, squashStage] }),
     );
     expect(result.success).toBe(true);
-    expect(squashAgent.invoke).toHaveBeenCalledTimes(1);
     expect(agentB.invoke).toHaveBeenCalledTimes(1);
+    expect(squashAgent.invoke).toHaveBeenCalledTimes(1);
     expect(agentA.invoke).not.toHaveBeenCalled();
   });
 
-  test("squash blocked → pipeline aborts before review", async () => {
+  test("squash blocked → pipeline aborts after review", async () => {
     const squashAgent: AgentAdapter = {
       invoke: vi
         .fn()
@@ -2181,8 +2181,17 @@ describe("Stages 7+8 (Squash + Review) through pipeline", () => {
     };
 
     const agentB: AgentAdapter = {
-      invoke: vi.fn(),
-      resume: vi.fn(),
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sb",
+            responseText: "Looks good.\n\nAPPROVED",
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
     };
 
     const prompt = makePrompt({
@@ -2217,11 +2226,11 @@ describe("Stages 7+8 (Squash + Review) through pipeline", () => {
     });
 
     const result = await runPipeline(
-      makePipelineOpts({ stages: [squashStage, reviewStage], prompt }),
+      makePipelineOpts({ stages: [reviewStage, squashStage], prompt }),
     );
     expect(result.success).toBe(false);
-    expect(result.stoppedAt).toBe(7);
-    expect(agentB.invoke).not.toHaveBeenCalled();
+    expect(result.stoppedAt).toBe(8);
+    expect(agentB.invoke).toHaveBeenCalledTimes(1);
   });
 });
 

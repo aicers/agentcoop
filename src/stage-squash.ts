@@ -1,5 +1,5 @@
 /**
- * Stage 7 — Squash commits.
+ * Stage 8 — Squash commits.
  *
  * Two-step flow + internal CI polling:
  *   1. Send a squash prompt to Agent A instructing it to squash all
@@ -8,8 +8,8 @@
  *   3. Poll CI after force-push.  If CI fails, the agent is invoked
  *      to fix the issue and CI is re-polled (internal loop, max 3).
  *
- * `requiresArtifact` is true because the squash must succeed for the
- * review stage to proceed.
+ * `requiresArtifact` is true because the squash must succeed before
+ * the pipeline proceeds to Done.
  */
 
 import type { AgentAdapter } from "./agent.js";
@@ -112,7 +112,7 @@ export function createSquashStageHandler(
 ): StageDefinition {
   return {
     name: t()["stage.squash"],
-    number: 7,
+    number: 8,
     requiresArtifact: true,
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Skip squash when the branch has only one commit.

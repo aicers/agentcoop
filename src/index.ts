@@ -96,8 +96,8 @@ function stageNames(): Record<number, string> {
     4: m["stage.createPr"],
     5: m["stage.ciCheck"],
     6: m["stage.testPlan"],
-    7: m["stage.squash"],
-    8: m["stage.review"],
+    7: m["stage.review"],
+    8: m["stage.squash"],
     9: m["stage.done"],
   };
 }
@@ -390,8 +390,8 @@ try {
       createPrStage,
       ciCheckStage,
       testPlanStage,
-      squashStage,
       reviewStage,
+      squashStage,
       doneStage,
     ],
     context: {
@@ -421,7 +421,7 @@ try {
         runState.prNumber = findPrNumber(owner, repo, wt.branch);
       }
       // Track review round.
-      if (stageNumber === 8) {
+      if (stageNumber === 7) {
         runState.reviewRound = stageLoopCount + 1;
       }
       saveRunState(runState);
