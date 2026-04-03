@@ -92,6 +92,26 @@ describe("buildTestPlanVerifyPrompt", () => {
     expect(prompt).toContain("commit and push");
   });
 
+  test("instructs to start infrastructure via Docker Compose", () => {
+    const prompt = buildTestPlanVerifyPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("Docker Compose");
+    expect(prompt).toContain("port conflict");
+  });
+
+  test("instructs to act as end user for manual test items", () => {
+    const prompt = buildTestPlanVerifyPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("do not defer them to the user");
+    expect(prompt).toContain("Act as");
+    expect(prompt).toContain("Playwright, headless Chrome");
+  });
+
+  test("instructs to capture real screenshots instead of placeholders", () => {
+    const prompt = buildTestPlanVerifyPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("do not use");
+    expect(prompt).toContain("placeholders");
+    expect(prompt).toContain("capture real screenshots");
+  });
+
   test("includes PR sync instructions before pushing", () => {
     const prompt = buildTestPlanVerifyPrompt(BASE_CTX, makeOpts());
     expect(prompt).toContain("gh pr view");

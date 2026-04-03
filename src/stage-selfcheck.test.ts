@@ -76,6 +76,19 @@ describe("buildSelfCheckPrompt", () => {
     expect(prompt).toContain("7. **Performance**");
   });
 
+  test("tests item instructs to run test suite and start infrastructure", () => {
+    const prompt = buildSelfCheckPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("Actually run the full test");
+    expect(prompt).toContain("Docker Compose");
+    expect(prompt).toContain("port conflict");
+  });
+
+  test("external services item instructs to run integration tests", () => {
+    const prompt = buildSelfCheckPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("run integration tests");
+    expect(prompt).toContain("rather than skipping tests");
+  });
+
   test("includes repo and issue context", () => {
     const prompt = buildSelfCheckPrompt(BASE_CTX, makeOpts());
     expect(prompt).toContain("Owner: org");
