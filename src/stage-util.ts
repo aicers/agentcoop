@@ -14,6 +14,21 @@ import { type ParsedStep, parseStepStatus } from "./step-parser.js";
 export type StreamSink = (chunk: string) => void;
 
 /**
+ * Log full diagnostic details for an agent process failure so that
+ * transient or hard-to-reproduce errors leave a durable trail.
+ */
+function logAgentFailure(result: AgentResult, context?: string): void {
+  const parts: string[] = ["Agent process failure"];
+  if (context) parts[0] += ` ${context}`;
+  if (result.errorType) parts.push(`errorType=${result.errorType}`);
+  if (result.exitCode !== undefined && result.exitCode !== null)
+    parts.push(`exitCode=${result.exitCode}`);
+  if (result.signal) parts.push(`signal=${result.signal}`);
+  if (result.stderrText) parts.push(`stderr=${result.stderrText.trim()}`);
+  console.error(parts.join(" | "));
+}
+
+/**
  * Map an `AgentResult` with `status === "error"` to a `StageResult`.
  * The optional `context` string is included in the message for
  * diagnostics (e.g. "during self-check").
@@ -22,6 +37,7 @@ export function mapAgentError(
   result: AgentResult,
   context?: string,
 ): StageResult {
+  logAgentFailure(result, context);
   const m = t();
   const during = context ? ` ${context}` : "";
   if (result.errorType === "max_turns") {
@@ -61,6 +77,10 @@ export function buildErrorDetail(result: AgentResult): string {
 
   if (result.stderrText) {
     parts.push(result.stderrText.trim());
+  }
+
+  if (result.signal) {
+    parts.push(`signal ${result.signal}`);
   }
 
   if (result.exitCode !== undefined && result.exitCode !== null) {

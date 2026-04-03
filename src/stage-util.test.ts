@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
 import {
   invokeOrResume,
@@ -8,6 +8,10 @@ import {
   mapResponseToResult,
   sendFollowUp,
 } from "./stage-util.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 // ---- helpers ---------------------------------------------------------------
 
@@ -142,6 +146,46 @@ describe("mapAgentError", () => {
   test("includes context with non-max_turns error", () => {
     const result = mapAgentError({ ...base, stderrText: "oops" }, "during fix");
     expect(result.message).toBe("Agent error during fix: oops");
+  });
+
+  test("shows signal when process is killed by signal", () => {
+    const result = mapAgentError({
+      ...base,
+      errorType: "unknown",
+      stderrText: "",
+      exitCode: null,
+      signal: "SIGKILL",
+      responseText: "",
+    });
+    expect(result.message).toBe("Agent error: signal SIGKILL");
+  });
+
+  test("shows signal alongside stderr and exit code", () => {
+    const result = mapAgentError({
+      ...base,
+      errorType: "unknown",
+      stderrText: "out of memory",
+      exitCode: null,
+      signal: "SIGKILL",
+    });
+    expect(result.message).toBe("Agent error: out of memory (signal SIGKILL)");
+  });
+
+  test("logs full diagnostics to stderr on error", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mapAgentError({
+      ...base,
+      errorType: "execution_error",
+      stderrText: "segfault",
+      exitCode: 139,
+      signal: "SIGSEGV",
+    });
+    expect(spy).toHaveBeenCalledOnce();
+    const logged = spy.mock.calls[0][0] as string;
+    expect(logged).toContain("errorType=execution_error");
+    expect(logged).toContain("exitCode=139");
+    expect(logged).toContain("signal=SIGSEGV");
+    expect(logged).toContain("stderr=segfault");
   });
 
   test("maps config_parsing to actionable message with stderr detail", () => {

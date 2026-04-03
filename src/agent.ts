@@ -19,6 +19,8 @@ export interface AgentResult {
   stderrText: string;
   /** Exit code of the CLI process, or null if the process was killed by a signal. */
   exitCode?: number | null;
+  /** Signal that terminated the process (e.g. SIGTERM, SIGKILL), if any. */
+  signal?: NodeJS.Signals | null;
 }
 
 export interface AgentStream {

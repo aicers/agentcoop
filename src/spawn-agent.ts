@@ -100,7 +100,7 @@ export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
       }
     });
 
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       if (inactivityTimer) clearTimeout(inactivityTimer);
 
       // Flush transformer at stream end.
@@ -120,11 +120,12 @@ export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
         resolve({
           ...parsed,
           exitCode: code,
+          signal,
           status: "error",
           errorType: "inactivity_timeout",
         });
       } else {
-        resolve({ ...parsed, exitCode: code });
+        resolve({ ...parsed, exitCode: code, signal });
       }
     });
   });
