@@ -137,12 +137,12 @@ export class ClaudeStreamTransformer extends JsonlLineTransformer {
 
 export type ClaudePermissionMode = "auto" | "bypass";
 
-export type ClaudeThinkingBudget = "low" | "medium" | "high";
+export type ClaudeEffortLevel = "low" | "medium" | "high";
 
 export interface ClaudeAdapterOptions {
   model?: string;
   permissionMode?: ClaudePermissionMode;
-  thinkingBudget?: ClaudeThinkingBudget;
+  effortLevel?: ClaudeEffortLevel;
   contextWindow?: string;
   inactivityTimeoutMs?: number;
 }
@@ -152,7 +152,7 @@ export function buildClaudeArgs(
   opts: {
     model?: string;
     permissionMode: ClaudePermissionMode;
-    thinkingBudget?: ClaudeThinkingBudget;
+    effortLevel?: ClaudeEffortLevel;
     contextWindow?: string;
   },
   sessionId?: string,
@@ -172,8 +172,8 @@ export function buildClaudeArgs(
   } else {
     args.push("--permission-mode", "auto");
   }
-  if (opts.thinkingBudget) {
-    args.push("--thinking-budget", opts.thinkingBudget);
+  if (opts.effortLevel) {
+    args.push("--effort", opts.effortLevel);
   }
   if (sessionId) {
     args.push("--resume", sessionId);
@@ -233,7 +233,7 @@ export function createClaudeAdapter(
 ): AgentAdapter {
   const model = opts.model;
   const permissionMode = opts.permissionMode ?? "auto";
-  const thinkingBudget = opts.thinkingBudget;
+  const effortLevel = opts.effortLevel;
   const contextWindow = opts.contextWindow;
   const inactivityTimeoutMs = opts.inactivityTimeoutMs;
 
@@ -244,7 +244,7 @@ export function createClaudeAdapter(
         args: buildClaudeArgs(prompt, {
           model,
           permissionMode,
-          thinkingBudget,
+          effortLevel,
           contextWindow,
         }),
         cwd: options?.cwd,
@@ -258,7 +258,7 @@ export function createClaudeAdapter(
         command: "claude",
         args: buildClaudeArgs(
           prompt,
-          { model, permissionMode, thinkingBudget, contextWindow },
+          { model, permissionMode, effortLevel, contextWindow },
           sessionId,
         ),
         cwd: options?.cwd,

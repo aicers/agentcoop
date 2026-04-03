@@ -525,6 +525,24 @@ describe("buildClaudeArgs", () => {
     expect(args).not.toContain("--model");
   });
 
+  test("includes --effort when effortLevel is set", () => {
+    const args = buildClaudeArgs("prompt", {
+      permissionMode: "auto",
+      effortLevel: "high",
+    });
+
+    expect(args).toContain("--effort");
+    expect(args).toContain("high");
+  });
+
+  test("omits --effort when effortLevel is undefined", () => {
+    const args = buildClaudeArgs("prompt", {
+      permissionMode: "auto",
+    });
+
+    expect(args).not.toContain("--effort");
+  });
+
   test("includes --resume when sessionId is given", () => {
     const args = buildClaudeArgs(
       "continue",
