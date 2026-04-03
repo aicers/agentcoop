@@ -92,7 +92,9 @@ export abstract class JsonlLineTransformer implements ChunkTransformer {
     this.buffer = "";
     if (!trimmed) return "";
     try {
-      return this.extractTextFromEvent(JSON.parse(trimmed));
+      const extracted = this.extractTextFromEvent(JSON.parse(trimmed));
+      if (extracted) return `${extracted}\n`;
+      return "";
     } catch {
       return "";
     }

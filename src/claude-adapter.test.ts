@@ -377,12 +377,40 @@ describe("ClaudeStreamTransformer", () => {
     });
 
     t.push(line); // no trailing newline, stays in buffer
-    expect(t.flush()).toBe("end");
+    expect(t.flush()).toBe("end\n");
   });
 
   test("flush returns empty string when buffer is empty", () => {
     const t = new ClaudeStreamTransformer();
     expect(t.flush()).toBe("");
+  });
+
+  test("flushed final event followed by new streamed event stays separated", () => {
+    const t = new ClaudeStreamTransformer();
+    const event1 = JSON.stringify({
+      type: "assistant",
+      session_id: "s1",
+      message: { content: [{ type: "text", text: "First run done." }] },
+    });
+    const event2 = JSON.stringify({
+      type: "assistant",
+      session_id: "s1",
+      message: {
+        content: [{ type: "text", text: "Second run starting." }],
+      },
+    });
+
+    // First event sits in buffer (no trailing newline), then flushed
+    t.push(event1);
+    const flushed = t.flush();
+    expect(flushed).toBe("First run done.\n");
+
+    // Second event arrives as a new stream
+    const pushed = t.push(`${event2}\n`);
+    expect(pushed).toBe("Second run starting.\n");
+
+    // Concatenating the two should have a clear separator
+    expect(flushed + pushed).toBe("First run done.\nSecond run starting.\n");
   });
 
   test("handles JSON split mid-character across multiple pushes", () => {

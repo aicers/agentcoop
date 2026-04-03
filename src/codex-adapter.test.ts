@@ -611,7 +611,7 @@ describe("CodexStreamTransformer", () => {
     });
 
     t.push(line); // no trailing newline
-    expect(t.flush()).toBe("end");
+    expect(t.flush()).toBe("end\n");
   });
 
   test("flush returns empty string when buffer is empty", () => {
