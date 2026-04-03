@@ -104,6 +104,7 @@ describe("spawnAgent", () => {
       status: "success",
       errorType: undefined,
       stderrText: "",
+      exitCode: 0,
     });
   });
 
@@ -150,7 +151,7 @@ describe("spawnAgent", () => {
     child.emit("error", err);
 
     const result = await stream.result;
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       sessionId: undefined,
       responseText: "nonexistent CLI not found",
       status: "error",

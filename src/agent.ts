@@ -17,6 +17,8 @@ export interface AgentResult {
   errorType: AgentErrorType | undefined;
   /** stderr output from the CLI process, useful for error diagnostics. */
   stderrText: string;
+  /** Exit code of the CLI process, or null if the process was killed by a signal. */
+  exitCode?: number | null;
 }
 
 export interface AgentStream {

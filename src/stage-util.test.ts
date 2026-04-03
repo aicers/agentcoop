@@ -92,16 +92,49 @@ describe("mapAgentError", () => {
     expect(result.message).toBe("Agent error: segfault");
   });
 
-  test("falls back to errorType when stderrText is empty", () => {
+  test("includes exit code alongside stderrText", () => {
+    const result = mapAgentError({
+      ...base,
+      errorType: "execution_error",
+      stderrText: "segfault",
+      exitCode: 1,
+    });
+    expect(result.message).toBe("Agent error: segfault (exit code 1)");
+  });
+
+  test("uses responseText when stderrText is empty", () => {
     const result = mapAgentError({
       ...base,
       errorType: "execution_error",
       stderrText: "",
+      exitCode: null,
+      responseText: "claude exited with code 1",
+    });
+    expect(result.message).toBe("Agent error: claude exited with code 1");
+  });
+
+  test("shows exit code alone when stderr and responseText are empty", () => {
+    const result = mapAgentError({
+      ...base,
+      errorType: "unknown",
+      stderrText: "",
+      exitCode: 137,
+      responseText: "",
+    });
+    expect(result.message).toBe("Agent error: exit code 137");
+  });
+
+  test("falls back to errorType when all details are empty", () => {
+    const result = mapAgentError({
+      ...base,
+      errorType: "execution_error",
+      stderrText: "",
+      responseText: "",
     });
     expect(result.message).toBe("Agent error: execution_error");
   });
 
-  test("falls back to 'unknown' when both are empty", () => {
+  test("falls back to 'unknown' when everything is empty", () => {
     const result = mapAgentError(base);
     expect(result.message).toBe("Agent error: unknown");
   });

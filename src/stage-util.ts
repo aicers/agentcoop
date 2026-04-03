@@ -43,11 +43,40 @@ export function mapAgentError(
       message: m["stageError.configParsing"](during, detail),
     };
   }
-  const detail = result.stderrText || result.errorType || "unknown";
+  const detail = buildErrorDetail(result);
   return {
     outcome: "error",
     message: m["stageError.agentError"](during, detail),
   };
+}
+
+/**
+ * Build an informative error detail string from an `AgentResult`.
+ *
+ * Combines stderr, exit code, and response text so the user gets
+ * actionable information instead of just "unknown".
+ */
+export function buildErrorDetail(result: AgentResult): string {
+  const parts: string[] = [];
+
+  if (result.stderrText) {
+    parts.push(result.stderrText.trim());
+  }
+
+  if (result.exitCode !== undefined && result.exitCode !== null) {
+    parts.push(`exit code ${result.exitCode}`);
+  }
+
+  if (parts.length === 0 && result.responseText) {
+    parts.push(result.responseText.trim());
+  }
+
+  if (parts.length === 0) {
+    parts.push(result.errorType ?? "unknown");
+  }
+
+  const [primary, ...rest] = parts;
+  return rest.length > 0 ? `${primary} (${rest.join(", ")})` : primary;
 }
 
 /**

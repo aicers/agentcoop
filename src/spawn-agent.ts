@@ -119,11 +119,12 @@ export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
       if (timedOut) {
         resolve({
           ...parsed,
+          exitCode: code,
           status: "error",
           errorType: "inactivity_timeout",
         });
       } else {
-        resolve(parsed);
+        resolve({ ...parsed, exitCode: code });
       }
     });
   });
