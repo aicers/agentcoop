@@ -5,7 +5,11 @@ import type {
   PipelineEventEmitter,
   StageEnterEvent,
 } from "../pipeline-events.js";
-import { useAgentLines } from "./useEventEmitter.js";
+import {
+  PROMPT_LINE_PREFIX,
+  PROMPT_SEPARATOR_CHAR,
+  useAgentLines,
+} from "./useEventEmitter.js";
 
 /** Stage number at which Agent B becomes active. */
 const REVIEW_STAGE = 8;
@@ -106,12 +110,17 @@ export function AgentPane({ label, agent, emitter, color }: AgentPaneProps) {
       {placeholder !== undefined ? (
         <Text dimColor>{placeholder}</Text>
       ) : (
-        visible.map((line, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: lines are plain strings without stable IDs
-          <Text key={i} wrap="wrap">
-            {line}
-          </Text>
-        ))
+        visible.map((line, i) => {
+          const isPromptLine =
+            line.startsWith(PROMPT_LINE_PREFIX) ||
+            line.startsWith(PROMPT_SEPARATOR_CHAR);
+          return (
+            // biome-ignore lint/suspicious/noArrayIndexKey: lines are plain strings without stable IDs
+            <Text key={i} wrap="wrap" dimColor={isPromptLine}>
+              {line}
+            </Text>
+          );
+        })
       )}
     </Box>
   );

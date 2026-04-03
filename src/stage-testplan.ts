@@ -90,6 +90,7 @@ export function createTestPlanStageHandler(
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send verification prompt (resume if saved session).
       const verifyPrompt = buildTestPlanVerifyPrompt(ctx, opts);
+      ctx.promptSinks?.a?.(verifyPrompt);
       const verifyResult = await invokeOrResume(
         opts.agent,
         ctx.savedAgentASessionId,
@@ -107,10 +108,12 @@ export function createTestPlanStageHandler(
       }
 
       // Step 2: Send self-check prompt (resume the same session).
+      const selfCheckPrompt = buildTestPlanSelfCheckPrompt();
+      ctx.promptSinks?.a?.(selfCheckPrompt);
       const checkResult = await sendFollowUp(
         opts.agent,
         verifyResult.sessionId,
-        buildTestPlanSelfCheckPrompt(),
+        selfCheckPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
       );

@@ -76,6 +76,7 @@ export function createImplementStageHandler(
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send the implementation prompt (resume if saved session).
       const prompt = buildImplementPrompt(ctx, opts);
+      ctx.promptSinks?.a?.(prompt);
       const implResult = await invokeOrResume(
         opts.agent,
         ctx.savedAgentASessionId,
@@ -93,10 +94,12 @@ export function createImplementStageHandler(
       }
 
       // Step 2: Resume the session and ask for completion status.
+      const checkPrompt = buildCompletionCheckPrompt();
+      ctx.promptSinks?.a?.(checkPrompt);
       const checkResult = await sendFollowUp(
         opts.agent,
         implResult.sessionId,
-        buildCompletionCheckPrompt(),
+        checkPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
       );

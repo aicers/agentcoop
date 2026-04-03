@@ -11,7 +11,7 @@
 
 import { t } from "./i18n/index.js";
 import type { PipelineEventEmitter } from "./pipeline-events.js";
-import type { StreamSink } from "./stage-util.js";
+import type { PromptSink, StreamSink } from "./stage-util.js";
 import { buildClarificationPrompt } from "./step-parser.js";
 
 // ---- public types --------------------------------------------------------
@@ -117,6 +117,12 @@ export interface StageContext {
    * chunks are emitted as they arrive.
    */
   streamSinks?: { a?: StreamSink; b?: StreamSink };
+  /**
+   * Optional sinks for displaying outgoing prompts in the UI.  Stage
+   * handlers call these before sending a prompt to the agent so the
+   * user can see what the agent was asked to do.
+   */
+  promptSinks?: { a?: PromptSink; b?: PromptSink };
 }
 
 // ---- user interaction interface ------------------------------------------
@@ -248,6 +254,7 @@ export interface PipelineOptions {
     | "savedAgentASessionId"
     | "savedAgentBSessionId"
     | "streamSinks"
+    | "promptSinks"
   >;
   /**
    * When set, stages with a number strictly less than this value are
@@ -491,6 +498,7 @@ async function runStage(
     | "savedAgentASessionId"
     | "savedAgentBSessionId"
     | "streamSinks"
+    | "promptSinks"
   >,
   prompt: UserPrompt,
   onStageTransition?: (stageNumber: number, stageLoopCount: number) => void,
@@ -521,6 +529,16 @@ async function runStage(
       }
     : undefined;
 
+  // Build per-agent prompt sinks so the UI can display outgoing prompts.
+  const promptSinks = events
+    ? {
+        a: (prompt: string) =>
+          events.emit("agent:prompt", { agent: "a", prompt }),
+        b: (prompt: string) =>
+          events.emit("agent:prompt", { agent: "b", prompt }),
+      }
+    : undefined;
+
   while (true) {
     // Notify caller before each handler invocation for persistence.
     onStageTransition?.(stage.number, lc.iteration);
@@ -540,6 +558,7 @@ async function runStage(
       savedAgentASessionId,
       savedAgentBSessionId,
       streamSinks,
+      promptSinks,
     };
 
     // Clear one-shot fields after use.
