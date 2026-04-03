@@ -1176,11 +1176,19 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
     expect(result.stderrText).toContain("invalid value");
   });
 
+  test("createCodexAdapter accepts xhigh reasoning effort", () => {
+    expect(() =>
+      createCodexAdapter({
+        reasoningEffort: "xhigh",
+      }),
+    ).not.toThrow();
+  });
+
   test("createCodexAdapter rejects unsupported reasoning effort at construction", () => {
     expect(() =>
       createCodexAdapter({
-        reasoningEffort: "xhigh" as never,
+        reasoningEffort: "turbo" as never,
       }),
-    ).toThrow(/Unsupported Codex reasoning effort "xhigh"/);
+    ).toThrow(/Unsupported Codex reasoning effort "turbo"/);
   });
 });

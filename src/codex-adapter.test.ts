@@ -681,6 +681,15 @@ describe("buildCodexInvokeArgs", () => {
     const reArgs = args.filter((a) => a.includes("model_reasoning_effort"));
     expect(reArgs).toHaveLength(0);
   });
+
+  test("maps xhigh reasoning effort to high for CLI compatibility", () => {
+    const args = buildCodexInvokeArgs("prompt", {
+      reasoningEffort: "xhigh",
+    });
+
+    expect(args).toContain("model_reasoning_effort=high");
+    expect(args).not.toContain("model_reasoning_effort=xhigh");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -754,6 +763,15 @@ describe("buildCodexResumeArgs", () => {
     const reArgs = args.filter((a) => a.includes("model_reasoning_effort"));
     expect(reArgs).toHaveLength(0);
   });
+
+  test("maps xhigh reasoning effort to high for CLI compatibility", () => {
+    const args = buildCodexResumeArgs("sess-1", "prompt", {
+      reasoningEffort: "xhigh",
+    });
+
+    expect(args).toContain("model_reasoning_effort=high");
+    expect(args).not.toContain("model_reasoning_effort=xhigh");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -818,13 +836,14 @@ describe("validateCodexReasoningEffort", () => {
     "low",
     "medium",
     "high",
+    "xhigh",
   ] as const)("accepts valid value: %s", (value) => {
     expect(validateCodexReasoningEffort(value)).toBe(value);
   });
 
   test("rejects unsupported value with descriptive error", () => {
-    expect(() => validateCodexReasoningEffort("xhigh")).toThrow(
-      /Unsupported Codex reasoning effort "xhigh"/,
+    expect(() => validateCodexReasoningEffort("turbo")).toThrow(
+      /Unsupported Codex reasoning effort "turbo"/,
     );
   });
 

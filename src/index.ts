@@ -33,7 +33,7 @@ import { createSelfCheckStageHandler } from "./stage-selfcheck.js";
 import { createSquashStageHandler } from "./stage-squash.js";
 import { createTestPlanStageHandler } from "./stage-testplan.js";
 import type { AgentConfig } from "./startup.js";
-import { runStartup, selectTarget } from "./startup.js";
+import { modelDisplayName, runStartup, selectTarget } from "./startup.js";
 import { App } from "./ui/App.js";
 import {
   bootstrapRepo,
@@ -62,28 +62,34 @@ interface RunParams {
 
 // ---- helpers -------------------------------------------------------------
 
-const CLAUDE_MODELS = new Set(["opus", "sonnet"]);
-
 function createAdapter(
   agentConfig: AgentConfig,
   permissionMode: "auto" | "bypass",
   inactivityTimeoutMs?: number,
 ): AgentAdapter {
-  if (CLAUDE_MODELS.has(agentConfig.model)) {
+  if (agentConfig.cli === "claude") {
     return createClaudeAdapter({
       model: agentConfig.model,
       permissionMode,
+      thinkingBudget: agentConfig.effortLevel as
+        | "low"
+        | "medium"
+        | "high"
+        | undefined,
+      contextWindow: agentConfig.contextWindow,
       inactivityTimeoutMs,
     });
   }
   return createCodexAdapter({
     model: agentConfig.model,
+    reasoningEffort: agentConfig.effortLevel as
+      | "low"
+      | "medium"
+      | "high"
+      | "xhigh"
+      | undefined,
     inactivityTimeoutMs,
   });
-}
-
-function cliForModel(model: string): string {
-  return CLAUDE_MODELS.has(model) ? "claude" : "codex";
 }
 
 // ---- stage name lookup (for display) -------------------------------------
@@ -120,8 +126,8 @@ function formatStateSummary(state: RunState): string {
   }
   lines.push(
     m["resume.mode"](state.executionMode),
-    m["resume.agentA"](state.agentA.model),
-    m["resume.agentB"](state.agentB.model),
+    m["resume.agentA"](`${state.agentA.cli}/${state.agentA.model}`),
+    m["resume.agentB"](`${state.agentB.cli}/${state.agentB.model}`),
   );
   return lines.join("\n");
 }
@@ -164,8 +170,14 @@ try {
     if (choice === "resume") {
       const issue = getIssue(owner, repo, issueNumber);
       params = {
-        agentAConfig: { model: savedState.agentA.model },
-        agentBConfig: { model: savedState.agentB.model },
+        agentAConfig: {
+          cli: savedState.agentA.cli as "claude" | "codex",
+          model: savedState.agentA.model,
+        },
+        agentBConfig: {
+          cli: savedState.agentB.cli as "claude" | "codex",
+          model: savedState.agentB.model,
+        },
         executionMode: savedState.executionMode,
         claudePermissionMode: savedState.claudePermissionMode,
         pipelineSettings: target.config.pipelineSettings,
@@ -260,8 +272,8 @@ try {
 
   console.log();
   console.log(m["boot.startingPipeline"](owner, repo, issueNumber, resuming));
-  console.log(m["boot.agentA"](agentAConfig.model));
-  console.log(m["boot.agentB"](agentBConfig.model));
+  console.log(m["boot.agentA"](modelDisplayName(agentAConfig)));
+  console.log(m["boot.agentB"](modelDisplayName(agentBConfig)));
   console.log(m["boot.mode"](executionMode));
   console.log(m["boot.permission"](claudePermissionMode));
   if (startFromStage !== undefined) {
@@ -344,12 +356,12 @@ try {
     executionMode,
     claudePermissionMode,
     agentA: {
-      cli: cliForModel(agentAConfig.model),
+      cli: agentAConfig.cli,
       model: agentAConfig.model,
       sessionId: undefined,
     },
     agentB: {
-      cli: cliForModel(agentBConfig.model),
+      cli: agentBConfig.cli,
       model: agentBConfig.model,
       sessionId: undefined,
     },

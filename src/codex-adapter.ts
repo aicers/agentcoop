@@ -255,7 +255,13 @@ export function detectCodexError(text: string): AgentErrorType {
 // CLI args builders
 // ---------------------------------------------------------------------------
 
-const CODEX_REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
+const CODEX_REASONING_EFFORTS = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
 
 export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
 
@@ -285,6 +291,16 @@ export interface CodexAdapterOptions {
   inactivityTimeoutMs?: number;
 }
 
+/**
+ * Map user-facing effort level to CLI value.  The CLI (v0.46.0) only
+ * accepts `low`, `medium`, `high`.  "xhigh" is mapped to `high` for
+ * the CLI config flag — if a future CLI version supports it, this
+ * mapping can be removed.
+ */
+function cliReasoningEffort(effort: CodexReasoningEffort): string {
+  return effort === "xhigh" ? "high" : effort;
+}
+
 export function buildCodexInvokeArgs(
   prompt: string,
   opts: { model?: string; reasoningEffort?: CodexReasoningEffort },
@@ -294,7 +310,10 @@ export function buildCodexInvokeArgs(
     args.push("-m", opts.model);
   }
   if (opts.reasoningEffort) {
-    args.push("-c", `model_reasoning_effort=${opts.reasoningEffort}`);
+    args.push(
+      "-c",
+      `model_reasoning_effort=${cliReasoningEffort(opts.reasoningEffort)}`,
+    );
   }
   args.push(prompt);
   return args;
@@ -311,7 +330,10 @@ export function buildCodexResumeArgs(
     args.push("-c", `model="${opts.model}"`);
   }
   if (opts.reasoningEffort) {
-    args.push("-c", `model_reasoning_effort=${opts.reasoningEffort}`);
+    args.push(
+      "-c",
+      `model_reasoning_effort=${cliReasoningEffort(opts.reasoningEffort)}`,
+    );
   }
   args.push(sessionId, prompt);
   return args;
