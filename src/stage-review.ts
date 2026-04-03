@@ -166,7 +166,7 @@ export function buildUnresolvedSummaryPrompt(round: number): string {
     `unresolved items from this review cycle.`,
     ``,
     `- If there are unresolved items, post a PR comment prefixed with`,
-    `  \`**[Unresolved Round ${round}]**\` listing each unresolved item.`,
+    `  \`**[Reviewer Unresolved Round ${round}]**\` listing each unresolved item.`,
     `  Then end your response with COMPLETED.`,
     `- If there are no unresolved items, respond with exactly: NONE`,
   ].join("\n");

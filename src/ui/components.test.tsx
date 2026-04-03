@@ -144,6 +144,60 @@ describe("AgentPane", () => {
     expect(frame).not.toContain("line2\n");
   });
 
+  test("shows idle status for agent B before review stage", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <AgentPane label="Agent B" agent="b" emitter={emitter} color="green" />,
+    );
+
+    emitter.emit("stage:enter", {
+      stageNumber: 2,
+      stageName: "Implement",
+      iteration: 0,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("idle");
+    expect(frame).not.toContain("waiting for output");
+  });
+
+  test("shows waiting status for agent B at review stage", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <AgentPane label="Agent B" agent="b" emitter={emitter} color="green" />,
+    );
+
+    emitter.emit("stage:enter", {
+      stageNumber: 8,
+      stageName: "Review",
+      iteration: 0,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("waiting for output");
+    expect(frame).not.toContain("idle");
+  });
+
+  test("shows waiting status for agent A regardless of stage", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <AgentPane label="Agent A" agent="a" emitter={emitter} color="blue" />,
+    );
+
+    emitter.emit("stage:enter", {
+      stageNumber: 2,
+      stageName: "Implement",
+      iteration: 0,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("waiting for output");
+    expect(frame).not.toContain("idle");
+  });
+
   test("shows 'pane too small' instead of log lines in a tiny pane", async () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(
@@ -189,7 +243,7 @@ describe("StatusBar", () => {
 
     const frame = lastFrame();
     expect(frame).toContain("Stage 2: Implement");
-    expect(frame).toContain("Loop: 0");
+    expect(frame).toContain("Round: 1 (in progress)");
     expect(frame).not.toContain("Initialising");
   });
 

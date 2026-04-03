@@ -154,7 +154,10 @@ export const ko: Messages = {
 
   "statusBar.initialising": "\uCD08\uAE30\uD654 \uC911...",
   "statusBar.stage": (number, name) => `${number}\uB2E8\uACC4: ${name}`,
-  "statusBar.loop": (iteration) => `\uBC18\uBCF5: ${iteration}`,
+  "statusBar.roundInProgress": (round) =>
+    `\uB77C\uC6B4\uB4DC: ${round} (\uC9C4\uD589 \uC911)`,
+  "statusBar.roundDone": (round) =>
+    `\uB77C\uC6B4\uB4DC: ${round} (\uC644\uB8CC)`,
   "statusBar.last": (outcome) => `\uC774\uC804: ${outcome}`,
 
   "outcome.completed": "완료",
@@ -175,6 +178,8 @@ export const ko: Messages = {
   "agentPane.tooSmall":
     "(\uD328\uB110\uC774 \uB108\uBB34 \uC791\uC2B5\uB2C8\uB2E4)",
   "agentPane.waiting": "(\uCD9C\uB825 \uB300\uAE30 \uC911)",
+  "agentPane.idle":
+    "(\uB300\uAE30 \uC911 \u2014 \uB9AC\uBDF0 \uB2E8\uACC4\uC5D0\uC11C \uD65C\uC131\uD654)",
   "agent.labelA": "에이전트 A",
   "agent.labelB": "에이전트 B",
   "agent.labelARole": "에이전트 A (구현자)",
