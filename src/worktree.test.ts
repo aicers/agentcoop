@@ -480,6 +480,31 @@ describe("createWorktree — legacy worktree branch detection", () => {
     // The new worktree is created with the requested branch name.
     expect(result.branch).toBe("alice/issue-5");
   });
+
+  test("clean tolerates non-git directory and falls back to requested branch", () => {
+    mockExistsSync.mockReturnValue(true);
+    // Call sequence:
+    // 1. git status --porcelain → fails (not a git dir) → hasUncommittedChanges returns false
+    // 2. git rev-parse --abbrev-ref HEAD → fails (not a git dir)
+    // 3. git worktree remove (forceRemove, may fail)
+    // 4. git branch -D (forceRemove, may fail)
+    // 5. git worktree add (recreate)
+    mockExecFileSync
+      .mockImplementationOnce(() => {
+        throw new Error("not a git repository");
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("not a git repository");
+      })
+      .mockImplementation(() => "" as never);
+    const result = createWorktree({
+      ...baseOpts,
+      branch: "alice/issue-5",
+      conflictChoice: "clean",
+    });
+    // Should not throw — falls back to the requested branch.
+    expect(result.branch).toBe("alice/issue-5");
+  });
 });
 
 // ---------------------------------------------------------------------------

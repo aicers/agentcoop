@@ -264,7 +264,14 @@ export function createWorktree(options: {
     if (conflictChoice === "clean") {
       // Detect the actual branch so we remove the right one (it may
       // differ from the requested name for legacy worktrees).
-      const oldBranch = getCheckedOutBranch(wtPath);
+      // Fall back to the requested branch when detection fails (e.g.
+      // the path exists but is not a valid git worktree).
+      let oldBranch: string;
+      try {
+        oldBranch = getCheckedOutBranch(wtPath);
+      } catch {
+        oldBranch = branch;
+      }
       const lockPath = repoLockPath(owner, repo);
       withLock(lockPath, () => {
         forceRemoveWorktreeAndBranch(bare, wtPath, oldBranch);
