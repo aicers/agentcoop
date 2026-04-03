@@ -22,12 +22,41 @@ describe("AgentPane", () => {
   test("renders placeholder when no chunks have been emitted", () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(
-      <AgentPane label="Agent A" agent="a" emitter={emitter} color="blue" />,
+      <AgentPane
+        label="Agent A (Implementer)"
+        agent="a"
+        emitter={emitter}
+        color="blue"
+      />,
     );
 
     const frame = lastFrame();
-    expect(frame).toContain("Agent A");
+    expect(frame).toContain("Agent A (Implementer)");
     expect(frame).toContain("(waiting for output)");
+  });
+
+  test("renders role label alongside agent name", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box>
+        <AgentPane
+          label="Agent A (Implementer)"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+        />
+        <AgentPane
+          label="Agent B (Reviewer)"
+          agent="b"
+          emitter={emitter}
+          color="green"
+        />
+      </Box>,
+    );
+
+    const frame = lastFrame();
+    expect(frame).toContain("Agent A (Implementer)");
+    expect(frame).toContain("Agent B (Reviewer)");
   });
 
   test("renders streamed lines after agent:chunk events", async () => {
