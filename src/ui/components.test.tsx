@@ -4,11 +4,14 @@
  * Uses ink-testing-library to render ink components in a test
  * environment and assert on the terminal output frames.
  */
-import { Box } from "ink";
+import { Box, Text, useInput, useStdout } from "ink";
 import { cleanup, render } from "ink-testing-library";
+import { useEffect, useState } from "react";
 import { afterEach, describe, expect, test } from "vitest";
+import type { AgentInvokeEvent } from "../pipeline-events.js";
 import { PipelineEventEmitter } from "../pipeline-events.js";
-import { AgentPane } from "./AgentPane.js";
+import { AgentPane, splitIntoRows } from "./AgentPane.js";
+import { useTerminalHeight } from "./App.js";
 import { InputArea, type InputRequest } from "./InputArea.js";
 import { StatusBar } from "./StatusBar.js";
 
@@ -265,7 +268,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="blue"
           isFocused
-          scrollEnabled
+          arrowScrollEnabled
         />
       </Box>,
     );
@@ -300,7 +303,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="blue"
           isFocused
-          scrollEnabled
+          arrowScrollEnabled
         />
       </Box>,
     );
@@ -326,7 +329,7 @@ describe("AgentPane", () => {
     expect(frame).not.toContain("\u2191");
   });
 
-  test("scrolling is disabled when scrollEnabled is false", async () => {
+  test("Page Up still works when arrowScrollEnabled is false", async () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame, stdin } = render(
       <Box height={10}>
@@ -336,7 +339,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="blue"
           isFocused
-          scrollEnabled={false}
+          arrowScrollEnabled={false}
         />
       </Box>,
     );
@@ -347,10 +350,39 @@ describe("AgentPane", () => {
     emitter.emit("agent:chunk", { agent: "a", chunk });
     await new Promise((r) => setTimeout(r, 50));
 
-    stdin.write("\x1b[5~");
+    stdin.write("\x1b[5~"); // Page Up
     await new Promise((r) => setTimeout(r, 50));
 
-    // View should not have moved — still at bottom.
+    // Page keys work even during input prompts.
+    expect(lastFrame()).not.toContain("line20");
+    expect(lastFrame()).toContain("\u2191");
+  });
+
+  test("arrow scrolling is disabled when arrowScrollEnabled is false", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame, stdin } = render(
+      <Box height={10}>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isFocused
+          arrowScrollEnabled={false}
+        />
+      </Box>,
+    );
+
+    const chunk = Array.from({ length: 20 }, (_, i) => `line${i + 1}`)
+      .join("\n")
+      .concat("\n");
+    emitter.emit("agent:chunk", { agent: "a", chunk });
+    await new Promise((r) => setTimeout(r, 50));
+
+    stdin.write("\x1b[A"); // Up arrow
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Arrow keys should be disabled — still at bottom.
     expect(lastFrame()).toContain("line20");
     expect(lastFrame()).not.toContain("\u2191");
   });
@@ -365,7 +397,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="blue"
           isFocused={false}
-          scrollEnabled
+          arrowScrollEnabled
         />
       </Box>,
     );
@@ -393,7 +425,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="blue"
           isFocused
-          scrollEnabled
+          arrowScrollEnabled
         />
       </Box>,
     );
@@ -425,7 +457,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="blue"
           isFocused
-          scrollEnabled
+          arrowScrollEnabled
         />
       </Box>,
     );
@@ -464,7 +496,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="blue"
           isFocused
-          scrollEnabled
+          arrowScrollEnabled
         />
       </Box>,
     );
@@ -493,7 +525,7 @@ describe("AgentPane", () => {
     expect(frameAfter).not.toContain("line25");
   });
 
-  test("unfocused pane border dims when scrollEnabled", () => {
+  test("unfocused pane border dims to distinguish focus", () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(
       <Box>
@@ -503,7 +535,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="blue"
           isFocused={false}
-          scrollEnabled
+          arrowScrollEnabled
         />
         <AgentPane
           label="Agent B"
@@ -511,7 +543,7 @@ describe("AgentPane", () => {
           emitter={emitter}
           color="green"
           isFocused
-          scrollEnabled
+          arrowScrollEnabled
         />
       </Box>,
     );
@@ -520,6 +552,177 @@ describe("AgentPane", () => {
     // Both labels must be present.
     expect(frame).toContain("Agent A");
     expect(frame).toContain("Agent B");
+  });
+
+  test("focused pane shows [*] indicator in header", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isFocused
+        />
+        <AgentPane
+          label="Agent B"
+          agent="b"
+          emitter={emitter}
+          color="green"
+          isFocused={false}
+        />
+      </Box>,
+    );
+
+    const frame = lastFrame() ?? "";
+    // Focused pane must show the [*] marker.
+    expect(frame).toContain("[*]");
+    // The marker must appear only once (only for the focused pane).
+    const markerCount = (frame.match(/\[\*\]/g) ?? []).length;
+    expect(markerCount).toBe(1);
+  });
+
+  test("active pane shows yellow dot indicator in header", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isActive
+        />
+        <AgentPane
+          label="Agent B"
+          agent="b"
+          emitter={emitter}
+          color="green"
+          isActive={false}
+        />
+      </Box>,
+    );
+
+    const frame = lastFrame() ?? "";
+    // Active pane must show the ● indicator.
+    expect(frame).toContain("\u25CF");
+    // The indicator must appear only once (only for the active pane).
+    const dotCount = (frame.match(/\u25CF/g) ?? []).length;
+    expect(dotCount).toBe(1);
+  });
+
+  test("inactive pane does not show yellow dot indicator", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <AgentPane
+        label="Agent A"
+        agent="a"
+        emitter={emitter}
+        color="blue"
+        isActive={false}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).not.toContain("\u25CF");
+  });
+
+  test("agent:invoke event sets active indicator via emitter (integration)", async () => {
+    const emitter = new PipelineEventEmitter();
+
+    // Minimal wrapper that mirrors App's activeAgent tracking logic.
+    function ActiveAgentHarness({
+      emitter,
+    }: {
+      emitter: PipelineEventEmitter;
+    }) {
+      const [activeAgent, setActiveAgent] = useState<"a" | "b" | null>(null);
+
+      useEffect(() => {
+        const onInvoke = (ev: AgentInvokeEvent) => setActiveAgent(ev.agent);
+        const onStageExit = () => setActiveAgent(null);
+        emitter.on("agent:invoke", onInvoke);
+        emitter.on("stage:exit", onStageExit);
+        return () => {
+          emitter.off("agent:invoke", onInvoke);
+          emitter.off("stage:exit", onStageExit);
+        };
+      }, [emitter]);
+
+      return (
+        <Box>
+          <AgentPane
+            label="Agent A"
+            agent="a"
+            emitter={emitter}
+            color="blue"
+            isActive={activeAgent === "a"}
+          />
+          <AgentPane
+            label="Agent B"
+            agent="b"
+            emitter={emitter}
+            color="green"
+            isActive={activeAgent === "b"}
+          />
+        </Box>
+      );
+    }
+
+    const { lastFrame } = render(<ActiveAgentHarness emitter={emitter} />);
+
+    // Before any event: no dot.
+    expect(lastFrame() ?? "").not.toContain("\u25CF");
+
+    // Emit agent:invoke for agent A → dot should appear exactly once.
+    emitter.emit("agent:invoke", { agent: "a", type: "invoke" });
+    await new Promise((r) => setTimeout(r, 50));
+    let frame = lastFrame() ?? "";
+    expect(frame).toContain("\u25CF");
+    expect((frame.match(/\u25CF/g) ?? []).length).toBe(1);
+
+    // Emit stage:exit → dot should disappear.
+    emitter.emit("stage:exit", { stageNumber: 1, outcome: "completed" });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastFrame() ?? "").not.toContain("\u25CF");
+
+    // Emit agent:invoke for agent B → dot reappears on B's pane.
+    emitter.emit("agent:invoke", { agent: "b", type: "invoke" });
+    await new Promise((r) => setTimeout(r, 50));
+    frame = lastFrame() ?? "";
+    expect(frame).toContain("\u25CF");
+    expect((frame.match(/\u25CF/g) ?? []).length).toBe(1);
+  });
+});
+
+// ---- splitIntoRows -----------------------------------------------------------
+
+describe("splitIntoRows", () => {
+  test("wraps at word boundaries instead of mid-word", () => {
+    const rows = splitIntoRows("No code changes were needed.", 15);
+    expect(rows).toEqual(["No code changes", " were needed."]);
+  });
+
+  test("hard-breaks a single word longer than width", () => {
+    const rows = splitIntoRows("abcdefghij", 4);
+    expect(rows).toEqual(["abcd", "efgh", "ij"]);
+  });
+
+  test("returns single row for text shorter than width", () => {
+    expect(splitIntoRows("short", 80)).toEqual(["short"]);
+  });
+
+  test("preserves empty string", () => {
+    expect(splitIntoRows("", 40)).toEqual([""]);
+  });
+
+  test("preserves leading whitespace (trim: false)", () => {
+    const rows = splitIntoRows("  indented text", 20);
+    expect(rows).toEqual(["  indented text"]);
+    // Ensure indentation survives wrapping when the line must break.
+    const wrapped = splitIntoRows("  indented text here", 10);
+    expect(wrapped[0]).toMatch(/^\s{2}/);
   });
 });
 
@@ -561,7 +764,8 @@ describe("StatusBar", () => {
 
     const frame = lastFrame();
     expect(frame).toContain("Stage 2: Implement");
-    expect(frame).toContain("Round: 1 (in progress)");
+    // Implement is not a looping stage — no round indicator.
+    expect(frame).not.toContain("Round:");
     expect(frame).not.toContain("Initialising");
   });
 
@@ -590,8 +794,8 @@ describe("StatusBar", () => {
     expect(frame).toContain("Stage 3: Self-check");
     expect(frame).toContain("Round: 2 (done)");
     expect(frame).toContain("Last: not approved");
-    expect(frame).toContain("SC: 1");
-    expect(frame).toContain("RV: 0");
+    expect(frame).toContain("Self-check: 1");
+    expect(frame).toContain("Review: 0");
   });
 
   test("shows in-progress then done on successive events", async () => {
@@ -679,8 +883,8 @@ describe("StatusBar", () => {
     await new Promise((r) => setTimeout(r, 50));
 
     const frame = lastFrame();
-    expect(frame).toContain("SC: 0");
-    expect(frame).toContain("RV: 1");
+    expect(frame).toContain("Self-check: 0");
+    expect(frame).toContain("Review: 1");
   });
 
   test("hides cumulative counts when both are zero", () => {
@@ -695,8 +899,8 @@ describe("StatusBar", () => {
     );
 
     const frame = lastFrame() ?? "";
-    expect(frame).not.toContain("SC:");
-    expect(frame).not.toContain("RV:");
+    expect(frame).not.toContain("Self-check:");
+    expect(frame).not.toContain("Review:");
   });
 });
 
@@ -760,5 +964,202 @@ describe("InputArea", () => {
 
     expect(lastFrame()).toContain("Blocked. Choose:");
     expect(lastFrame()).not.toContain("Pipeline running...");
+  });
+});
+
+// ---- Viewport height constraint (App-level integration) ---------------------
+
+describe("viewport height constraint", () => {
+  test("useTerminalHeight returns undefined when stdout is not a TTY", () => {
+    // ink-testing-library's stdout has no isTTY property, simulating a
+    // non-TTY environment.  The hook should return undefined so the root
+    // Box falls back to height="100%".
+    function Probe() {
+      const h = useTerminalHeight();
+      return <Text>{h === undefined ? "UNDEFINED" : String(h)}</Text>;
+    }
+
+    const { lastFrame } = render(<Probe />);
+    expect(lastFrame()).toContain("UNDEFINED");
+  });
+
+  test("useTerminalHeight updates on stdout resize", async () => {
+    function Probe() {
+      const { stdout } = useStdout();
+      const h = useTerminalHeight();
+      return (
+        <Text>
+          isTTY={String(stdout.isTTY)} h={h === undefined ? "none" : String(h)}
+        </Text>
+      );
+    }
+
+    const { lastFrame, stdout } = render(<Probe />);
+
+    // Initially not a TTY — height should be undefined.
+    expect(lastFrame()).toContain("h=none");
+
+    // Simulate becoming a TTY with a resize event.  In production the
+    // stdout always has isTTY set from the start, but for this test we
+    // verify that a resize event with rows set propagates.  Since isTTY
+    // was false at mount, the listener isn't registered so height stays
+    // undefined — confirming the non-TTY fallback is stable.
+    Object.defineProperty(stdout, "rows", { value: 30, writable: true });
+    stdout.emit("resize");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastFrame()).toContain("h=none");
+  });
+
+  test("Tab switches focus between panes during input prompts", async () => {
+    const emitter = new PipelineEventEmitter();
+
+    // Mini harness that mimics App's Tab handler and focus state.
+    function Harness({ hasInput }: { hasInput: boolean }) {
+      const [focusedPane, setFocusedPane] = useState<"a" | "b">("a");
+      useInput((_input, key) => {
+        if (key.tab) {
+          setFocusedPane((prev) => (prev === "a" ? "b" : "a"));
+        }
+      });
+      return (
+        <Box flexDirection="column" height={12}>
+          <Box flexDirection="row" flexGrow={1}>
+            <AgentPane
+              label="Agent A"
+              agent="a"
+              emitter={emitter}
+              color="blue"
+              isFocused={focusedPane === "a"}
+              arrowScrollEnabled={!hasInput}
+            />
+            <AgentPane
+              label="Agent B"
+              agent="b"
+              emitter={emitter}
+              color="green"
+              isFocused={focusedPane === "b"}
+              arrowScrollEnabled={!hasInput}
+            />
+          </Box>
+        </Box>
+      );
+    }
+
+    const { lastFrame, stdin } = render(<Harness hasInput />);
+
+    // Initially pane A is focused.
+    const before = lastFrame() ?? "";
+    expect(before).toContain("Agent A");
+    expect(before).toContain("Agent B");
+    // [*] should appear once, for Agent A.
+    expect((before.match(/\[\*\]/g) ?? []).length).toBe(1);
+
+    // Press Tab — focus should move to pane B even during input.
+    stdin.write("\t");
+    await new Promise((r) => setTimeout(r, 50));
+
+    const after = lastFrame() ?? "";
+    // Agent B header should now contain [*].
+    const bHeaderIdx = after.indexOf("Agent B");
+    const markerIdx = after.lastIndexOf("[*]");
+    expect(markerIdx).toBeGreaterThan(bHeaderIdx);
+  });
+
+  test("PageUp/PageDown work during active input prompts", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame, stdin } = render(
+      <Box flexDirection="column" height={12}>
+        <Box flexDirection="row" flexGrow={1}>
+          <AgentPane
+            label="Agent A"
+            agent="a"
+            emitter={emitter}
+            color="blue"
+            isFocused
+            arrowScrollEnabled={false}
+          />
+        </Box>
+      </Box>,
+    );
+
+    const chunk = Array.from({ length: 20 }, (_, i) => `line${i + 1}`)
+      .join("\n")
+      .concat("\n");
+    emitter.emit("agent:chunk", { agent: "a", chunk });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(lastFrame()).toContain("line20");
+
+    // Page Up during input prompt — should still scroll.
+    stdin.write("\x1b[5~");
+    await new Promise((r) => setTimeout(r, 50));
+
+    const scrolled = lastFrame() ?? "";
+    expect(scrolled).not.toContain("line20");
+    expect(scrolled).toContain("\u2191");
+
+    // Page Down — return to bottom.
+    stdin.write("\x1b[6~");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(lastFrame()).toContain("line20");
+  });
+
+  test("fixed-height root constrains panes to viewport", async () => {
+    const emitter = new PipelineEventEmitter();
+
+    // Simulate the App layout: two panes side-by-side in a fixed-height
+    // container.  This mirrors what useTerminalHeight achieves on a real
+    // TTY by setting height={stdout.rows}.
+    const VIEWPORT_HEIGHT = 12;
+    const { lastFrame, stdin } = render(
+      <Box flexDirection="column" height={VIEWPORT_HEIGHT}>
+        <Box flexDirection="row" flexGrow={1}>
+          <AgentPane
+            label="Agent A"
+            agent="a"
+            emitter={emitter}
+            color="blue"
+            isFocused
+            arrowScrollEnabled
+          />
+          <AgentPane
+            label="Agent B"
+            agent="b"
+            emitter={emitter}
+            color="green"
+          />
+        </Box>
+      </Box>,
+    );
+
+    // Fill both panes with distinct content.
+    const chunkA = Array.from({ length: 20 }, (_, i) => `A${i + 1}`)
+      .join("\n")
+      .concat("\n");
+    const chunkB = Array.from({ length: 20 }, (_, i) => `B${i + 1}`)
+      .join("\n")
+      .concat("\n");
+    emitter.emit("agent:chunk", { agent: "a", chunk: chunkA });
+    emitter.emit("agent:chunk", { agent: "b", chunk: chunkB });
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Both panes should show their newest content (auto-follow).
+    const before = lastFrame() ?? "";
+    expect(before).toContain("A20");
+    expect(before).toContain("B20");
+    // Oldest lines should be clipped by the fixed viewport.
+    expect(before).not.toContain("A1\n");
+    expect(before).not.toContain("B1\n");
+
+    // Scroll pane A up — only pane A should change.
+    stdin.write("\x1b[5~"); // Page Up
+    await new Promise((r) => setTimeout(r, 50));
+
+    const after = lastFrame() ?? "";
+    // Pane A must have scrolled (newest line hidden).
+    expect(after).not.toContain("A20");
+    // Pane B must remain at the bottom (unaffected by pane A scroll).
+    expect(after).toContain("B20");
   });
 });

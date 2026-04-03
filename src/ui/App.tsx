@@ -1,4 +1,4 @@
-import { Box, useInput } from "ink";
+import { Box, useInput, useStdout } from "ink";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { t } from "../i18n/index.js";
 import type {
@@ -7,11 +7,34 @@ import type {
   UserPrompt,
 } from "../pipeline.js";
 import { runPipeline } from "../pipeline.js";
-import type { PipelineEventEmitter } from "../pipeline-events.js";
+import type {
+  AgentInvokeEvent,
+  PipelineEventEmitter,
+} from "../pipeline-events.js";
 import { AgentPane } from "./AgentPane.js";
 import { InputArea, type InputRequest } from "./InputArea.js";
 import { StatusBar } from "./StatusBar.js";
 import { createTuiUserPrompt } from "./TuiUserPrompt.js";
+
+/** Read terminal height from stdout.rows, re-rendering on resize. */
+export function useTerminalHeight(): number | undefined {
+  const { stdout } = useStdout();
+  const isTTY = stdout.isTTY === true;
+  const [height, setHeight] = useState<number | undefined>(
+    isTTY ? stdout.rows : undefined,
+  );
+
+  useEffect(() => {
+    if (!isTTY) return;
+    const onResize = () => setHeight(stdout.rows);
+    stdout.on("resize", onResize);
+    return () => {
+      stdout.off("resize", onResize);
+    };
+  }, [stdout, isTTY]);
+
+  return height;
+}
 
 export interface AppProps {
   emitter: PipelineEventEmitter;
@@ -19,9 +42,9 @@ export interface AppProps {
   onExit: (result: PipelineResult) => void;
   /** Called once the TUI prompt is ready, so callers can late-bind to it. */
   onPromptReady?: (prompt: UserPrompt) => void;
-  /** Short model identifier for Agent A (e.g., "opus"). */
+  /** Display name for Agent A (e.g., "Claude Opus 4.6 (1M) / Max"). */
   modelNameA?: string;
-  /** Short model identifier for Agent B (e.g., "gpt-5.4"). */
+  /** Display name for Agent B (e.g., "GPT-5.4"). */
   modelNameB?: string;
 }
 
@@ -33,9 +56,11 @@ export function App({
   modelNameA,
   modelNameB,
 }: AppProps) {
+  const terminalHeight = useTerminalHeight();
   const [inputRequest, setInputRequest] = useState<InputRequest | null>(null);
   const resolveRef = useRef<((value: string) => void) | null>(null);
   const [focusedPane, setFocusedPane] = useState<"a" | "b">("a");
+  const [activeAgent, setActiveAgent] = useState<"a" | "b" | null>(null);
 
   // Store props in refs so the mount effect never re-runs.
   const emitterRef = useRef(emitter);
@@ -56,15 +81,24 @@ export function App({
     setInputRequest(null);
   }, []);
 
-  // Switch focused pane with Tab when input area is not active.
-  useInput(
-    (_input, key) => {
-      if (key.tab) {
-        setFocusedPane((prev) => (prev === "a" ? "b" : "a"));
-      }
-    },
-    { isActive: !inputRequest },
-  );
+  // Track which agent is currently running (independent of focused pane).
+  useEffect(() => {
+    const onInvoke = (ev: AgentInvokeEvent) => setActiveAgent(ev.agent);
+    const onStageExit = () => setActiveAgent(null);
+    emitter.on("agent:invoke", onInvoke);
+    emitter.on("stage:exit", onStageExit);
+    return () => {
+      emitter.off("agent:invoke", onInvoke);
+      emitter.off("stage:exit", onStageExit);
+    };
+  }, [emitter]);
+
+  // Switch focused pane with Tab (always active; no conflict with text input).
+  useInput((_input, key) => {
+    if (key.tab) {
+      setFocusedPane((prev) => (prev === "a" ? "b" : "a"));
+    }
+  });
 
   // Run the pipeline once on mount.
   useEffect(() => {
@@ -88,7 +122,7 @@ export function App({
   }, [dispatch]);
 
   return (
-    <Box flexDirection="column" width="100%" height="100%">
+    <Box flexDirection="column" width="100%" height={terminalHeight ?? "100%"}>
       {/* Top row: two agent panes side by side */}
       <Box flexDirection="row" flexGrow={1}>
         <AgentPane
@@ -98,7 +132,8 @@ export function App({
           emitter={emitter}
           color="blue"
           isFocused={focusedPane === "a"}
-          scrollEnabled={!inputRequest}
+          isActive={activeAgent === "a"}
+          arrowScrollEnabled={!inputRequest}
         />
         <AgentPane
           label={t()["agent.labelBRole"]}
@@ -107,7 +142,8 @@ export function App({
           emitter={emitter}
           color="green"
           isFocused={focusedPane === "b"}
-          scrollEnabled={!inputRequest}
+          isActive={activeAgent === "b"}
+          arrowScrollEnabled={!inputRequest}
         />
       </Box>
 

@@ -92,6 +92,13 @@ describe("buildImplementPrompt", () => {
     const prompt = buildImplementPrompt(BASE_CTX, makeOpts());
     expect(prompt).not.toContain("Additional feedback");
   });
+
+  test("instructs to start infrastructure and run tests against it", () => {
+    const prompt = buildImplementPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("Docker Compose");
+    expect(prompt).toContain("port conflict");
+    expect(prompt).toContain("run the full test");
+  });
 });
 
 // ---- buildCompletionCheckPrompt --------------------------------------------

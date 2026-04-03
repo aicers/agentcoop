@@ -36,7 +36,9 @@ vi.mock("./github.js", () => ({
   getIssue: (...args: unknown[]) => mockGetIssue(...args),
 }));
 
-const { runStartup, selectTarget } = await import("./startup.js");
+const { runStartup, selectTarget, modelDisplayName } = await import(
+  "./startup.js"
+);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -586,6 +588,77 @@ describe("runStartup — model selection", () => {
     expect(result.agentA.model).toBe("sonnet");
     expect(result.agentB.cli).toBe("codex");
     expect(result.agentB.model).toBe("gpt-5.3-codex");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Effort level selection
+// ---------------------------------------------------------------------------
+describe("runStartup — effort level choices", () => {
+  test("offers max effort for Opus but not for Sonnet", async () => {
+    setupHappyPath();
+    mockSelect
+      .mockReset()
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("opus") // agent A model
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("max") // agent A effort
+      .mockResolvedValueOnce("claude") // agent B CLI
+      .mockResolvedValueOnce("sonnet") // agent B model
+      .mockResolvedValueOnce("200k") // agent B context window
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("bypass") // permission mode
+      .mockResolvedValueOnce("en"); // language
+    mockConfirm.mockResolvedValueOnce(true);
+
+    const result = await runStartup();
+
+    // Agent A (Opus) effort prompt should include "max"
+    // index: 0=owner, 1=agentA CLI, 2=agentA model, 3=agentA context, 4=agentA effort
+    const agentAEffortCall = mockSelect.mock.calls[4][0];
+    const agentAValues = agentAEffortCall.choices.map(
+      (c: { value: string }) => c.value,
+    );
+    expect(agentAValues).toContain("max");
+    expect(agentAValues).toEqual(["low", "medium", "high", "max"]);
+
+    // Agent B (Sonnet) effort prompt should NOT include "max"
+    // index: 5=agentB CLI, 6=agentB model, 7=agentB context, 8=agentB effort
+    const agentBEffortCall = mockSelect.mock.calls[8][0];
+    const agentBValues = agentBEffortCall.choices.map(
+      (c: { value: string }) => c.value,
+    );
+    expect(agentBValues).not.toContain("max");
+    expect(agentBValues).toEqual(["low", "medium", "high"]);
+
+    expect(result.agentA.effortLevel).toBe("max");
+    expect(result.agentB.effortLevel).toBe("high");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// modelDisplayName
+// ---------------------------------------------------------------------------
+describe("modelDisplayName", () => {
+  test("shows Max label for Opus with max effort", () => {
+    const name = modelDisplayName({
+      cli: "claude",
+      model: "opus",
+      contextWindow: "1m",
+      effortLevel: "max",
+    });
+    expect(name).toBe("Claude Opus 4.6 (1M) / Max");
+  });
+
+  test("shows High label for Sonnet with high effort", () => {
+    const name = modelDisplayName({
+      cli: "claude",
+      model: "sonnet",
+      effortLevel: "high",
+    });
+    expect(name).toBe("Claude Sonnet 4.6 / High");
   });
 });
 

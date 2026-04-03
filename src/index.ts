@@ -489,6 +489,13 @@ try {
   };
 
   // Launch the ink TUI.
+  // Restore stdin after @inquirer/prompts leaves it paused/unref'd.
+  // Without this, ink's useInput hooks never receive data.
+  if (process.stdin.isPaused()) {
+    process.stdin.resume();
+  }
+  process.stdin.ref();
+
   const emitter = new PipelineEventEmitter();
 
   const pipelineResult = await new Promise<PipelineResult>((resolve) => {
@@ -503,8 +510,8 @@ try {
         onPromptReady: (prompt) => {
           tuiPrompt = prompt;
         },
-        modelNameA: agentAConfig.model,
-        modelNameB: agentBConfig.model,
+        modelNameA: modelDisplayName(agentAConfig),
+        modelNameB: modelDisplayName(agentBConfig),
       }),
     );
   });
