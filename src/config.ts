@@ -16,11 +16,22 @@ export const DEFAULT_PIPELINE_SETTINGS: PipelineSettings = {
   autoResumeAttempts: 3,
 };
 
+export interface SavedAgentConfig {
+  cli: "claude" | "codex";
+  model: string;
+  contextWindow?: string;
+  effortLevel?: string;
+}
+
 export interface Config {
   owners: string[];
   cloneBaseDir: string;
   language: "en" | "ko";
   pipelineSettings: PipelineSettings;
+  agentA?: SavedAgentConfig;
+  agentB?: SavedAgentConfig;
+  executionMode?: "auto" | "step";
+  claudePermissionMode?: "auto" | "bypass";
 }
 
 const DEFAULT_CONFIG: Config = {
@@ -38,6 +49,22 @@ const VALID_LANGUAGES = new Set<Config["language"]>(["en", "ko"]);
 
 function isPositiveInt(v: unknown): v is number {
   return typeof v === "number" && Number.isInteger(v) && v > 0;
+}
+
+function loadSavedAgentConfig(raw: unknown): SavedAgentConfig | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return undefined;
+  }
+  const r = raw as Record<string, unknown>;
+  if (r.cli !== "claude" && r.cli !== "codex") return undefined;
+  if (typeof r.model !== "string") return undefined;
+  return {
+    cli: r.cli,
+    model: r.model,
+    contextWindow:
+      typeof r.contextWindow === "string" ? r.contextWindow : undefined,
+    effortLevel: typeof r.effortLevel === "string" ? r.effortLevel : undefined,
+  };
 }
 
 function loadPipelineSettings(raw: unknown): PipelineSettings {
@@ -95,6 +122,17 @@ export function loadConfig(): Config {
         : DEFAULT_CONFIG.cloneBaseDir,
     language,
     pipelineSettings: loadPipelineSettings(raw.pipelineSettings),
+    agentA: loadSavedAgentConfig(raw.agentA),
+    agentB: loadSavedAgentConfig(raw.agentB),
+    executionMode:
+      raw.executionMode === "auto" || raw.executionMode === "step"
+        ? raw.executionMode
+        : undefined,
+    claudePermissionMode:
+      raw.claudePermissionMode === "auto" ||
+      raw.claudePermissionMode === "bypass"
+        ? raw.claudePermissionMode
+        : undefined,
   };
 }
 

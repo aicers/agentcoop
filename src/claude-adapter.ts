@@ -137,26 +137,43 @@ export class ClaudeStreamTransformer extends JsonlLineTransformer {
 
 export type ClaudePermissionMode = "auto" | "bypass";
 
+export type ClaudeThinkingBudget = "low" | "medium" | "high";
+
 export interface ClaudeAdapterOptions {
   model?: string;
   permissionMode?: ClaudePermissionMode;
+  thinkingBudget?: ClaudeThinkingBudget;
+  contextWindow?: string;
   inactivityTimeoutMs?: number;
 }
 
 export function buildClaudeArgs(
   prompt: string,
-  opts: { model?: string; permissionMode: ClaudePermissionMode },
+  opts: {
+    model?: string;
+    permissionMode: ClaudePermissionMode;
+    thinkingBudget?: ClaudeThinkingBudget;
+    contextWindow?: string;
+  },
   sessionId?: string,
 ): string[] {
   // --verbose is required for --output-format stream-json.
   const args = ["-p", prompt, "--output-format", "stream-json", "--verbose"];
   if (opts.model) {
-    args.push("--model", opts.model);
+    // Append context window variant to model ID when extended (1M).
+    let modelId = opts.model;
+    if (opts.contextWindow === "1m") {
+      modelId = `${modelId}-1m`;
+    }
+    args.push("--model", modelId);
   }
   if (opts.permissionMode === "bypass") {
     args.push("--permission-mode", "bypassPermissions");
   } else {
     args.push("--permission-mode", "auto");
+  }
+  if (opts.thinkingBudget) {
+    args.push("--thinking-budget", opts.thinkingBudget);
   }
   if (sessionId) {
     args.push("--resume", sessionId);
@@ -216,13 +233,20 @@ export function createClaudeAdapter(
 ): AgentAdapter {
   const model = opts.model;
   const permissionMode = opts.permissionMode ?? "auto";
+  const thinkingBudget = opts.thinkingBudget;
+  const contextWindow = opts.contextWindow;
   const inactivityTimeoutMs = opts.inactivityTimeoutMs;
 
   return {
     invoke(prompt, options?: InvokeOptions) {
       return spawnAgent({
         command: "claude",
-        args: buildClaudeArgs(prompt, { model, permissionMode }),
+        args: buildClaudeArgs(prompt, {
+          model,
+          permissionMode,
+          thinkingBudget,
+          contextWindow,
+        }),
         cwd: options?.cwd,
         parseResult: parseClaudeOutput,
         chunkTransformer: new ClaudeStreamTransformer(),
@@ -232,7 +256,11 @@ export function createClaudeAdapter(
     resume(sessionId, prompt, options?: InvokeOptions) {
       return spawnAgent({
         command: "claude",
-        args: buildClaudeArgs(prompt, { model, permissionMode }, sessionId),
+        args: buildClaudeArgs(
+          prompt,
+          { model, permissionMode, thinkingBudget, contextWindow },
+          sessionId,
+        ),
         cwd: options?.cwd,
         parseResult: parseClaudeOutput,
         chunkTransformer: new ClaudeStreamTransformer(),

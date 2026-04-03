@@ -14,7 +14,10 @@ export interface Messages {
   "startup.noRepos": (owner: string) => string;
   "startup.issueNumber": string;
   "startup.invalidIssueNumber": string;
+  "startup.agentCli": (label: string) => string;
   "startup.agentModel": (label: string) => string;
+  "startup.agentContext": (label: string) => string;
+  "startup.agentEffort": (label: string) => string;
   "startup.executionMode": string;
   "startup.claudePermission": string;
   "startup.language": string;

@@ -69,10 +69,15 @@ function setupHappyPath() {
   mockLoadConfig.mockReturnValue(defaultConfig());
   mockSelect
     .mockResolvedValueOnce("aicers") // owner
+    .mockResolvedValueOnce("claude") // agent A CLI
     .mockResolvedValueOnce("opus") // agent A model
+    .mockResolvedValueOnce("200k") // agent A context window
+    .mockResolvedValueOnce("high") // agent A effort
+    .mockResolvedValueOnce("codex") // agent B CLI
     .mockResolvedValueOnce("gpt-5.4") // agent B model
+    .mockResolvedValueOnce("high") // agent B effort
     .mockResolvedValueOnce("auto") // execution mode
-    .mockResolvedValueOnce("auto") // permission mode
+    .mockResolvedValueOnce("bypass") // permission mode
     .mockResolvedValueOnce("en"); // language
   mockSearch.mockResolvedValueOnce("agentcoop"); // repo
   mockInput.mockResolvedValueOnce("42"); // issue number
@@ -100,10 +105,20 @@ describe("runStartup — happy path", () => {
     expect(result.owner).toBe("aicers");
     expect(result.repo).toBe("agentcoop");
     expect(result.issue).toEqual(defaultIssue());
-    expect(result.agentA).toEqual({ model: "opus" });
-    expect(result.agentB).toEqual({ model: "gpt-5.4" });
+    expect(result.agentA).toEqual({
+      cli: "claude",
+      model: "opus",
+      contextWindow: "200k",
+      effortLevel: "high",
+    });
+    expect(result.agentB).toEqual({
+      cli: "codex",
+      model: "gpt-5.4",
+      contextWindow: undefined,
+      effortLevel: "high",
+    });
     expect(result.executionMode).toBe("auto");
-    expect(result.claudePermissionMode).toBe("auto");
+    expect(result.claudePermissionMode).toBe("bypass");
     expect(result.language).toBe("en");
     expect(result.pipelineSettings).toEqual({
       selfCheckAutoIterations: 3,
@@ -131,10 +146,10 @@ describe("runStartup — happy path", () => {
     expect(mockGetIssue).toHaveBeenCalledWith("aicers", "agentcoop", 42);
   });
 
-  test("does not save config when nothing changed", async () => {
+  test("saves config when agent selections differ from saved", async () => {
     setupHappyPath();
     await runStartup();
-    expect(mockSaveConfig).not.toHaveBeenCalled();
+    expect(mockSaveConfig).toHaveBeenCalledOnce();
   });
 });
 
@@ -159,8 +174,13 @@ describe("runStartup — owner selection", () => {
       .mockResolvedValueOnce("new-org") // owner input
       .mockResolvedValueOnce("1"); // issue number
     mockSelect
-      .mockResolvedValueOnce("sonnet") // agent A
-      .mockResolvedValueOnce("gpt-5.3-codex") // agent B
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("sonnet") // agent A model
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.3-codex") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("step") // execution mode
       .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("ko"); // language
@@ -208,11 +228,16 @@ describe("runStartup — owner selection", () => {
       },
     );
     mockSelect
-      .mockResolvedValueOnce("opus")
-      .mockResolvedValueOnce("gpt-5.4")
-      .mockResolvedValueOnce("auto")
-      .mockResolvedValueOnce("auto")
-      .mockResolvedValueOnce("en");
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("opus") // agent A model
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("bypass") // permission mode
+      .mockResolvedValueOnce("en"); // language
     mockCheckbox.mockResolvedValueOnce([]);
     mockSearch.mockResolvedValueOnce("repo1");
     mockListRepositories.mockReturnValue([{ name: "repo1", description: "" }]);
@@ -230,11 +255,16 @@ describe("runStartup — owner selection", () => {
       .mockResolvedValueOnce("  aicers  ") // owner with spaces
       .mockResolvedValueOnce("42");
     mockSelect
-      .mockResolvedValueOnce("opus")
-      .mockResolvedValueOnce("gpt-5.4")
-      .mockResolvedValueOnce("auto")
-      .mockResolvedValueOnce("auto")
-      .mockResolvedValueOnce("en");
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("opus") // agent A model
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("bypass") // permission mode
+      .mockResolvedValueOnce("en"); // language
     mockCheckbox.mockResolvedValueOnce([]);
     mockSearch.mockResolvedValueOnce("repo1");
     mockListRepositories.mockReturnValue([{ name: "repo1", description: "" }]);
@@ -470,18 +500,68 @@ describe("runStartup — issue number input", () => {
 // Model selection
 // ---------------------------------------------------------------------------
 describe("runStartup — model selection", () => {
-  test("offers all Claude and Codex models as choices", async () => {
+  test("offers CLI-specific models as choices for agent A", async () => {
     setupHappyPath();
     await runStartup();
 
-    // Agent A model selection is the 2nd select call
-    const agentACall = mockSelect.mock.calls[1][0];
-    const values = agentACall.choices.map((c: { value: string }) => c.value);
+    // Agent A CLI selection is the 2nd select call (index 1)
+    // Agent A model selection is the 3rd select call (index 2)
+    const agentAModelCall = mockSelect.mock.calls[2][0];
+    const values = agentAModelCall.choices.map(
+      (c: { value: string }) => c.value,
+    );
+    // Agent A selected "claude" CLI, so only Claude models are shown
     expect(values).toContain("opus");
     expect(values).toContain("sonnet");
-    expect(values).toContain("gpt-5.4");
-    expect(values).toContain("gpt-5.3-codex");
-    expect(values).toHaveLength(4);
+    expect(values).not.toContain("gpt-5.4");
+    expect(values).not.toContain("gpt-5.3-codex");
+    expect(values).toHaveLength(2);
+  });
+
+  test("switching CLI seeds defaults from CLI_DEFAULTS", async () => {
+    // Config has Claude saved for agent A; user switches to Codex.
+    // The model/effort prompts should receive Codex defaults (gpt-5.4, xhigh)
+    // instead of falling back to the first choice.
+    const config = {
+      ...defaultConfig(),
+      agentA: {
+        cli: "claude" as const,
+        model: "opus",
+        contextWindow: "1m",
+        effortLevel: "high",
+      },
+    };
+    mockLoadConfig.mockReturnValue(config);
+    mockSelect
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("codex") // agent A CLI — switched!
+      .mockResolvedValueOnce("gpt-5.4") // agent A model
+      .mockResolvedValueOnce("xhigh") // agent A effort
+      .mockResolvedValueOnce("claude") // agent B CLI
+      .mockResolvedValueOnce("opus") // agent B model
+      .mockResolvedValueOnce("1m") // agent B context window
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("bypass") // permission mode
+      .mockResolvedValueOnce("en"); // language
+    mockSearch.mockResolvedValueOnce("agentcoop");
+    mockInput.mockResolvedValueOnce("42");
+    mockCheckbox.mockResolvedValueOnce([]);
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    await runStartup();
+
+    // Agent A model prompt (index 2) should have Codex default
+    const agentAModelCall = mockSelect.mock.calls[2][0];
+    expect(agentAModelCall.default).toBe("gpt-5.4");
+
+    // Agent A effort prompt (index 3) should have Codex default
+    const agentAEffortCall = mockSelect.mock.calls[3][0];
+    expect(agentAEffortCall.default).toBe("xhigh");
   });
 
   test("agent A and B can use different models", async () => {
@@ -489,15 +569,22 @@ describe("runStartup — model selection", () => {
     mockSelect
       .mockReset()
       .mockResolvedValueOnce("aicers") // owner
-      .mockResolvedValueOnce("sonnet") // agent A
-      .mockResolvedValueOnce("gpt-5.3-codex") // agent B
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("sonnet") // agent A model
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.3-codex") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("step") // execution mode
       .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("en"); // language
     mockConfirm.mockResolvedValueOnce(true);
 
     const result = await runStartup();
+    expect(result.agentA.cli).toBe("claude");
     expect(result.agentA.model).toBe("sonnet");
+    expect(result.agentB.cli).toBe("codex");
     expect(result.agentB.model).toBe("gpt-5.3-codex");
   });
 });
@@ -510,11 +597,16 @@ describe("runStartup — language selection", () => {
     const config = defaultConfig();
     mockLoadConfig.mockReturnValue(config);
     mockSelect
-      .mockResolvedValueOnce("aicers")
-      .mockResolvedValueOnce("opus")
-      .mockResolvedValueOnce("gpt-5.4")
-      .mockResolvedValueOnce("auto")
-      .mockResolvedValueOnce("auto")
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("opus") // agent A model
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("ko"); // changed from "en" to "ko"
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
@@ -537,12 +629,17 @@ describe("runStartup — language selection", () => {
     config.language = "ko";
     mockLoadConfig.mockReturnValue(config);
     mockSelect
-      .mockResolvedValueOnce("aicers")
-      .mockResolvedValueOnce("opus")
-      .mockResolvedValueOnce("gpt-5.4")
-      .mockResolvedValueOnce("auto")
-      .mockResolvedValueOnce("auto")
-      .mockResolvedValueOnce("ko"); // same as config, no save
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("opus") // agent A model
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("bypass") // permission mode
+      .mockResolvedValueOnce("ko"); // same as config
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
     mockCheckbox.mockResolvedValueOnce([]);
@@ -554,8 +651,10 @@ describe("runStartup — language selection", () => {
 
     await runStartup();
 
-    // Language select is the 6th select call (owner, agentA, agentB, exec, perm, lang)
-    const langCall = mockSelect.mock.calls[5][0];
+    // Language select call index:
+    // 0=owner, 1=agentA CLI, 2=agentA model, 3=agentA context, 4=agentA effort,
+    // 5=agentB CLI, 6=agentB model, 7=agentB effort, 8=exec, 9=perm, 10=lang
+    const langCall = mockSelect.mock.calls[10][0];
     expect(langCall.default).toBe("ko");
   });
 });
@@ -564,10 +663,53 @@ describe("runStartup — language selection", () => {
 // Config persistence — dirty tracking
 // ---------------------------------------------------------------------------
 describe("runStartup — config dirty tracking", () => {
-  test("does not save when existing owner selected and language unchanged", async () => {
-    setupHappyPath();
+  test("does not save config when all selections match saved values", async () => {
+    const config = {
+      ...defaultConfig(),
+      agentA: {
+        cli: "claude" as const,
+        model: "opus",
+        contextWindow: "200k",
+        effortLevel: "high",
+      },
+      agentB: {
+        cli: "codex" as const,
+        model: "gpt-5.4",
+        effortLevel: "high",
+      },
+      executionMode: "auto" as const,
+      claudePermissionMode: "bypass" as const,
+    };
+    mockLoadConfig.mockReturnValue(config);
+    mockSelect
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("opus") // agent A model
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("bypass") // permission mode
+      .mockResolvedValueOnce("en"); // language
+    mockSearch.mockResolvedValueOnce("agentcoop");
+    mockInput.mockResolvedValueOnce("42");
+    mockCheckbox.mockResolvedValueOnce([]);
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
     await runStartup();
     expect(mockSaveConfig).not.toHaveBeenCalled();
+  });
+
+  test("saves config when agent selections differ from saved", async () => {
+    setupHappyPath();
+    await runStartup();
+    expect(mockSaveConfig).toHaveBeenCalledOnce();
   });
 
   test("saves once when new owner entered and language unchanged", async () => {
@@ -576,10 +718,15 @@ describe("runStartup — config dirty tracking", () => {
     mockLoadConfig.mockReturnValue(config);
     mockInput.mockResolvedValueOnce("new-org").mockResolvedValueOnce("1");
     mockSelect
-      .mockResolvedValueOnce("opus")
-      .mockResolvedValueOnce("gpt-5.4")
-      .mockResolvedValueOnce("auto")
-      .mockResolvedValueOnce("auto")
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("opus") // agent A model
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("en"); // same language
     mockCheckbox.mockResolvedValueOnce([]);
     mockSearch.mockResolvedValueOnce("repo1");
@@ -595,11 +742,16 @@ describe("runStartup — config dirty tracking", () => {
     const config = defaultConfig();
     mockLoadConfig.mockReturnValue(config);
     mockSelect
-      .mockResolvedValueOnce("aicers")
-      .mockResolvedValueOnce("opus")
-      .mockResolvedValueOnce("gpt-5.4")
-      .mockResolvedValueOnce("auto")
-      .mockResolvedValueOnce("auto")
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("opus") // agent A model
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("ko"); // changed
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
@@ -804,12 +956,17 @@ describe("runStartup — alternate selections", () => {
     const config = defaultConfig();
     mockLoadConfig.mockReturnValue(config);
     mockSelect
-      .mockResolvedValueOnce("my-org")
-      .mockResolvedValueOnce("sonnet")
-      .mockResolvedValueOnce("gpt-5.3-codex")
-      .mockResolvedValueOnce("step")
-      .mockResolvedValueOnce("bypass")
-      .mockResolvedValueOnce("ko");
+      .mockResolvedValueOnce("my-org") // owner
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("sonnet") // agent A model
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.3-codex") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("step") // execution mode
+      .mockResolvedValueOnce("bypass") // permission mode
+      .mockResolvedValueOnce("ko"); // language
     mockSearch.mockResolvedValueOnce("my-repo");
     mockInput.mockResolvedValueOnce("99");
     mockCheckbox.mockResolvedValueOnce([]);
@@ -829,7 +986,9 @@ describe("runStartup — alternate selections", () => {
     expect(result.owner).toBe("my-org");
     expect(result.repo).toBe("my-repo");
     expect(result.issue.number).toBe(99);
+    expect(result.agentA.cli).toBe("claude");
     expect(result.agentA.model).toBe("sonnet");
+    expect(result.agentB.cli).toBe("codex");
     expect(result.agentB.model).toBe("gpt-5.3-codex");
     expect(result.executionMode).toBe("step");
     expect(result.claudePermissionMode).toBe("bypass");
@@ -872,7 +1031,7 @@ describe("runStartup — pipeline settings", () => {
     expect(mockSaveConfig).toHaveBeenCalledOnce();
   });
 
-  test("does not save config when user declines save", async () => {
+  test("does not persist pipeline settings when user declines save", async () => {
     setupHappyPath();
     mockCheckbox.mockReset().mockResolvedValueOnce(["autoResumeAttempts"]);
     mockInput.mockReset().mockResolvedValueOnce("42"); // issue number
@@ -882,7 +1041,8 @@ describe("runStartup — pipeline settings", () => {
 
     const result = await runStartup();
     expect(result.pipelineSettings.autoResumeAttempts).toBe(10);
-    expect(mockSaveConfig).not.toHaveBeenCalled();
+    // Config is still saved (agent selections always persist) but without pipeline changes
+    expect(mockSaveConfig).toHaveBeenCalledOnce();
   });
 
   test("presents all four settings as checkbox choices", async () => {
@@ -930,12 +1090,17 @@ describe("runStartup — pipeline settings", () => {
     config.pipelineSettings.inactivityTimeoutMinutes = 30;
     mockLoadConfig.mockReturnValue(config);
     mockSelect
-      .mockResolvedValueOnce("aicers")
-      .mockResolvedValueOnce("opus")
-      .mockResolvedValueOnce("gpt-5.4")
-      .mockResolvedValueOnce("auto")
-      .mockResolvedValueOnce("auto")
-      .mockResolvedValueOnce("en");
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("opus") // agent A model
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("bypass") // permission mode
+      .mockResolvedValueOnce("en"); // language
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
     mockCheckbox.mockResolvedValueOnce([]);
@@ -1042,12 +1207,17 @@ describe("runStartup — pipeline settings", () => {
     const config = defaultConfig();
     mockLoadConfig.mockReturnValue(config);
     mockSelect
-      .mockResolvedValueOnce("aicers")
-      .mockResolvedValueOnce("opus")
-      .mockResolvedValueOnce("gpt-5.4")
-      .mockResolvedValueOnce("auto")
-      .mockResolvedValueOnce("auto")
-      .mockResolvedValueOnce("en");
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("opus") // agent A model
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("bypass") // permission mode
+      .mockResolvedValueOnce("en"); // language
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
     mockCheckbox.mockResolvedValueOnce(["selfCheckAutoIterations"]);
@@ -1063,9 +1233,10 @@ describe("runStartup — pipeline settings", () => {
     const result = await runStartup();
     // Session gets the new value
     expect(result.pipelineSettings.selfCheckAutoIterations).toBe(99);
-    // Config object was NOT mutated (save declined)
+    // Config pipelineSettings was NOT mutated (save declined)
     expect(config.pipelineSettings.selfCheckAutoIterations).toBe(3);
-    expect(mockSaveConfig).not.toHaveBeenCalled();
+    // Config is still saved (agent selections always persist), but with original pipelineSettings
+    expect(mockSaveConfig).toHaveBeenCalledOnce();
   });
 
   test("input shows current value as default", async () => {
@@ -1073,12 +1244,17 @@ describe("runStartup — pipeline settings", () => {
     config.pipelineSettings.autoResumeAttempts = 7;
     mockLoadConfig.mockReturnValue(config);
     mockSelect
-      .mockResolvedValueOnce("aicers")
-      .mockResolvedValueOnce("opus")
-      .mockResolvedValueOnce("gpt-5.4")
-      .mockResolvedValueOnce("auto")
-      .mockResolvedValueOnce("auto")
-      .mockResolvedValueOnce("en");
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("opus") // agent A model
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("bypass") // permission mode
+      .mockResolvedValueOnce("en"); // language
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
     mockCheckbox.mockResolvedValueOnce(["autoResumeAttempts"]);
@@ -1175,12 +1351,18 @@ describe("runStartup with target parameter", () => {
       config,
       configDirty: false,
     };
-    // Only prompts needed: agentA, agentB, executionMode, permissionMode, language, settings, confirm.
+    // Only prompts needed: agentA (cli+model+context+effort), agentB (cli+model+effort),
+    // executionMode, permissionMode, language, settings, confirm.
     mockSelect
+      .mockResolvedValueOnce("claude") // agent A CLI
       .mockResolvedValueOnce("opus") // agent A model
-      .mockResolvedValueOnce("sonnet") // agent B model
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
-      .mockResolvedValueOnce("auto") // permission mode
+      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("en"); // language
     mockCheckbox.mockResolvedValueOnce([]); // no settings adjusted
     mockConfirm.mockResolvedValueOnce(true); // confirm issue
@@ -1190,7 +1372,10 @@ describe("runStartup with target parameter", () => {
     expect(result.owner).toBe("aicers");
     expect(result.repo).toBe("agentcoop");
     expect(result.issue.number).toBe(42);
+    expect(result.agentA.cli).toBe("claude");
     expect(result.agentA.model).toBe("opus");
+    expect(result.agentB.cli).toBe("codex");
+    expect(result.agentB.model).toBe("gpt-5.4");
     // Should NOT have called search (repo) or input (issue number).
     expect(mockSearch).not.toHaveBeenCalled();
   });

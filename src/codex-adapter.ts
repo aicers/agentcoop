@@ -2,6 +2,7 @@ import type {
   AgentAdapter,
   AgentErrorType,
   AgentResult,
+  AgentStream,
   InvokeOptions,
 } from "./agent.js";
 import { JsonlLineTransformer } from "./agent.js";
@@ -255,7 +256,13 @@ export function detectCodexError(text: string): AgentErrorType {
 // CLI args builders
 // ---------------------------------------------------------------------------
 
-const CODEX_REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
+const CODEX_REASONING_EFFORTS = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
 
 export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
 
@@ -352,6 +359,49 @@ function parseCodexInvokeOutput(
 // Adapter factory
 // ---------------------------------------------------------------------------
 
+/**
+ * Wrap an AgentStream so that when `xhigh` is rejected by the CLI
+ * (config_parsing error), the stream transparently retries with `high`.
+ *
+ * Both the async iterator and the result promise are wired through the
+ * retry: the iterator first drains the failed attempt, then — on
+ * fallback — continues yielding chunks from the retry stream so that
+ * the pipeline UI keeps receiving output.
+ */
+function withXhighFallback(
+  stream: AgentStream,
+  retryFn: () => AgentStream,
+): AgentStream {
+  // Shared state: if the first attempt fails with config_parsing, the
+  // retry stream is stored here so both the iterator and result can
+  // reference it.
+  let retryStream: AgentStream | undefined;
+
+  const result = stream.result.then((r) => {
+    if (r.status === "error" && r.errorType === "config_parsing") {
+      retryStream = retryFn();
+      return retryStream.result;
+    }
+    return r;
+  });
+
+  async function* chunks(): AsyncGenerator<string> {
+    yield* stream;
+    // After the first stream finishes, await the result to know whether
+    // a fallback was triggered.
+    await result;
+    if (retryStream) {
+      yield* retryStream;
+    }
+  }
+
+  return {
+    [Symbol.asyncIterator]: () => chunks(),
+    child: stream.child,
+    result,
+  };
+}
+
 export function createCodexAdapter(
   opts: CodexAdapterOptions = {},
 ): AgentAdapter {
@@ -363,7 +413,7 @@ export function createCodexAdapter(
 
   return {
     invoke(prompt, options?: InvokeOptions) {
-      return spawnAgent({
+      const stream = spawnAgent({
         command: "codex",
         args: buildCodexInvokeArgs(prompt, { model, reasoningEffort }),
         cwd: options?.cwd,
@@ -371,29 +421,62 @@ export function createCodexAdapter(
         chunkTransformer: new CodexStreamTransformer(),
         inactivityTimeoutMs,
       });
+      if (reasoningEffort !== "xhigh") return stream;
+      return withXhighFallback(stream, () =>
+        spawnAgent({
+          command: "codex",
+          args: buildCodexInvokeArgs(prompt, {
+            model,
+            reasoningEffort: "high",
+          }),
+          cwd: options?.cwd,
+          parseResult: parseCodexInvokeOutput,
+          chunkTransformer: new CodexStreamTransformer(),
+          inactivityTimeoutMs,
+        }),
+      );
     },
     resume(sessionId, prompt, options?: InvokeOptions) {
+      function parseResume(
+        output: string,
+        exitCode: number | null,
+        stderr: string,
+      ): AgentResult {
+        const result = parseCodexPlainText(output, exitCode, stderr);
+        // Preserve the input session ID when the plain text output
+        // does not contain one (e.g. older CLI versions).
+        if (result.sessionId === undefined) {
+          result.sessionId = sessionId;
+        }
+        return result;
+      }
+
       // codex exec resume outputs plain text, not JSONL.
-      return spawnAgent({
+      const stream = spawnAgent({
         command: "codex",
         args: buildCodexResumeArgs(sessionId, prompt, {
           model,
           reasoningEffort,
         }),
         cwd: options?.cwd,
-        parseResult(output, exitCode, stderr) {
-          const result = parseCodexPlainText(output, exitCode, stderr);
-          // Preserve the input session ID when the plain text output
-          // does not contain one (e.g. older CLI versions).
-          if (result.sessionId === undefined) {
-            result.sessionId = sessionId;
-          }
-          return result;
-        },
+        parseResult: parseResume,
         // No chunkTransformer for resume — plain text is already
         // human-readable and can go directly to the UI.
         inactivityTimeoutMs,
       });
+      if (reasoningEffort !== "xhigh") return stream;
+      return withXhighFallback(stream, () =>
+        spawnAgent({
+          command: "codex",
+          args: buildCodexResumeArgs(sessionId, prompt, {
+            model,
+            reasoningEffort: "high",
+          }),
+          cwd: options?.cwd,
+          parseResult: parseResume,
+          inactivityTimeoutMs,
+        }),
+      );
     },
   };
 }

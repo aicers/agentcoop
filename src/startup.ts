@@ -26,12 +26,24 @@ export interface StartupResult {
 }
 
 export interface AgentConfig {
+  cli: "claude" | "codex";
   model: string;
+  contextWindow?: string;
+  effortLevel?: string;
 }
 
+// ---- CLI choices ---------------------------------------------------------
+
+const CLI_CHOICES = [
+  { name: "Claude", value: "claude" as const },
+  { name: "Codex", value: "codex" as const },
+];
+
+// ---- Model choices per CLI -----------------------------------------------
+
 const CLAUDE_MODELS = [
-  { name: "Claude Opus 4", value: "opus" },
-  { name: "Claude Sonnet 4", value: "sonnet" },
+  { name: "Claude Opus 4.6", value: "opus" },
+  { name: "Claude Sonnet 4.6", value: "sonnet" },
 ];
 
 const CODEX_MODELS = [
@@ -39,7 +51,60 @@ const CODEX_MODELS = [
   { name: "GPT-5.3-Codex", value: "gpt-5.3-codex" },
 ];
 
-const ALL_MODELS = [...CLAUDE_MODELS, ...CODEX_MODELS];
+// ---- Context window variants ---------------------------------------------
+
+const CLAUDE_CONTEXT_WINDOWS = [
+  { name: "200K (default)", value: "200k" },
+  { name: "1M (extended)", value: "1m" },
+];
+
+// ---- Effort / reasoning levels -------------------------------------------
+
+const CLAUDE_EFFORT_LEVELS = [
+  { name: "Low", value: "low" },
+  { name: "Medium", value: "medium" },
+  { name: "High", value: "high" },
+];
+
+const CODEX_REASONING_LEVELS = [
+  { name: "Low", value: "low" },
+  { name: "Medium", value: "medium" },
+  { name: "High", value: "high" },
+  { name: "Extra High", value: "xhigh" },
+];
+
+// ---- Display name helpers ------------------------------------------------
+
+function modelDisplayName(config: AgentConfig): string {
+  const modelChoices = config.cli === "claude" ? CLAUDE_MODELS : CODEX_MODELS;
+  const modelName =
+    modelChoices.find((m) => m.value === config.model)?.name ?? config.model;
+  const parts = [modelName];
+  if (config.contextWindow) {
+    parts[0] = `${modelName} (${config.contextWindow.toUpperCase()})`;
+  }
+  if (config.effortLevel) {
+    const effortChoices =
+      config.cli === "claude" ? CLAUDE_EFFORT_LEVELS : CODEX_REASONING_LEVELS;
+    const effortName =
+      effortChoices.find((e) => e.value === config.effortLevel)?.name ??
+      config.effortLevel;
+    parts.push(effortName);
+  }
+  return parts.join(" / ");
+}
+
+export { modelDisplayName };
+
+function agentConfigEqual(a: AgentConfig | undefined, b: AgentConfig): boolean {
+  if (!a) return false;
+  return (
+    a.cli === b.cli &&
+    a.model === b.model &&
+    a.contextWindow === b.contextWindow &&
+    a.effortLevel === b.effortLevel
+  );
+}
 
 /**
  * First phase of startup: select owner, repo, and issue number.
@@ -75,10 +140,20 @@ export async function runStartup(
   } = target ?? (await selectTarget());
   let configDirty = initialDirty;
 
-  const agentA = await selectAgentModel(t()["agent.labelARole"]);
-  const agentB = await selectAgentModel(t()["agent.labelBRole"]);
-  const executionMode = await selectExecutionMode();
-  const claudePermissionMode = await selectClaudePermissionMode();
+  const agentA = await selectAgent(
+    t()["agent.labelARole"],
+    config.agentA ?? DEFAULT_AGENT_A,
+  );
+  // Smart default: opposite CLI for agent B
+  const defaultBCli = agentA.cli === "claude" ? "codex" : "claude";
+  const agentBDefaults: Partial<AgentConfig> = config.agentB
+    ? config.agentB
+    : CLI_DEFAULTS[defaultBCli];
+  const agentB = await selectAgent(t()["agent.labelBRole"], agentBDefaults);
+  const executionMode = await selectExecutionMode(config.executionMode);
+  const claudePermissionMode = await selectClaudePermissionMode(
+    config.claudePermissionMode,
+  );
 
   const { language, dirty: langDirty } = await selectLanguage(config);
   configDirty ||= langDirty;
@@ -94,6 +169,27 @@ export async function runStartup(
   const confirmed = await confirmIssue(owner, repo, issue);
   if (!confirmed) {
     throw new Error(t()["startup.issueNotConfirmed"]);
+  }
+
+  // Persist agent selections, execution mode, and permission mode only
+  // when they actually changed, to avoid rewriting the config file on
+  // every run (which would drop unknown keys that loadConfig() normalizes
+  // away).
+  if (!agentConfigEqual(config.agentA, agentA)) {
+    config.agentA = agentA;
+    configDirty = true;
+  }
+  if (!agentConfigEqual(config.agentB, agentB)) {
+    config.agentB = agentB;
+    configDirty = true;
+  }
+  if (config.executionMode !== executionMode) {
+    config.executionMode = executionMode;
+    configDirty = true;
+  }
+  if (config.claudePermissionMode !== claudePermissionMode) {
+    config.claudePermissionMode = claudePermissionMode;
+    configDirty = true;
   }
 
   // Only write config when something actually changed, to avoid
@@ -175,31 +271,87 @@ async function inputIssueNumber(): Promise<number> {
   return Number(raw);
 }
 
-async function selectAgentModel(label: string): Promise<AgentConfig> {
-  const model = await select({
-    message: t()["startup.agentModel"](label),
-    choices: ALL_MODELS,
+// ---- first-run defaults --------------------------------------------------
+
+const CLI_DEFAULTS: Record<"claude" | "codex", AgentConfig> = {
+  claude: {
+    cli: "claude",
+    model: "opus",
+    contextWindow: "1m",
+    effortLevel: "high",
+  },
+  codex: { cli: "codex", model: "gpt-5.4", effortLevel: "xhigh" },
+};
+
+const DEFAULT_AGENT_A = CLI_DEFAULTS.claude;
+
+async function selectAgent(
+  label: string,
+  defaults?: Partial<AgentConfig>,
+): Promise<AgentConfig> {
+  const m = t();
+
+  const cli = await select({
+    message: m["startup.agentCli"](label),
+    choices: CLI_CHOICES,
+    default: defaults?.cli,
   });
-  return { model };
+
+  // When the user switches CLI, fall back to the per-CLI defaults so
+  // that model/context/effort prompts start with sensible values instead
+  // of landing on the first choice.
+  const effective = defaults?.cli === cli ? defaults : CLI_DEFAULTS[cli];
+
+  const models = cli === "claude" ? CLAUDE_MODELS : CODEX_MODELS;
+  const model = await select({
+    message: m["startup.agentModel"](label),
+    choices: models,
+    default: effective.model,
+  });
+
+  let contextWindow: string | undefined;
+  if (cli === "claude") {
+    contextWindow = await select({
+      message: m["startup.agentContext"](label),
+      choices: CLAUDE_CONTEXT_WINDOWS,
+      default: effective.contextWindow,
+    });
+  }
+
+  const effortChoices =
+    cli === "claude" ? CLAUDE_EFFORT_LEVELS : CODEX_REASONING_LEVELS;
+  const effortLevel = await select({
+    message: m["startup.agentEffort"](label),
+    choices: effortChoices,
+    default: effective.effortLevel,
+  });
+
+  return { cli, model, contextWindow, effortLevel };
 }
 
-async function selectExecutionMode(): Promise<"auto" | "step"> {
+async function selectExecutionMode(
+  defaultValue?: "auto" | "step",
+): Promise<"auto" | "step"> {
   return select({
     message: t()["startup.executionMode"],
     choices: [
       { name: "auto", value: "auto" as const },
       { name: "step", value: "step" as const },
     ],
+    default: defaultValue ?? "auto",
   });
 }
 
-async function selectClaudePermissionMode(): Promise<"auto" | "bypass"> {
+async function selectClaudePermissionMode(
+  defaultValue?: "auto" | "bypass",
+): Promise<"auto" | "bypass"> {
   return select({
     message: t()["startup.claudePermission"],
     choices: [
       { name: "auto", value: "auto" as const },
       { name: "bypass", value: "bypass" as const },
     ],
+    default: defaultValue ?? "bypass",
   });
 }
 

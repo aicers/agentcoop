@@ -14,7 +14,11 @@ export const ko: Messages = {
   "startup.issueNumber": "\uC774\uC288 \uBC88\uD638:",
   "startup.invalidIssueNumber":
     "\uC720\uD6A8\uD55C \uC774\uC288 \uBC88\uD638\uB97C \uC785\uB825\uD558\uC138\uC694",
+  "startup.agentCli": (label) => `${label} CLI:`,
   "startup.agentModel": (label) => `${label} \uBAA8\uB378:`,
+  "startup.agentContext": (label) =>
+    `${label} \uCEE8\uD14D\uC2A4\uD2B8 \uC708\uB3C4\uC6B0:`,
+  "startup.agentEffort": (label) => `${label} \uB178\uB825 \uC218\uC900:`,
   "startup.executionMode": "\uC2E4\uD589 \uBAA8\uB4DC:",
   "startup.claudePermission": "Claude \uAD8C\uD55C \uBAA8\uB4DC:",
   "startup.language": "\uC5B8\uC5B4:",
