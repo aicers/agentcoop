@@ -92,6 +92,12 @@ export function bootstrapRepo(owner: string, repo: string): string {
       ["clone", "--bare", `https://github.com/${owner}/${repo}.git`, dest],
       EXEC_OPTS,
     );
+    // bare clones lack a fetch refspec, so `git fetch` would be a no-op.
+    execFileSync(
+      "git",
+      ["config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"],
+      { ...EXEC_OPTS, cwd: dest },
+    );
   }
   return dest;
 }

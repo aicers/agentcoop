@@ -106,6 +106,16 @@ describe("bootstrapRepo", () => {
     );
   });
 
+  test("sets fetch refspec after cloning", () => {
+    mockExistsSync.mockReturnValue(false);
+    const dest = bootstrapRepo("org", "repo");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"],
+      expect.objectContaining({ encoding: "utf-8", cwd: dest }),
+    );
+  });
+
   test("fetches when repo already exists", () => {
     const dest = repoPath("org", "repo");
     mockExistsSync.mockReturnValue(true);
