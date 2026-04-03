@@ -682,13 +682,12 @@ describe("buildCodexInvokeArgs", () => {
     expect(reArgs).toHaveLength(0);
   });
 
-  test("maps xhigh reasoning effort to high for CLI compatibility", () => {
+  test("passes xhigh reasoning effort through to CLI", () => {
     const args = buildCodexInvokeArgs("prompt", {
       reasoningEffort: "xhigh",
     });
 
-    expect(args).toContain("model_reasoning_effort=high");
-    expect(args).not.toContain("model_reasoning_effort=xhigh");
+    expect(args).toContain("model_reasoning_effort=xhigh");
   });
 });
 
@@ -764,13 +763,12 @@ describe("buildCodexResumeArgs", () => {
     expect(reArgs).toHaveLength(0);
   });
 
-  test("maps xhigh reasoning effort to high for CLI compatibility", () => {
+  test("passes xhigh reasoning effort through to CLI", () => {
     const args = buildCodexResumeArgs("sess-1", "prompt", {
       reasoningEffort: "xhigh",
     });
 
-    expect(args).toContain("model_reasoning_effort=high");
-    expect(args).not.toContain("model_reasoning_effort=xhigh");
+    expect(args).toContain("model_reasoning_effort=xhigh");
   });
 });
 

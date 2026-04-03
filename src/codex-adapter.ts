@@ -2,6 +2,7 @@ import type {
   AgentAdapter,
   AgentErrorType,
   AgentResult,
+  AgentStream,
   InvokeOptions,
 } from "./agent.js";
 import { JsonlLineTransformer } from "./agent.js";
@@ -291,16 +292,6 @@ export interface CodexAdapterOptions {
   inactivityTimeoutMs?: number;
 }
 
-/**
- * Map user-facing effort level to CLI value.  The CLI (v0.46.0) only
- * accepts `low`, `medium`, `high`.  "xhigh" is mapped to `high` for
- * the CLI config flag — if a future CLI version supports it, this
- * mapping can be removed.
- */
-function cliReasoningEffort(effort: CodexReasoningEffort): string {
-  return effort === "xhigh" ? "high" : effort;
-}
-
 export function buildCodexInvokeArgs(
   prompt: string,
   opts: { model?: string; reasoningEffort?: CodexReasoningEffort },
@@ -310,10 +301,7 @@ export function buildCodexInvokeArgs(
     args.push("-m", opts.model);
   }
   if (opts.reasoningEffort) {
-    args.push(
-      "-c",
-      `model_reasoning_effort=${cliReasoningEffort(opts.reasoningEffort)}`,
-    );
+    args.push("-c", `model_reasoning_effort=${opts.reasoningEffort}`);
   }
   args.push(prompt);
   return args;
@@ -330,10 +318,7 @@ export function buildCodexResumeArgs(
     args.push("-c", `model="${opts.model}"`);
   }
   if (opts.reasoningEffort) {
-    args.push(
-      "-c",
-      `model_reasoning_effort=${cliReasoningEffort(opts.reasoningEffort)}`,
-    );
+    args.push("-c", `model_reasoning_effort=${opts.reasoningEffort}`);
   }
   args.push(sessionId, prompt);
   return args;
@@ -374,6 +359,28 @@ function parseCodexInvokeOutput(
 // Adapter factory
 // ---------------------------------------------------------------------------
 
+/**
+ * Wrap an AgentStream so that when `xhigh` is rejected by the CLI
+ * (config_parsing error), the result falls back to a retry with `high`.
+ * The async iterator and child process come from the initial attempt;
+ * only the result promise is wrapped.
+ */
+function withXhighFallback(
+  stream: AgentStream,
+  retryFn: () => AgentStream,
+): AgentStream {
+  return {
+    [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
+    child: stream.child,
+    result: stream.result.then((result) => {
+      if (result.status === "error" && result.errorType === "config_parsing") {
+        return retryFn().result;
+      }
+      return result;
+    }),
+  };
+}
+
 export function createCodexAdapter(
   opts: CodexAdapterOptions = {},
 ): AgentAdapter {
@@ -385,7 +392,7 @@ export function createCodexAdapter(
 
   return {
     invoke(prompt, options?: InvokeOptions) {
-      return spawnAgent({
+      const stream = spawnAgent({
         command: "codex",
         args: buildCodexInvokeArgs(prompt, { model, reasoningEffort }),
         cwd: options?.cwd,
@@ -393,29 +400,62 @@ export function createCodexAdapter(
         chunkTransformer: new CodexStreamTransformer(),
         inactivityTimeoutMs,
       });
+      if (reasoningEffort !== "xhigh") return stream;
+      return withXhighFallback(stream, () =>
+        spawnAgent({
+          command: "codex",
+          args: buildCodexInvokeArgs(prompt, {
+            model,
+            reasoningEffort: "high",
+          }),
+          cwd: options?.cwd,
+          parseResult: parseCodexInvokeOutput,
+          chunkTransformer: new CodexStreamTransformer(),
+          inactivityTimeoutMs,
+        }),
+      );
     },
     resume(sessionId, prompt, options?: InvokeOptions) {
+      function parseResume(
+        output: string,
+        exitCode: number | null,
+        stderr: string,
+      ): AgentResult {
+        const result = parseCodexPlainText(output, exitCode, stderr);
+        // Preserve the input session ID when the plain text output
+        // does not contain one (e.g. older CLI versions).
+        if (result.sessionId === undefined) {
+          result.sessionId = sessionId;
+        }
+        return result;
+      }
+
       // codex exec resume outputs plain text, not JSONL.
-      return spawnAgent({
+      const stream = spawnAgent({
         command: "codex",
         args: buildCodexResumeArgs(sessionId, prompt, {
           model,
           reasoningEffort,
         }),
         cwd: options?.cwd,
-        parseResult(output, exitCode, stderr) {
-          const result = parseCodexPlainText(output, exitCode, stderr);
-          // Preserve the input session ID when the plain text output
-          // does not contain one (e.g. older CLI versions).
-          if (result.sessionId === undefined) {
-            result.sessionId = sessionId;
-          }
-          return result;
-        },
+        parseResult: parseResume,
         // No chunkTransformer for resume — plain text is already
         // human-readable and can go directly to the UI.
         inactivityTimeoutMs,
       });
+      if (reasoningEffort !== "xhigh") return stream;
+      return withXhighFallback(stream, () =>
+        spawnAgent({
+          command: "codex",
+          args: buildCodexResumeArgs(sessionId, prompt, {
+            model,
+            reasoningEffort: "high",
+          }),
+          cwd: options?.cwd,
+          parseResult: parseResume,
+          inactivityTimeoutMs,
+        }),
+      );
     },
   };
 }

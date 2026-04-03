@@ -138,7 +138,7 @@ export async function runStartup(
   const defaultBCli = agentA.cli === "claude" ? "codex" : "claude";
   const agentBDefaults: Partial<AgentConfig> = config.agentB
     ? config.agentB
-    : { ...DEFAULT_AGENT_B, cli: defaultBCli };
+    : CLI_DEFAULTS[defaultBCli];
   const agentB = await selectAgent(t()["agent.labelBRole"], agentBDefaults);
   const executionMode = await selectExecutionMode(config.executionMode);
   const claudePermissionMode = await selectClaudePermissionMode(
@@ -249,18 +249,18 @@ async function inputIssueNumber(): Promise<number> {
 
 // ---- first-run defaults --------------------------------------------------
 
-const DEFAULT_AGENT_A: AgentConfig = {
-  cli: "claude",
-  model: "opus",
-  contextWindow: "1m",
-  effortLevel: "high",
+const CLI_DEFAULTS: Record<"claude" | "codex", AgentConfig> = {
+  claude: {
+    cli: "claude",
+    model: "opus",
+    contextWindow: "1m",
+    effortLevel: "high",
+  },
+  codex: { cli: "codex", model: "gpt-5.4", effortLevel: "xhigh" },
 };
 
-const DEFAULT_AGENT_B: AgentConfig = {
-  cli: "codex",
-  model: "gpt-5.4",
-  effortLevel: "xhigh",
-};
+const DEFAULT_AGENT_A = CLI_DEFAULTS.claude;
+const DEFAULT_AGENT_B = CLI_DEFAULTS.codex;
 
 async function selectAgent(
   label: string,
