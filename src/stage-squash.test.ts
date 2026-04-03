@@ -79,6 +79,7 @@ function makeOpts(
     agent,
     issueTitle: "Fix the widget",
     issueBody: "The widget is broken.",
+    defaultBranch: "main",
     getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
     collectFailureLogs: vi.fn().mockReturnValue(""),
     getHeadSha: vi.fn().mockReturnValue("abc123"),
@@ -86,6 +87,7 @@ function makeOpts(
     pollIntervalMs: 100,
     pollTimeoutMs: 1000,
     emptyRunsGracePeriodMs: 0,
+    countBranchCommits: vi.fn().mockReturnValue(2),
     ...overrides,
   };
 }
@@ -139,6 +141,31 @@ describe("createSquashStageHandler", () => {
     expect(stage.number).toBe(7);
     expect(stage.name).toBe("Squash commits");
     expect(stage.requiresArtifact).toBe(true);
+  });
+
+  // -- single commit skip ----------------------------------------------------
+
+  test("skips squash when branch has a single commit", async () => {
+    const countBranchCommits = vi.fn().mockReturnValue(1);
+    const opts = makeOpts({ countBranchCommits });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(result.message).toContain("Single commit");
+    expect(countBranchCommits).toHaveBeenCalledWith("/tmp/wt", "main");
+    expect(opts.agent.invoke).not.toHaveBeenCalled();
+    expect(opts.agent.resume).not.toHaveBeenCalled();
+  });
+
+  test("proceeds with squash when branch has multiple commits", async () => {
+    const countBranchCommits = vi.fn().mockReturnValue(3);
+    const opts = makeOpts({ countBranchCommits });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(opts.agent.invoke).toHaveBeenCalled();
   });
 
   // -- happy path: squash + CI pass ------------------------------------------

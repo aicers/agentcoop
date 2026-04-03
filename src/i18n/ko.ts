@@ -191,6 +191,7 @@ export const ko: Messages = {
   "ci.fixLoopExhausted": "CI 수정 반복이 소진되었습니다.",
   "ci.agentError": (detail) => `CI 수정 중 에이전트 오류: ${detail}`,
   "squash.completed": "커밋이 스쿼시되고 CI를 통과했습니다.",
+  "squash.singleCommitSkip": "커밋이 하나뿐이므로 스쿼시를 건너뜁니다.",
   "review.approved": (round) => `${round}라운드에서 리뷰가 승인되었습니다.`,
   "review.unresolvedItems": (base, summary) =>
     `${base}\n\n미해결 항목:\n${summary}`,

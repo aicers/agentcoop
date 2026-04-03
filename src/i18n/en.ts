@@ -162,6 +162,7 @@ export const en: Messages = {
   "ci.fixLoopExhausted": "CI fix loop exhausted.",
   "ci.agentError": (detail) => `Agent error during CI fix: ${detail}`,
   "squash.completed": "Commits squashed and CI passed.",
+  "squash.singleCommitSkip": "Single commit — skipping squash.",
   "review.approved": (round) => `Review approved at round ${round}.`,
   "review.unresolvedItems": (base, summary) =>
     `${base}\n\nUnresolved items:\n${summary}`,

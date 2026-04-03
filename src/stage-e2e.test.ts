@@ -1613,6 +1613,8 @@ describe("Stage 7 (Squash) through pipeline", () => {
     const stage = createSquashStageHandler({
       agent,
       ...ISSUE_CTX,
+      defaultBranch: "main",
+      countBranchCommits: () => 2,
       getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
       collectFailureLogs: vi.fn().mockReturnValue(""),
       delay: vi.fn().mockResolvedValue(undefined),
@@ -1646,6 +1648,8 @@ describe("Stage 7 (Squash) through pipeline", () => {
     const stage = createSquashStageHandler({
       agent,
       ...ISSUE_CTX,
+      defaultBranch: "main",
+      countBranchCommits: () => 2,
       getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
       collectFailureLogs: vi.fn().mockReturnValue(""),
       delay: vi.fn().mockResolvedValue(undefined),
@@ -2131,6 +2135,8 @@ describe("Stages 7+8 (Squash + Review) through pipeline", () => {
     const squashStage = createSquashStageHandler({
       agent: squashAgent,
       ...ISSUE_CTX,
+      defaultBranch: "main",
+      countBranchCommits: () => 2,
       getCiStatus,
       collectFailureLogs: vi.fn().mockReturnValue(""),
       delay: vi.fn().mockResolvedValue(undefined),
@@ -2186,6 +2192,8 @@ describe("Stages 7+8 (Squash + Review) through pipeline", () => {
     const squashStage = createSquashStageHandler({
       agent: squashAgent,
       ...ISSUE_CTX,
+      defaultBranch: "main",
+      countBranchCommits: () => 2,
       getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
       collectFailureLogs: vi.fn().mockReturnValue(""),
       delay: vi.fn().mockResolvedValue(undefined),
