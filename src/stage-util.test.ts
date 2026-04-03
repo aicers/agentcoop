@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
 import {
   invokeOrResume,
@@ -8,6 +8,10 @@ import {
   mapResponseToResult,
   sendFollowUp,
 } from "./stage-util.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 // ---- helpers ---------------------------------------------------------------
 
@@ -92,16 +96,49 @@ describe("mapAgentError", () => {
     expect(result.message).toBe("Agent error: segfault");
   });
 
-  test("falls back to errorType when stderrText is empty", () => {
+  test("includes exit code alongside stderrText", () => {
+    const result = mapAgentError({
+      ...base,
+      errorType: "execution_error",
+      stderrText: "segfault",
+      exitCode: 1,
+    });
+    expect(result.message).toBe("Agent error: segfault (exit code 1)");
+  });
+
+  test("uses responseText when stderrText is empty", () => {
     const result = mapAgentError({
       ...base,
       errorType: "execution_error",
       stderrText: "",
+      exitCode: null,
+      responseText: "claude exited with code 1",
+    });
+    expect(result.message).toBe("Agent error: claude exited with code 1");
+  });
+
+  test("shows exit code alone when stderr and responseText are empty", () => {
+    const result = mapAgentError({
+      ...base,
+      errorType: "unknown",
+      stderrText: "",
+      exitCode: 137,
+      responseText: "",
+    });
+    expect(result.message).toBe("Agent error: exit code 137");
+  });
+
+  test("falls back to errorType when all details are empty", () => {
+    const result = mapAgentError({
+      ...base,
+      errorType: "execution_error",
+      stderrText: "",
+      responseText: "",
     });
     expect(result.message).toBe("Agent error: execution_error");
   });
 
-  test("falls back to 'unknown' when both are empty", () => {
+  test("falls back to 'unknown' when everything is empty", () => {
     const result = mapAgentError(base);
     expect(result.message).toBe("Agent error: unknown");
   });
@@ -109,6 +146,46 @@ describe("mapAgentError", () => {
   test("includes context with non-max_turns error", () => {
     const result = mapAgentError({ ...base, stderrText: "oops" }, "during fix");
     expect(result.message).toBe("Agent error during fix: oops");
+  });
+
+  test("shows signal when process is killed by signal", () => {
+    const result = mapAgentError({
+      ...base,
+      errorType: "unknown",
+      stderrText: "",
+      exitCode: null,
+      signal: "SIGKILL",
+      responseText: "",
+    });
+    expect(result.message).toBe("Agent error: signal SIGKILL");
+  });
+
+  test("shows signal alongside stderr and exit code", () => {
+    const result = mapAgentError({
+      ...base,
+      errorType: "unknown",
+      stderrText: "out of memory",
+      exitCode: null,
+      signal: "SIGKILL",
+    });
+    expect(result.message).toBe("Agent error: out of memory (signal SIGKILL)");
+  });
+
+  test("logs full diagnostics to stderr on error", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mapAgentError({
+      ...base,
+      errorType: "execution_error",
+      stderrText: "segfault",
+      exitCode: 139,
+      signal: "SIGSEGV",
+    });
+    expect(spy).toHaveBeenCalledOnce();
+    const logged = spy.mock.calls[0][0] as string;
+    expect(logged).toContain("errorType=execution_error");
+    expect(logged).toContain("exitCode=139");
+    expect(logged).toContain("signal=SIGSEGV");
+    expect(logged).toContain("stderr=segfault");
   });
 
   test("maps config_parsing to actionable message with stderr detail", () => {

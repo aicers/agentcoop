@@ -225,6 +225,41 @@ describe("pollCiAndFix", () => {
     expect(result.message).toContain("crash");
   });
 
+  // -- agent error during fix logs diagnostics --------------------------------
+
+  test("logs raw diagnostics when agent fails during CI fix", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      );
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+    const agent = makeAgent(
+      makeResult({
+        status: "error",
+        errorType: "execution_error",
+        exitCode: 1,
+        signal: "SIGTERM",
+        stderrText: "segfault",
+        responseText: "",
+      }),
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await pollCiAndFix(makeOpts({ agent, getCiStatus, collectFailureLogs }));
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const logged = errorSpy.mock.calls[0][0] as string;
+    expect(logged).toContain("during CI fix");
+    expect(logged).toContain("errorType=execution_error");
+    expect(logged).toContain("exitCode=1");
+    expect(logged).toContain("signal=SIGTERM");
+    expect(logged).toContain("stderr=segfault");
+
+    errorSpy.mockRestore();
+  });
+
   // -- multiple failed runs with logs -----------------------------------------
 
   test("collects logs from multiple failed runs", async () => {

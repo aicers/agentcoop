@@ -14,6 +14,21 @@ import { type ParsedStep, parseStepStatus } from "./step-parser.js";
 export type StreamSink = (chunk: string) => void;
 
 /**
+ * Log full diagnostic details for an agent process failure so that
+ * transient or hard-to-reproduce errors leave a durable trail.
+ */
+export function logAgentFailure(result: AgentResult, context?: string): void {
+  const parts: string[] = ["Agent process failure"];
+  if (context) parts[0] += ` ${context}`;
+  if (result.errorType) parts.push(`errorType=${result.errorType}`);
+  if (result.exitCode !== undefined && result.exitCode !== null)
+    parts.push(`exitCode=${result.exitCode}`);
+  if (result.signal) parts.push(`signal=${result.signal}`);
+  if (result.stderrText) parts.push(`stderr=${result.stderrText.trim()}`);
+  console.error(parts.join(" | "));
+}
+
+/**
  * Map an `AgentResult` with `status === "error"` to a `StageResult`.
  * The optional `context` string is included in the message for
  * diagnostics (e.g. "during self-check").
@@ -22,6 +37,7 @@ export function mapAgentError(
   result: AgentResult,
   context?: string,
 ): StageResult {
+  logAgentFailure(result, context);
   const m = t();
   const during = context ? ` ${context}` : "";
   if (result.errorType === "max_turns") {
@@ -43,11 +59,44 @@ export function mapAgentError(
       message: m["stageError.configParsing"](during, detail),
     };
   }
-  const detail = result.stderrText || result.errorType || "unknown";
+  const detail = buildErrorDetail(result);
   return {
     outcome: "error",
     message: m["stageError.agentError"](during, detail),
   };
+}
+
+/**
+ * Build an informative error detail string from an `AgentResult`.
+ *
+ * Combines stderr, exit code, and response text so the user gets
+ * actionable information instead of just "unknown".
+ */
+export function buildErrorDetail(result: AgentResult): string {
+  const parts: string[] = [];
+
+  if (result.stderrText) {
+    parts.push(result.stderrText.trim());
+  }
+
+  if (result.signal) {
+    parts.push(`signal ${result.signal}`);
+  }
+
+  if (result.exitCode !== undefined && result.exitCode !== null) {
+    parts.push(`exit code ${result.exitCode}`);
+  }
+
+  if (parts.length === 0 && result.responseText) {
+    parts.push(result.responseText.trim());
+  }
+
+  if (parts.length === 0) {
+    parts.push(result.errorType ?? "unknown");
+  }
+
+  const [primary, ...rest] = parts;
+  return rest.length > 0 ? `${primary} (${rest.join(", ")})` : primary;
 }
 
 /**

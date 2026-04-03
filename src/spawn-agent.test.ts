@@ -104,7 +104,55 @@ describe("spawnAgent", () => {
       status: "success",
       errorType: undefined,
       stderrText: "",
+      exitCode: 0,
     });
+  });
+
+  test("captures signal when process is killed by signal", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const stream = spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: (_output, code) => ({
+        sessionId: undefined,
+        responseText: "",
+        status: code === 0 ? "success" : "error",
+        errorType: "unknown",
+        stderrText: "",
+      }),
+    });
+
+    // Simulate process killed by SIGKILL (code=null, signal="SIGKILL").
+    child.emit("close", null, "SIGKILL");
+
+    const result = await stream.result;
+    expect(result.exitCode).toBeNull();
+    expect(result.signal).toBe("SIGKILL");
+  });
+
+  test("signal is null for normal exit", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const stream = spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: (output) => ({
+        sessionId: undefined,
+        responseText: output,
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+    });
+
+    child.emit("close", 0, null);
+
+    const result = await stream.result;
+    expect(result.exitCode).toBe(0);
+    expect(result.signal).toBeNull();
   });
 
   test("resolves result with non-zero exit code", async () => {
@@ -150,7 +198,7 @@ describe("spawnAgent", () => {
     child.emit("error", err);
 
     const result = await stream.result;
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       sessionId: undefined,
       responseText: "nonexistent CLI not found",
       status: "error",
