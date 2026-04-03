@@ -96,6 +96,16 @@ function modelDisplayName(config: AgentConfig): string {
 
 export { modelDisplayName };
 
+function agentConfigEqual(a: AgentConfig | undefined, b: AgentConfig): boolean {
+  if (!a) return false;
+  return (
+    a.cli === b.cli &&
+    a.model === b.model &&
+    a.contextWindow === b.contextWindow &&
+    a.effortLevel === b.effortLevel
+  );
+}
+
 /**
  * First phase of startup: select owner, repo, and issue number.
  * Returns early so the caller can check for a resumable run state
@@ -161,12 +171,26 @@ export async function runStartup(
     throw new Error(t()["startup.issueNotConfirmed"]);
   }
 
-  // Always save agent selections, execution mode, and permission mode.
-  config.agentA = agentA;
-  config.agentB = agentB;
-  config.executionMode = executionMode;
-  config.claudePermissionMode = claudePermissionMode;
-  configDirty = true;
+  // Persist agent selections, execution mode, and permission mode only
+  // when they actually changed, to avoid rewriting the config file on
+  // every run (which would drop unknown keys that loadConfig() normalizes
+  // away).
+  if (!agentConfigEqual(config.agentA, agentA)) {
+    config.agentA = agentA;
+    configDirty = true;
+  }
+  if (!agentConfigEqual(config.agentB, agentB)) {
+    config.agentB = agentB;
+    configDirty = true;
+  }
+  if (config.executionMode !== executionMode) {
+    config.executionMode = executionMode;
+    configDirty = true;
+  }
+  if (config.claudePermissionMode !== claudePermissionMode) {
+    config.claudePermissionMode = claudePermissionMode;
+    configDirty = true;
+  }
 
   // Only write config when something actually changed, to avoid
   // dropping unknown keys that loadConfig() normalizes away.
@@ -273,11 +297,16 @@ async function selectAgent(
     default: defaults?.cli,
   });
 
+  // When the user switches CLI, fall back to the per-CLI defaults so
+  // that model/context/effort prompts start with sensible values instead
+  // of landing on the first choice.
+  const effective = defaults?.cli === cli ? defaults : CLI_DEFAULTS[cli];
+
   const models = cli === "claude" ? CLAUDE_MODELS : CODEX_MODELS;
   const model = await select({
     message: m["startup.agentModel"](label),
     choices: models,
-    default: defaults?.cli === cli ? defaults?.model : undefined,
+    default: effective.model,
   });
 
   let contextWindow: string | undefined;
@@ -285,7 +314,7 @@ async function selectAgent(
     contextWindow = await select({
       message: m["startup.agentContext"](label),
       choices: CLAUDE_CONTEXT_WINDOWS,
-      default: defaults?.cli === cli ? defaults?.contextWindow : undefined,
+      default: effective.contextWindow,
     });
   }
 
@@ -294,7 +323,7 @@ async function selectAgent(
   const effortLevel = await select({
     message: m["startup.agentEffort"](label),
     choices: effortChoices,
-    default: defaults?.cli === cli ? defaults?.effortLevel : undefined,
+    default: effective.effortLevel,
   });
 
   return { cli, model, contextWindow, effortLevel };

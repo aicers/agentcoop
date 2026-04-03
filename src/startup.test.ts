@@ -146,7 +146,7 @@ describe("runStartup — happy path", () => {
     expect(mockGetIssue).toHaveBeenCalledWith("aicers", "agentcoop", 42);
   });
 
-  test("always saves config with agent selections", async () => {
+  test("saves config when agent selections differ from saved", async () => {
     setupHappyPath();
     await runStartup();
     expect(mockSaveConfig).toHaveBeenCalledOnce();
@@ -518,6 +518,52 @@ describe("runStartup — model selection", () => {
     expect(values).toHaveLength(2);
   });
 
+  test("switching CLI seeds defaults from CLI_DEFAULTS", async () => {
+    // Config has Claude saved for agent A; user switches to Codex.
+    // The model/effort prompts should receive Codex defaults (gpt-5.4, xhigh)
+    // instead of falling back to the first choice.
+    const config = {
+      ...defaultConfig(),
+      agentA: {
+        cli: "claude" as const,
+        model: "opus",
+        contextWindow: "1m",
+        effortLevel: "high",
+      },
+    };
+    mockLoadConfig.mockReturnValue(config);
+    mockSelect
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("codex") // agent A CLI — switched!
+      .mockResolvedValueOnce("gpt-5.4") // agent A model
+      .mockResolvedValueOnce("xhigh") // agent A effort
+      .mockResolvedValueOnce("claude") // agent B CLI
+      .mockResolvedValueOnce("opus") // agent B model
+      .mockResolvedValueOnce("1m") // agent B context window
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("bypass") // permission mode
+      .mockResolvedValueOnce("en"); // language
+    mockSearch.mockResolvedValueOnce("agentcoop");
+    mockInput.mockResolvedValueOnce("42");
+    mockCheckbox.mockResolvedValueOnce([]);
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    await runStartup();
+
+    // Agent A model prompt (index 2) should have Codex default
+    const agentAModelCall = mockSelect.mock.calls[2][0];
+    expect(agentAModelCall.default).toBe("gpt-5.4");
+
+    // Agent A effort prompt (index 3) should have Codex default
+    const agentAEffortCall = mockSelect.mock.calls[3][0];
+    expect(agentAEffortCall.default).toBe("xhigh");
+  });
+
   test("agent A and B can use different models", async () => {
     setupHappyPath();
     mockSelect
@@ -617,7 +663,50 @@ describe("runStartup — language selection", () => {
 // Config persistence — dirty tracking
 // ---------------------------------------------------------------------------
 describe("runStartup — config dirty tracking", () => {
-  test("always saves config because agent selections are persisted", async () => {
+  test("does not save config when all selections match saved values", async () => {
+    const config = {
+      ...defaultConfig(),
+      agentA: {
+        cli: "claude" as const,
+        model: "opus",
+        contextWindow: "200k",
+        effortLevel: "high",
+      },
+      agentB: {
+        cli: "codex" as const,
+        model: "gpt-5.4",
+        effortLevel: "high",
+      },
+      executionMode: "auto" as const,
+      claudePermissionMode: "bypass" as const,
+    };
+    mockLoadConfig.mockReturnValue(config);
+    mockSelect
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("opus") // agent A model
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("bypass") // permission mode
+      .mockResolvedValueOnce("en"); // language
+    mockSearch.mockResolvedValueOnce("agentcoop");
+    mockInput.mockResolvedValueOnce("42");
+    mockCheckbox.mockResolvedValueOnce([]);
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    await runStartup();
+    expect(mockSaveConfig).not.toHaveBeenCalled();
+  });
+
+  test("saves config when agent selections differ from saved", async () => {
     setupHappyPath();
     await runStartup();
     expect(mockSaveConfig).toHaveBeenCalledOnce();
