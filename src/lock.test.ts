@@ -122,6 +122,37 @@ describe("withLock", () => {
     expect(mockUnlinkSync).toHaveBeenCalledWith("/tmp/test.lock");
   });
 
+  test("treats empty lock file as stale and retries", () => {
+    const eexist = Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+    mockOpenSync
+      .mockImplementationOnce(() => {
+        throw eexist;
+      })
+      .mockReturnValue(42 as never);
+    // Empty lock file — e.g. process killed between openSync and writeFileSync
+    mockReadFileSync.mockReturnValue("" as never);
+
+    const result = withLock("/tmp/test.lock", () => "ok");
+    expect(result).toBe("ok");
+    // Stale lock removed, then new lock acquired and released
+    expect(mockUnlinkSync).toHaveBeenCalled();
+  });
+
+  test("treats non-numeric lock file as stale and retries", () => {
+    const eexist = Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+    mockOpenSync
+      .mockImplementationOnce(() => {
+        throw eexist;
+      })
+      .mockReturnValue(42 as never);
+    // Truncated/corrupt lock file contents
+    mockReadFileSync.mockReturnValue("garbage" as never);
+
+    const result = withLock("/tmp/test.lock", () => "ok");
+    expect(result).toBe("ok");
+    expect(mockUnlinkSync).toHaveBeenCalled();
+  });
+
   test("propagates non-EEXIST errors from open", () => {
     const eperm = Object.assign(new Error("EPERM"), { code: "EPERM" });
     mockOpenSync.mockImplementation(() => {

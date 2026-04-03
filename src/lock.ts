@@ -63,7 +63,7 @@ function acquireLock(lockPath: string): void {
       try {
         const raw = readFileSync(lockPath, "utf-8").trim();
         const pid = Number.parseInt(raw, 10);
-        if (!Number.isNaN(pid) && !isProcessAlive(pid)) {
+        if (Number.isNaN(pid) || !isProcessAlive(pid)) {
           try {
             unlinkSync(lockPath);
           } catch {
