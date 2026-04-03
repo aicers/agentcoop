@@ -170,9 +170,9 @@ describe("buildUnresolvedSummaryPrompt", () => {
 // ---- createReviewStageHandler ------------------------------------------------
 
 describe("createReviewStageHandler", () => {
-  test("returns stage definition with number 8 and name Review", () => {
+  test("returns stage definition with number 7 and name Review", () => {
     const stage = createReviewStageHandler(makeOpts());
-    expect(stage.number).toBe(8);
+    expect(stage.number).toBe(7);
     expect(stage.name).toBe("Review");
   });
 

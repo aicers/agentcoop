@@ -1616,12 +1616,12 @@ describe("full resume cycle (E2E)", () => {
     ]);
   });
 
-  test("pipeline saves review round via onStageTransition in stage 8", async () => {
+  test("pipeline saves review round via onStageTransition in stage 7", async () => {
     const transitions: [number, number][] = [];
     let reviewCalls = 0;
 
     const stages = [
-      makeStage(8, async () => {
+      makeStage(7, async () => {
         reviewCalls++;
         if (reviewCalls <= 2) {
           return { outcome: "not_approved", message: "needs work" };
@@ -1636,13 +1636,13 @@ describe("full resume cycle (E2E)", () => {
       }),
     );
 
-    // 3 iterations: calls at (8,0), advance→(8,1), (8,1), advance→(8,2), (8,2), terminal
+    // 3 iterations: calls at (7,0), advance→(7,1), (7,1), advance→(7,2), (7,2), terminal
     expect(transitions).toEqual([
-      [8, 0],
-      [8, 1],
-      [8, 1],
-      [8, 2],
-      [8, 2],
+      [7, 0],
+      [7, 1],
+      [7, 1],
+      [7, 2],
+      [7, 2],
     ]);
     // A caller can derive reviewRound = loopCount + 1.
   });

@@ -1,5 +1,5 @@
 /**
- * Stage 8 — Review loop.
+ * Stage 7 — Review loop.
  *
  * Multi-agent flow per iteration:
  *   1. Agent B posts a review prefixed with `[Reviewer Round {n}]`,
@@ -180,7 +180,7 @@ export function createReviewStageHandler(
 ): StageDefinition {
   return {
     name: t()["stage.review"],
-    number: 8,
+    number: 7,
     handler: async (ctx: StageContext): Promise<StageResult> => {
       const round = ctx.iteration + 1; // 1-based for display
 
@@ -252,7 +252,7 @@ export function createReviewStageHandler(
       }
 
       // Completion check on Agent A (with clarification retry,
-      // same pattern as stage 4 / stage 7).
+      // same pattern as stage 4 / stage 8).
       const authorCheckPrompt = buildAuthorCompletionCheckPrompt();
       ctx.promptSinks?.a?.(authorCheckPrompt);
       let checkResult = await sendFollowUp(

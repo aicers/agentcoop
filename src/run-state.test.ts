@@ -8,8 +8,13 @@ vi.mock("node:os", () => ({
   homedir: () => tmpHome,
 }));
 
-const { deleteRunState, loadRunState, runStatePath, saveRunState } =
-  await import("./run-state.js");
+const {
+  RUN_STATE_VERSION,
+  deleteRunState,
+  loadRunState,
+  runStatePath,
+  saveRunState,
+} = await import("./run-state.js");
 
 import type { RunState } from "./run-state.js";
 
@@ -17,6 +22,7 @@ import type { RunState } from "./run-state.js";
 
 function makeRunState(overrides: Partial<RunState> = {}): RunState {
   return {
+    version: RUN_STATE_VERSION,
     owner: "org",
     repo: "repo",
     issueNumber: 42,
@@ -164,6 +170,46 @@ describe("loadRunState — missing / malformed", () => {
     const loaded = loadRunState("org", "repo", 42);
     expect(loaded).toBeDefined();
     expect(loaded?.agentA.sessionId).toBeUndefined();
+  });
+});
+
+describe("loadRunState — migration from v1 (unversioned)", () => {
+  /** Write a raw v1 state (no version field) to disk. */
+  function writeV1State(overrides: Record<string, unknown> = {}) {
+    const { version: _, ...rest } = makeRunState();
+    const raw = { ...rest, ...overrides };
+    const path = runStatePath("org", "repo", 42);
+    mkdirSync(join(tmpHome, ".agentcoop", "runs", "org", "repo"), {
+      recursive: true,
+    });
+    writeFileSync(path, JSON.stringify(raw));
+  }
+
+  test("migrates stage 7 (old squash) → 8 (new squash)", () => {
+    writeV1State({ currentStage: 7 });
+    const loaded = loadRunState("org", "repo", 42);
+    expect(loaded?.currentStage).toBe(8);
+    expect(loaded?.version).toBe(RUN_STATE_VERSION);
+  });
+
+  test("migrates stage 8 (old review) → 7 (new review)", () => {
+    writeV1State({ currentStage: 8 });
+    const loaded = loadRunState("org", "repo", 42);
+    expect(loaded?.currentStage).toBe(7);
+    expect(loaded?.version).toBe(RUN_STATE_VERSION);
+  });
+
+  test("leaves other stages unchanged", () => {
+    writeV1State({ currentStage: 5 });
+    const loaded = loadRunState("org", "repo", 42);
+    expect(loaded?.currentStage).toBe(5);
+    expect(loaded?.version).toBe(RUN_STATE_VERSION);
+  });
+
+  test("does not migrate a current-version state", () => {
+    saveRunState(makeRunState({ currentStage: 7 }));
+    const loaded = loadRunState("org", "repo", 42);
+    expect(loaded?.currentStage).toBe(7);
   });
 });
 
