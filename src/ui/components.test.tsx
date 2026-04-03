@@ -592,7 +592,8 @@ describe("StatusBar", () => {
 
     const frame = lastFrame();
     expect(frame).toContain("Stage 2: Implement");
-    expect(frame).toContain("Round: 1 (in progress)");
+    // Implement is not a looping stage — no round indicator.
+    expect(frame).not.toContain("Round:");
     expect(frame).not.toContain("Initialising");
   });
 
@@ -621,8 +622,8 @@ describe("StatusBar", () => {
     expect(frame).toContain("Stage 3: Self-check");
     expect(frame).toContain("Round: 2 (done)");
     expect(frame).toContain("Last: not approved");
-    expect(frame).toContain("SC: 1");
-    expect(frame).toContain("RV: 0");
+    expect(frame).toContain("Self-check: 1");
+    expect(frame).toContain("Review: 0");
   });
 
   test("shows in-progress then done on successive events", async () => {
@@ -710,8 +711,8 @@ describe("StatusBar", () => {
     await new Promise((r) => setTimeout(r, 50));
 
     const frame = lastFrame();
-    expect(frame).toContain("SC: 0");
-    expect(frame).toContain("RV: 1");
+    expect(frame).toContain("Self-check: 0");
+    expect(frame).toContain("Review: 1");
   });
 
   test("hides cumulative counts when both are zero", () => {
@@ -726,8 +727,8 @@ describe("StatusBar", () => {
     );
 
     const frame = lastFrame() ?? "";
-    expect(frame).not.toContain("SC:");
-    expect(frame).not.toContain("RV:");
+    expect(frame).not.toContain("Self-check:");
+    expect(frame).not.toContain("Review:");
   });
 });
 
