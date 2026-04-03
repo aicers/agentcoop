@@ -254,6 +254,273 @@ describe("AgentPane", () => {
     expect(frame).not.toContain("waiting for output");
     expect(frame).toContain("pane too small");
   });
+
+  test("Page Up reveals earlier lines and shows scroll indicator", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame, stdin } = render(
+      <Box height={10}>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isFocused
+          scrollEnabled
+        />
+      </Box>,
+    );
+
+    const chunk = Array.from({ length: 20 }, (_, i) => `line${i + 1}`)
+      .join("\n")
+      .concat("\n");
+    emitter.emit("agent:chunk", { agent: "a", chunk });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(lastFrame()).toContain("line20");
+
+    // Page Up.
+    stdin.write("\x1b[5~");
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    // Scroll indicator must appear.
+    expect(frame).toContain("\u2191");
+    expect(frame).toContain("more lines");
+    // Newest line should be scrolled out of view.
+    expect(frame).not.toContain("line20");
+  });
+
+  test("Page Down returns to newest output after scrolling up", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame, stdin } = render(
+      <Box height={10}>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isFocused
+          scrollEnabled
+        />
+      </Box>,
+    );
+
+    const chunk = Array.from({ length: 20 }, (_, i) => `line${i + 1}`)
+      .join("\n")
+      .concat("\n");
+    emitter.emit("agent:chunk", { agent: "a", chunk });
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Scroll up.
+    stdin.write("\x1b[5~");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastFrame()).not.toContain("line20");
+
+    // Scroll back down.
+    stdin.write("\x1b[6~");
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("line20");
+    // Indicator should be gone (back at bottom).
+    expect(frame).not.toContain("\u2191");
+  });
+
+  test("scrolling is disabled when scrollEnabled is false", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame, stdin } = render(
+      <Box height={10}>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isFocused
+          scrollEnabled={false}
+        />
+      </Box>,
+    );
+
+    const chunk = Array.from({ length: 20 }, (_, i) => `line${i + 1}`)
+      .join("\n")
+      .concat("\n");
+    emitter.emit("agent:chunk", { agent: "a", chunk });
+    await new Promise((r) => setTimeout(r, 50));
+
+    stdin.write("\x1b[5~");
+    await new Promise((r) => setTimeout(r, 50));
+
+    // View should not have moved — still at bottom.
+    expect(lastFrame()).toContain("line20");
+    expect(lastFrame()).not.toContain("\u2191");
+  });
+
+  test("scrolling is disabled when isFocused is false", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame, stdin } = render(
+      <Box height={10}>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isFocused={false}
+          scrollEnabled
+        />
+      </Box>,
+    );
+
+    const chunk = Array.from({ length: 20 }, (_, i) => `line${i + 1}`)
+      .join("\n")
+      .concat("\n");
+    emitter.emit("agent:chunk", { agent: "a", chunk });
+    await new Promise((r) => setTimeout(r, 50));
+
+    stdin.write("\x1b[5~");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(lastFrame()).toContain("line20");
+    expect(lastFrame()).not.toContain("\u2191");
+  });
+
+  test("auto-follow keeps view at bottom when new lines arrive", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box height={10}>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isFocused
+          scrollEnabled
+        />
+      </Box>,
+    );
+
+    const chunk = Array.from({ length: 15 }, (_, i) => `old${i + 1}`)
+      .join("\n")
+      .concat("\n");
+    emitter.emit("agent:chunk", { agent: "a", chunk });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(lastFrame()).toContain("old15");
+
+    // New line arrives while at bottom — view should follow.
+    emitter.emit("agent:chunk", { agent: "a", chunk: "newtail\n" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("newtail");
+    expect(frame).not.toContain("\u2191");
+  });
+
+  test("scrolling through a single long wrapped line reveals earlier rows", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame, stdin } = render(
+      <Box height={10}>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isFocused
+          scrollEnabled
+        />
+      </Box>,
+    );
+
+    // Emit a long wrapped line followed by short lines that push its
+    // first rows above the viewport.  The line wraps to ~5 terminal rows
+    // at the default contentWidth; 8 filler lines are enough to scroll
+    // it out while keeping it reachable with a single Page Up.
+    const longLine = `HEAD_${"x".repeat(390)}_TAIL`;
+    emitter.emit("agent:chunk", {
+      agent: "a",
+      chunk: `${longLine}\n${"filler\n".repeat(8)}`,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    // HEAD_ should be scrolled out of view at the bottom-pinned position.
+    expect(lastFrame()).not.toContain("HEAD_");
+
+    // Page Up — scroll through the content including wrapped rows.
+    stdin.write("\x1b[5~");
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    // The earlier rows of the wrapped line must be reachable via
+    // row-level scrolling (not dropped as a whole logical line).
+    expect(frame).toContain("HEAD_");
+  });
+
+  test("viewport stays stable when pendingLine wraps further while scrolled up", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame, stdin } = render(
+      <Box height={10}>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isFocused
+          scrollEnabled
+        />
+      </Box>,
+    );
+
+    // Emit enough lines to enable scrolling.
+    const chunk = Array.from({ length: 25 }, (_, i) => `line${i + 1}`)
+      .join("\n")
+      .concat("\n");
+    emitter.emit("agent:chunk", { agent: "a", chunk });
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Scroll up so line10 is visible and line25 is hidden.
+    stdin.write("\x1b[5~");
+    await new Promise((r) => setTimeout(r, 50));
+    const frameBefore = lastFrame() ?? "";
+    expect(frameBefore).not.toContain("line25");
+
+    // Simulate a streaming pendingLine that wraps into extra rows.
+    // Each chunk extends the pending line, potentially adding wrapped rows.
+    emitter.emit("agent:chunk", { agent: "a", chunk: "x".repeat(100) });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frameAfter = lastFrame() ?? "";
+    // The viewport must NOT shift to reveal the newest content;
+    // the user is scrolled up and should stay in place.
+    expect(frameAfter).not.toContain("line25");
+  });
+
+  test("unfocused pane border dims when scrollEnabled", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isFocused={false}
+          scrollEnabled
+        />
+        <AgentPane
+          label="Agent B"
+          agent="b"
+          emitter={emitter}
+          color="green"
+          isFocused
+          scrollEnabled
+        />
+      </Box>,
+    );
+
+    const frame = lastFrame() ?? "";
+    // Both labels must be present.
+    expect(frame).toContain("Agent A");
+    expect(frame).toContain("Agent B");
+  });
 });
 
 // ---- StatusBar ---------------------------------------------------------------

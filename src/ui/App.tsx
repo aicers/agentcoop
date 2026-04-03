@@ -1,4 +1,4 @@
-import { Box } from "ink";
+import { Box, useInput } from "ink";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { t } from "../i18n/index.js";
 import type {
@@ -35,6 +35,7 @@ export function App({
 }: AppProps) {
   const [inputRequest, setInputRequest] = useState<InputRequest | null>(null);
   const resolveRef = useRef<((value: string) => void) | null>(null);
+  const [focusedPane, setFocusedPane] = useState<"a" | "b">("a");
 
   // Store props in refs so the mount effect never re-runs.
   const emitterRef = useRef(emitter);
@@ -54,6 +55,16 @@ export function App({
     resolveRef.current = null;
     setInputRequest(null);
   }, []);
+
+  // Switch focused pane with Tab when input area is not active.
+  useInput(
+    (_input, key) => {
+      if (key.tab) {
+        setFocusedPane((prev) => (prev === "a" ? "b" : "a"));
+      }
+    },
+    { isActive: !inputRequest },
+  );
 
   // Run the pipeline once on mount.
   useEffect(() => {
@@ -86,6 +97,8 @@ export function App({
           agent="a"
           emitter={emitter}
           color="blue"
+          isFocused={focusedPane === "a"}
+          scrollEnabled={!inputRequest}
         />
         <AgentPane
           label={t()["agent.labelBRole"]}
@@ -93,6 +106,8 @@ export function App({
           agent="b"
           emitter={emitter}
           color="green"
+          isFocused={focusedPane === "b"}
+          scrollEnabled={!inputRequest}
         />
       </Box>
 

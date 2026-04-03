@@ -150,6 +150,7 @@ export interface Messages {
   "agentPane.tooSmall": string;
   "agentPane.waiting": string;
   "agentPane.idle": string;
+  "agentPane.linesAbove": (count: number) => string;
   "agent.labelA": string;
   "agent.labelB": string;
   "agent.labelARole": string;
