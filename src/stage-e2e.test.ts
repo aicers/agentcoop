@@ -311,7 +311,10 @@ describe("Stage 3 (Self-check) through pipeline", () => {
         if (resumeCalls < 3) {
           return makeStream(makeResult({ responseText: "FIXED" }));
         }
-        return makeStream(makeResult({ responseText: "DONE" }));
+        // resumeCalls 3 = DONE, resumeCalls 4 = issue sync follow-up
+        return makeStream(
+          makeResult({ responseText: "ISSUE_NO_CHANGES\n\nDONE" }),
+        );
       }),
     };
 
@@ -320,7 +323,7 @@ describe("Stage 3 (Self-check) through pipeline", () => {
 
     expect(result.success).toBe(true);
     expect(invokeCalls).toBe(3); // 3 self-check rounds
-    expect(resumeCalls).toBe(3); // 3 fix-or-done rounds
+    expect(resumeCalls).toBe(4); // 3 fix-or-done + 1 issue sync
   });
 
   test("FIXED 3x → budget exhausted → user approves → DONE", async () => {
@@ -338,7 +341,10 @@ describe("Stage 3 (Self-check) through pipeline", () => {
         if (resumeCalls <= 3) {
           return makeStream(makeResult({ responseText: "FIXED" }));
         }
-        return makeStream(makeResult({ responseText: "DONE" }));
+        // resumeCalls 4 = DONE, resumeCalls 5 = issue sync follow-up
+        return makeStream(
+          makeResult({ responseText: "ISSUE_NO_CHANGES\n\nDONE" }),
+        );
       }),
     };
     const prompt = makePrompt({
@@ -1471,7 +1477,8 @@ describe("Multi-stage E2E: Stage 2 → Stage 3", () => {
     expect(implInvokeCalls).toBe(1);
     expect(implResumeCalls).toBe(1);
     expect(scInvokeCalls).toBe(1);
-    expect(scResumeCalls).toBe(1);
+    // 1 fix-or-done + 1 issue sync follow-up
+    expect(scResumeCalls).toBe(2);
   });
 
   test("implement completes → self-check FIXED twice then DONE", async () => {
@@ -1496,7 +1503,10 @@ describe("Multi-stage E2E: Stage 2 → Stage 3", () => {
         if (scResumeCalls <= 2) {
           return makeStream(makeResult({ responseText: "FIXED" }));
         }
-        return makeStream(makeResult({ responseText: "DONE" }));
+        // scResumeCalls 3 = DONE, 4 = issue sync follow-up
+        return makeStream(
+          makeResult({ responseText: "ISSUE_NO_CHANGES\n\nDONE" }),
+        );
       }),
     };
 
@@ -1514,7 +1524,8 @@ describe("Multi-stage E2E: Stage 2 → Stage 3", () => {
     );
 
     expect(result.success).toBe(true);
-    expect(scResumeCalls).toBe(3);
+    // 2 FIXED + 1 DONE + 1 issue sync follow-up
+    expect(scResumeCalls).toBe(4);
   });
 
   test("step mode asks before each stage", async () => {

@@ -13,6 +13,12 @@
 
 import type { AgentAdapter } from "./agent.js";
 import { t } from "./i18n/index.js";
+import {
+  buildIssueSyncPrompt,
+  type IssueChange,
+  type IssueSyncStatus,
+  parseIssueSyncResponse,
+} from "./issue-sync.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
   invokeOrResume,
@@ -25,6 +31,16 @@ export interface SelfCheckStageOptions {
   agent: AgentAdapter;
   issueTitle: string;
   issueBody: string;
+  /**
+   * Called when the issue description is updated or a comment is added
+   * during issue sync.  The caller collects these for the final summary.
+   */
+  onIssueChange?: (change: IssueChange) => void;
+  /**
+   * Called with the overall outcome of the issue sync step so the
+   * caller can distinguish "no discrepancies" from "sync skipped/failed".
+   */
+  onIssueSyncStatus?: (status: IssueSyncStatus) => void;
 }
 
 export function buildSelfCheckPrompt(
@@ -120,7 +136,40 @@ export function createSelfCheckStageHandler(
         return mapAgentError(fixResult, "during fix");
       }
 
-      return mapFixOrDoneResponse(fixResult.responseText);
+      const result = mapFixOrDoneResponse(fixResult.responseText);
+
+      // Step 3: Issue description sync (only when self-check is done).
+      if (result.outcome === "completed" && fixResult.sessionId) {
+        try {
+          const syncPrompt = buildIssueSyncPrompt(ctx, opts);
+          ctx.promptSinks?.a?.(syncPrompt);
+          const syncResult = await sendFollowUp(
+            opts.agent,
+            fixResult.sessionId,
+            syncPrompt,
+            ctx.worktreePath,
+            ctx.streamSinks?.a,
+          );
+
+          if (syncResult.status === "success") {
+            const changes = parseIssueSyncResponse(syncResult.responseText);
+            for (const change of changes) {
+              opts.onIssueChange?.(change);
+            }
+            opts.onIssueSyncStatus?.("completed");
+          } else {
+            opts.onIssueSyncStatus?.("failed");
+          }
+        } catch {
+          // Issue sync is best-effort; do not fail the stage.
+          opts.onIssueSyncStatus?.("failed");
+        }
+      } else if (result.outcome === "completed") {
+        // Self-check passed but we could not run issue sync (no session ID).
+        opts.onIssueSyncStatus?.("skipped");
+      }
+
+      return result;
     },
   };
 }

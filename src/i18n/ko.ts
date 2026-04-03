@@ -223,6 +223,17 @@ export const ko: Messages = {
   "stageError.agentError": (context, detail) =>
     `\uC5D0\uC774\uC804\uD2B8 \uC624\uB958${context}: ${detail}`,
 
+  // ---- issue sync ---------------------------------------------------------
+
+  "issueSync.summaryHeader": (issueNumber) => `\uC774\uC288 #${issueNumber}:`,
+  "issueSync.summaryMinor": (description) =>
+    `  - \uC5C5\uB370\uC774\uD2B8 (\uC18C\uADDC\uBAA8): ${description}`,
+  "issueSync.summaryMajor": (description) =>
+    `  - \uCF54\uBA58\uD2B8 \uCD94\uAC00 (\uB300\uADDC\uBAA8): ${description}`,
+  "issueSync.summaryNoChanges": "  - \uBCC0\uACBD \uC5C6\uC74C",
+  "issueSync.summarySkipped": "  - \uB3D9\uAE30\uD654 \uAC74\uB108\uB6F0",
+  "issueSync.summaryFailed": "  - \uB3D9\uAE30\uD654 \uC2E4\uD328",
+
   // ---- worktree errors ---------------------------------------------------
 
   "worktree.alreadyExists": (path) =>

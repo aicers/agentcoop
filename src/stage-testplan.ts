@@ -14,6 +14,7 @@
 
 import type { AgentAdapter } from "./agent.js";
 import { t } from "./i18n/index.js";
+import { buildPrSyncInstructions } from "./issue-sync.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
   invokeOrResume,
@@ -53,8 +54,9 @@ export function buildTestPlanVerifyPrompt(
     `3. Check off each verified item in the PR using \`gh\` commands.`,
     `4. Also go through the task checklist in the GitHub issue.  Check`,
     `   off each completed task using \`gh\` commands.`,
-    `5. If you made any code changes, commit and push them so a new CI`,
-    `   run is triggered.`,
+    `5. If you made any code changes:`,
+    `   ${buildPrSyncInstructions(ctx.issueNumber)}`,
+    `   Then commit and push them so a new CI run is triggered.`,
     `6. Make sure CI is still passing after any changes.`,
   ];
 

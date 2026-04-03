@@ -16,6 +16,8 @@ import {
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+import type { IssueChange, IssueSyncStatus } from "./issue-sync.js";
+
 // ---- public types --------------------------------------------------------
 
 export interface AgentState {
@@ -52,6 +54,8 @@ export interface RunState {
   claudePermissionMode: "auto" | "bypass";
   agentA: AgentState;
   agentB: AgentState;
+  issueSyncStatus: IssueSyncStatus;
+  issueChanges: IssueChange[];
 }
 
 // ---- path helpers --------------------------------------------------------
@@ -121,7 +125,13 @@ function isValidRunState(
     (r.claudePermissionMode === "auto" ||
       r.claudePermissionMode === "bypass") &&
     isValidAgentState(r.agentA) &&
-    isValidAgentState(r.agentB)
+    isValidAgentState(r.agentB) &&
+    // issueSyncStatus and issueChanges are optional for backward compat
+    (r.issueSyncStatus === undefined ||
+      r.issueSyncStatus === "completed" ||
+      r.issueSyncStatus === "skipped" ||
+      r.issueSyncStatus === "failed") &&
+    (r.issueChanges === undefined || Array.isArray(r.issueChanges))
   );
 }
 
@@ -166,10 +176,14 @@ export function loadRunState(
   if (!isValidRunState(raw)) return undefined;
 
   // Normalise null → undefined for optional fields and backfill version.
+  const r = raw as Record<string, unknown>;
   const normalised: RunState = {
     ...raw,
-    version: ((raw as Record<string, unknown>).version as number) ?? 1,
+    version: (r.version as number) ?? 1,
     prNumber: raw.prNumber ?? undefined,
+    issueSyncStatus:
+      (raw.issueSyncStatus as IssueSyncStatus | undefined) ?? "skipped",
+    issueChanges: (raw.issueChanges as IssueChange[] | undefined) ?? [],
     agentA: {
       ...raw.agentA,
       contextWindow: raw.agentA.contextWindow ?? undefined,

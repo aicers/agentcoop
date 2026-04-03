@@ -19,6 +19,7 @@ import {
   normaliseCiConclusion,
 } from "./ci.js";
 import { t } from "./i18n/index.js";
+import { buildPrSyncInstructions } from "./issue-sync.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import { invokeOrResume, mapAgentError } from "./stage-util.js";
 import { getHeadSha as defaultGetHeadSha } from "./worktree.js";
@@ -89,7 +90,11 @@ export function buildCiFixPrompt(
     `## Instructions`,
     ``,
     `Diagnose and fix the CI failures shown above.  After making your`,
-    `changes, commit and push the branch so a new CI run is triggered.`,
+    `changes:`,
+    ``,
+    `${buildPrSyncInstructions(ctx.issueNumber)}`,
+    ``,
+    `Then commit and push the branch so a new CI run is triggered.`,
   ];
 
   if (ctx.userInstruction) {

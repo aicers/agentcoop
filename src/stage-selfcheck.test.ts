@@ -269,4 +269,218 @@ describe("createSelfCheckStageHandler", () => {
     const result = await stage.handler(BASE_CTX);
     expect(result.message).toBe(text);
   });
+
+  // -- issue sync step -------------------------------------------------------
+
+  test("reports completed sync status on successful sync", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "All good.\n\nDONE",
+    });
+    const syncResult = makeResult({
+      responseText: "Everything matches.\n\nISSUE_NO_CHANGES",
+    });
+
+    let resumeCall = 0;
+    const resumeResults = [fixResult, syncResult];
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(checkResult)),
+      resume: vi
+        .fn()
+        .mockImplementation(() => makeStream(resumeResults[resumeCall++])),
+    };
+    const onIssueSyncStatus = vi.fn();
+    const stage = createSelfCheckStageHandler(
+      makeOpts({ agent, onIssueSyncStatus }),
+    );
+    await stage.handler(BASE_CTX);
+
+    expect(onIssueSyncStatus).toHaveBeenCalledWith("completed");
+  });
+
+  test("reports failed sync status when sendFollowUp throws", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "All good.\n\nDONE",
+    });
+
+    let resumeCall = 0;
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(checkResult)),
+      resume: vi.fn().mockImplementation(() => {
+        if (resumeCall++ === 0) return makeStream(fixResult);
+        throw new Error("network error");
+      }),
+    };
+    const onIssueSyncStatus = vi.fn();
+    const stage = createSelfCheckStageHandler(
+      makeOpts({ agent, onIssueSyncStatus }),
+    );
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(onIssueSyncStatus).toHaveBeenCalledWith("failed");
+  });
+
+  test("sends issue sync prompt after DONE and reports changes", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "All good.\n\nDONE",
+    });
+    const syncResult = makeResult({
+      responseText:
+        "Compared implementation.\n\nISSUE_UPDATED: corrected file path",
+    });
+
+    let resumeCall = 0;
+    const resumeResults = [fixResult, syncResult];
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(checkResult)),
+      resume: vi
+        .fn()
+        .mockImplementation(() => makeStream(resumeResults[resumeCall++])),
+    };
+    const onIssueChange = vi.fn();
+    const stage = createSelfCheckStageHandler(
+      makeOpts({ agent, onIssueChange }),
+    );
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(agent.resume).toHaveBeenCalledTimes(2);
+    expect(onIssueChange).toHaveBeenCalledWith({
+      type: "minor",
+      description: "corrected file path",
+    });
+  });
+
+  test("reports major changes via onIssueChange", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "All good.\n\nDONE",
+    });
+    const syncResult = makeResult({
+      responseText: "ISSUE_COMMENTED: uses WebSocket instead of polling",
+    });
+
+    let resumeCall = 0;
+    const resumeResults = [fixResult, syncResult];
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(checkResult)),
+      resume: vi
+        .fn()
+        .mockImplementation(() => makeStream(resumeResults[resumeCall++])),
+    };
+    const onIssueChange = vi.fn();
+    const stage = createSelfCheckStageHandler(
+      makeOpts({ agent, onIssueChange }),
+    );
+    await stage.handler(BASE_CTX);
+
+    expect(onIssueChange).toHaveBeenCalledWith({
+      type: "major",
+      description: "uses WebSocket instead of polling",
+    });
+  });
+
+  test("skips issue sync when fix response is FIXED (not DONE)", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "Fixed.\n\nFIXED",
+    });
+    const agent = makeAgent(checkResult, fixResult);
+    const onIssueChange = vi.fn();
+    const stage = createSelfCheckStageHandler(
+      makeOpts({ agent, onIssueChange }),
+    );
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("not_approved");
+    // Only one resume call (fix-or-done), no issue sync
+    expect(agent.resume).toHaveBeenCalledTimes(1);
+    expect(onIssueChange).not.toHaveBeenCalled();
+  });
+
+  test("does not call onIssueChange when sync reports no changes", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "All good.\n\nDONE",
+    });
+    const syncResult = makeResult({
+      responseText: "Everything matches.\n\nISSUE_NO_CHANGES",
+    });
+
+    let resumeCall = 0;
+    const resumeResults = [fixResult, syncResult];
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(checkResult)),
+      resume: vi
+        .fn()
+        .mockImplementation(() => makeStream(resumeResults[resumeCall++])),
+    };
+    const onIssueChange = vi.fn();
+    const stage = createSelfCheckStageHandler(
+      makeOpts({ agent, onIssueChange }),
+    );
+    await stage.handler(BASE_CTX);
+
+    expect(onIssueChange).not.toHaveBeenCalled();
+  });
+
+  test("issue sync failure does not fail the stage and reports failed status", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "All good.\n\nDONE",
+    });
+    const syncResult = makeResult({
+      status: "error",
+      errorType: "execution_error",
+      responseText: "",
+    });
+
+    let resumeCall = 0;
+    const resumeResults = [fixResult, syncResult];
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(checkResult)),
+      resume: vi
+        .fn()
+        .mockImplementation(() => makeStream(resumeResults[resumeCall++])),
+    };
+    const onIssueSyncStatus = vi.fn();
+    const stage = createSelfCheckStageHandler(
+      makeOpts({ agent, onIssueSyncStatus }),
+    );
+    const result = await stage.handler(BASE_CTX);
+
+    // Stage should still complete successfully
+    expect(result.outcome).toBe("completed");
+    expect(onIssueSyncStatus).toHaveBeenCalledWith("failed");
+  });
+
+  test("skips issue sync when fix response has no session ID and reports skipped status", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: undefined,
+      responseText: "All good.\n\nDONE",
+    });
+
+    const agent = makeAgent(checkResult, fixResult);
+    const onIssueChange = vi.fn();
+    const onIssueSyncStatus = vi.fn();
+    const stage = createSelfCheckStageHandler(
+      makeOpts({ agent, onIssueChange, onIssueSyncStatus }),
+    );
+
+    const result = await stage.handler(BASE_CTX);
+    expect(result.outcome).toBe("completed");
+    expect(onIssueChange).not.toHaveBeenCalled();
+    expect(onIssueSyncStatus).toHaveBeenCalledWith("skipped");
+  });
 });

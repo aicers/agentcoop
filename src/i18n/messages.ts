@@ -176,6 +176,15 @@ export interface Messages {
   "stageError.configParsing": (context: string, detail: string) => string;
   "stageError.agentError": (context: string, detail: string) => string;
 
+  // ---- issue sync ---------------------------------------------------------
+
+  "issueSync.summaryHeader": (issueNumber: number) => string;
+  "issueSync.summaryMinor": (description: string) => string;
+  "issueSync.summaryMajor": (description: string) => string;
+  "issueSync.summaryNoChanges": string;
+  "issueSync.summarySkipped": string;
+  "issueSync.summaryFailed": string;
+
   // ---- worktree errors ---------------------------------------------------
 
   "worktree.alreadyExists": (path: string) => string;
