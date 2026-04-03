@@ -562,7 +562,7 @@ describe("CodexStreamTransformer", () => {
       "",
     ].join("\n");
 
-    expect(t.push(chunk)).toBe("Hello");
+    expect(t.push(chunk)).toBe("Hello\n");
   });
 
   test("ignores reasoning items", () => {
@@ -600,7 +600,7 @@ describe("CodexStreamTransformer", () => {
 
     const half = line.slice(0, 20);
     expect(t.push(half)).toBe("");
-    expect(t.push(`${line.slice(20)}\n`)).toBe("Buffered");
+    expect(t.push(`${line.slice(20)}\n`)).toBe("Buffered\n");
   });
 
   test("flush emits buffered content", () => {

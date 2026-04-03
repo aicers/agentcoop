@@ -804,7 +804,7 @@ describe("Claude adapter invoke/resume (E2E with mock spawn)", () => {
 
     // Transformer should extract text from assistant events.
     const text = chunks.join("");
-    expect(text).toBe("Hello world");
+    expect(text).toBe("Hello world\n");
   });
 
   test("non-zero exit with partial stream-json is classified as error", async () => {

@@ -292,7 +292,7 @@ describe("ClaudeStreamTransformer", () => {
       "",
     ].join("\n");
 
-    expect(t.push(chunk)).toBe("Hello world");
+    expect(t.push(chunk)).toBe("Hello world\n");
   });
 
   test("concatenates multiple text blocks in one assistant event", () => {
@@ -313,7 +313,7 @@ describe("ClaudeStreamTransformer", () => {
       "",
     ].join("\n");
 
-    expect(t.push(chunk)).toBe("Part 1. Part 2.");
+    expect(t.push(chunk)).toBe("Part 1. Part 2.\n");
   });
 
   test("ignores non-assistant events", () => {
@@ -365,7 +365,7 @@ describe("ClaudeStreamTransformer", () => {
     expect(t.push(half)).toBe("");
 
     // Send second half with newline
-    expect(t.push(`${line.slice(20)}\n`)).toBe("Hi");
+    expect(t.push(`${line.slice(20)}\n`)).toBe("Hi\n");
   });
 
   test("flush emits buffered content", () => {
@@ -396,7 +396,7 @@ describe("ClaudeStreamTransformer", () => {
     const parts = [line.slice(0, 5), line.slice(5, 30), `${line.slice(30)}\n`];
     expect(t.push(parts[0])).toBe("");
     expect(t.push(parts[1])).toBe("");
-    expect(t.push(parts[2])).toBe("split");
+    expect(t.push(parts[2])).toBe("split\n");
   });
 
   test("handles multiple assistant events in a single push", () => {
@@ -420,7 +420,7 @@ describe("ClaudeStreamTransformer", () => {
       "",
     ].join("\n");
 
-    expect(t.push(events)).toBe("Turn 1Turn 2");
+    expect(t.push(events)).toBe("Turn 1\nTurn 2\n");
   });
 
   test("handles assistant event with empty content array", () => {
