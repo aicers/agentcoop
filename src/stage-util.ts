@@ -17,7 +17,7 @@ export type StreamSink = (chunk: string) => void;
  * Log full diagnostic details for an agent process failure so that
  * transient or hard-to-reproduce errors leave a durable trail.
  */
-function logAgentFailure(result: AgentResult, context?: string): void {
+export function logAgentFailure(result: AgentResult, context?: string): void {
   const parts: string[] = ["Agent process failure"];
   if (context) parts[0] += ` ${context}`;
   if (result.errorType) parts.push(`errorType=${result.errorType}`);

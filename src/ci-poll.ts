@@ -17,7 +17,11 @@ import {
 import { t } from "./i18n/index.js";
 import type { StageContext } from "./pipeline.js";
 import { buildCiFixPrompt } from "./stage-cicheck.js";
-import { buildErrorDetail, drainToSink } from "./stage-util.js";
+import {
+  buildErrorDetail,
+  drainToSink,
+  logAgentFailure,
+} from "./stage-util.js";
 import { getHeadSha as defaultGetHeadSha } from "./worktree.js";
 
 // ---- defaults ----------------------------------------------------------------
@@ -212,6 +216,7 @@ export async function pollCiAndFix(
     }
 
     if (fixResult.status === "error") {
+      logAgentFailure(fixResult, "during CI fix");
       const detail = buildErrorDetail(fixResult);
       return {
         passed: false,
