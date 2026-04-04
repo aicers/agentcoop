@@ -93,7 +93,9 @@ function computeFlagsForLayout(
   ): number {
     // StatusBar: border (2) + info line (1) + optional key hints (1).
     const statusBarHeight = keyHints ? 4 : 3;
-    const tokenBarHeight = tokenBar ? 3 : 0;
+    // TokenBar is split into two boxes.  In row layout they sit side by
+    // side (3 rows), in column layout they stack (6 rows).
+    const tokenBarHeight = tokenBar ? (layout === "column" ? 6 : 3) : 0;
     const bottomChrome = inputHeight + statusBarHeight + tokenBarHeight;
     const paneArea = terminalHeight - bottomChrome;
     // AgentPane overhead: border (2) + label (1) + optional separator (1).
@@ -265,6 +267,16 @@ export function App({
   const borderedContentWidth =
     terminalWidth !== undefined ? terminalWidth - 4 : undefined;
 
+  // Per-box content width for the split TokenBar.
+  // Row layout: each box gets half the terminal width.
+  // Column layout: each box gets the full terminal width.
+  const tokenBarContentWidth =
+    terminalWidth !== undefined
+      ? effectiveLayout === "row"
+        ? Math.floor(terminalWidth / 2) - 4
+        : terminalWidth - 4
+      : undefined;
+
   const dispatch = useCallback((request: InputRequest): Promise<string> => {
     return new Promise<string>((resolve) => {
       resolveRef.current = resolve;
@@ -373,7 +385,8 @@ export function App({
       <TokenBar
         emitter={emitter}
         visible={flags.showTokenBar}
-        contentWidth={borderedContentWidth}
+        contentWidth={tokenBarContentWidth}
+        layout={effectiveLayout}
       />
       <StatusBar
         emitter={emitter}
