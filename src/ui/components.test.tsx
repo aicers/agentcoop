@@ -6,7 +6,7 @@
  */
 import { Box, Text, useInput, useStdout } from "ink";
 import { cleanup, render } from "ink-testing-library";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { afterEach, describe, expect, test } from "vitest";
 import {
   type AgentInvokeEvent,
@@ -1008,6 +1008,80 @@ describe("InputArea", () => {
 
     expect(lastFrame()).toContain("Blocked. Choose:");
     expect(lastFrame()).not.toContain("Pipeline running...");
+  });
+});
+
+// ---- Deferred resolution (issue #105) ----------------------------------------
+
+describe("deferred handleSubmit resolution", () => {
+  test("keypress on first prompt does not auto-answer the next prompt", async () => {
+    // Reproduces issue #105: pressing "1" on a single-choice OK prompt
+    // must NOT bleed through to the subsequent merge-confirmation prompt.
+    let dispatchFn: ((req: InputRequest) => Promise<string>) | null = null;
+
+    function Harness() {
+      const [request, setRequest] = useState<InputRequest | null>(null);
+      const resolveRef = useRef<((v: string) => void) | null>(null);
+
+      const dispatch = useCallback((req: InputRequest): Promise<string> => {
+        return new Promise<string>((resolve) => {
+          resolveRef.current = resolve;
+          setRequest(req);
+        });
+      }, []);
+
+      const handleSubmit = useCallback((value: string) => {
+        const resolve = resolveRef.current;
+        resolveRef.current = null;
+        setRequest(null);
+        // Same deferred pattern as App.tsx
+        setTimeout(() => resolve?.(value), 0);
+      }, []);
+
+      dispatchFn = dispatch;
+
+      return <InputArea request={request} onSubmit={handleSubmit} />;
+    }
+
+    const { lastFrame, stdin } = render(<Harness />);
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Dispatch first prompt: single OK choice (completion notification).
+    expect(dispatchFn).not.toBeNull();
+    const dispatch = dispatchFn as unknown as (
+      req: InputRequest,
+    ) => Promise<string>;
+    const p1 = dispatch({
+      message: "Pipeline completed.",
+      choices: [{ label: "OK", value: "ok" }],
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastFrame()).toContain("Pipeline completed.");
+
+    // When the first prompt resolves, immediately dispatch a second prompt.
+    let secondAnswer: string | undefined;
+    p1.then(() => {
+      dispatch({
+        message: "Has the PR been merged?",
+        choices: [
+          { label: "Yes, merged", value: "yes" },
+          { label: "No, keep worktree", value: "no" },
+        ],
+      }).then((v) => {
+        secondAnswer = v;
+      });
+    });
+
+    // Press "1" to select OK on the first prompt.
+    stdin.write("1");
+    await new Promise((r) => setTimeout(r, 100));
+
+    // First prompt should have resolved.
+    await expect(p1).resolves.toBe("ok");
+
+    // Second prompt must be visible — not auto-answered.
+    expect(lastFrame()).toContain("Has the PR been merged?");
+    expect(secondAnswer).toBeUndefined();
   });
 });
 
