@@ -6,7 +6,7 @@ export const en: Messages = {
   "quickStart.header": "Found saved configuration:",
   "quickStart.agentA": (model) => `  Agent A: ${model}`,
   "quickStart.agentB": (model) => `  Agent B: ${model}`,
-  "quickStart.mode": (exec, perm) => `  Mode: ${exec} / ${perm}`,
+  "quickStart.mode": (exec) => `  Mode: ${exec}`,
   "quickStart.language": (lang) => `  Language: ${lang}`,
   "quickStart.usePrevious": "Use previous settings?",
 
@@ -24,7 +24,6 @@ export const en: Messages = {
   "startup.agentContext": (label) => `${label} context window:`,
   "startup.agentEffort": (label) => `${label} effort level:`,
   "startup.executionMode": "Execution mode:",
-  "startup.claudePermission": "Claude permission mode:",
   "startup.language": "Language:",
   "startup.languageEnglish": "English",
   "startup.languageKorean": "Korean",
@@ -78,7 +77,6 @@ export const en: Messages = {
   "boot.agentA": (model) => `  Agent A: ${model}`,
   "boot.agentB": (model) => `  Agent B: ${model}`,
   "boot.mode": (mode) => `  Mode: ${mode}`,
-  "boot.permission": (mode) => `  Permission: ${mode}`,
   "boot.resumingFromStage": (stage) => `  Resuming from stage: ${stage}`,
 
   // ---- stage names -------------------------------------------------------

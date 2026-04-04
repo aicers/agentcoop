@@ -712,7 +712,6 @@ describe("Claude adapter invoke/resume (E2E with mock spawn)", () => {
 
     const adapter = createClaudeAdapter({
       model: "opus",
-      permissionMode: "auto",
     });
 
     const stream = adapter.invoke("write tests");
@@ -754,7 +753,7 @@ describe("Claude adapter invoke/resume (E2E with mock spawn)", () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child);
 
-    const adapter = createClaudeAdapter({ permissionMode: "bypass" });
+    const adapter = createClaudeAdapter();
     adapter.resume("sess-prev", "continue working");
 
     expect(mockSpawn).toHaveBeenCalledWith(

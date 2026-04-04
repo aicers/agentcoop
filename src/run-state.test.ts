@@ -34,7 +34,6 @@ function makeRunState(overrides: Partial<RunState> = {}): RunState {
     stageLoopCount: 0,
     reviewRound: 0,
     executionMode: "auto",
-    claudePermissionMode: "auto",
     agentA: {
       cli: "claude",
       model: "opus",

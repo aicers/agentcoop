@@ -79,7 +79,6 @@ function setupHappyPath() {
     .mockResolvedValueOnce("gpt-5.4") // agent B model
     .mockResolvedValueOnce("high") // agent B effort
     .mockResolvedValueOnce("auto") // execution mode
-    .mockResolvedValueOnce("bypass") // permission mode
     .mockResolvedValueOnce("en"); // language
   mockSearch.mockResolvedValueOnce("agentcoop"); // repo
   mockInput.mockResolvedValueOnce("42"); // issue number
@@ -120,7 +119,6 @@ describe("runStartup — happy path", () => {
       effortLevel: "high",
     });
     expect(result.executionMode).toBe("auto");
-    expect(result.claudePermissionMode).toBe("bypass");
     expect(result.language).toBe("en");
     expect(result.pipelineSettings).toEqual({
       selfCheckAutoIterations: 3,
@@ -184,7 +182,6 @@ describe("runStartup — owner selection", () => {
       .mockResolvedValueOnce("gpt-5.3-codex") // agent B model
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("step") // execution mode
-      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("ko"); // language
     mockCheckbox.mockResolvedValueOnce([]); // no pipeline settings adjusted
     mockSearch.mockResolvedValueOnce("repo1");
@@ -238,7 +235,6 @@ describe("runStartup — owner selection", () => {
       .mockResolvedValueOnce("gpt-5.4") // agent B model
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
-      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("en"); // language
     mockCheckbox.mockResolvedValueOnce([]);
     mockSearch.mockResolvedValueOnce("repo1");
@@ -265,7 +261,6 @@ describe("runStartup — owner selection", () => {
       .mockResolvedValueOnce("gpt-5.4") // agent B model
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
-      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("en"); // language
     mockCheckbox.mockResolvedValueOnce([]);
     mockSearch.mockResolvedValueOnce("repo1");
@@ -544,7 +539,6 @@ describe("runStartup — model selection", () => {
       .mockResolvedValueOnce("1m") // agent B context window
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
-      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("en"); // language
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
@@ -579,7 +573,6 @@ describe("runStartup — model selection", () => {
       .mockResolvedValueOnce("gpt-5.3-codex") // agent B model
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("step") // execution mode
-      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("en"); // language
     mockConfirm.mockResolvedValueOnce(true);
 
@@ -609,7 +602,6 @@ describe("runStartup — effort level choices", () => {
       .mockResolvedValueOnce("200k") // agent B context window
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
-      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("en"); // language
     mockConfirm.mockResolvedValueOnce(true);
 
@@ -679,7 +671,6 @@ describe("runStartup — language selection", () => {
       .mockResolvedValueOnce("gpt-5.4") // agent B model
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
-      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("ko"); // changed from "en" to "ko"
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
@@ -711,7 +702,6 @@ describe("runStartup — language selection", () => {
       .mockResolvedValueOnce("gpt-5.4") // agent B model
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
-      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("ko"); // same as config
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
@@ -726,8 +716,8 @@ describe("runStartup — language selection", () => {
 
     // Language select call index:
     // 0=owner, 1=agentA CLI, 2=agentA model, 3=agentA context, 4=agentA effort,
-    // 5=agentB CLI, 6=agentB model, 7=agentB effort, 8=exec, 9=perm, 10=lang
-    const langCall = mockSelect.mock.calls[10][0];
+    // 5=agentB CLI, 6=agentB model, 7=agentB effort, 8=exec, 9=lang
+    const langCall = mockSelect.mock.calls[9][0];
     expect(langCall.default).toBe("ko");
   });
 });
@@ -751,7 +741,6 @@ describe("runStartup — config dirty tracking", () => {
         effortLevel: "high",
       },
       executionMode: "auto" as const,
-      claudePermissionMode: "bypass" as const,
     };
     mockLoadConfig.mockReturnValue(config);
     mockSelect
@@ -764,7 +753,6 @@ describe("runStartup — config dirty tracking", () => {
       .mockResolvedValueOnce("gpt-5.4") // agent B model
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
-      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("en"); // language
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
@@ -801,7 +789,6 @@ describe("runStartup — config dirty tracking", () => {
       .mockResolvedValueOnce("gpt-5.4") // agent B model
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
-      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("en"); // same language
     mockCheckbox.mockResolvedValueOnce([]);
     mockSearch.mockResolvedValueOnce("repo1");
@@ -826,7 +813,6 @@ describe("runStartup — config dirty tracking", () => {
       .mockResolvedValueOnce("gpt-5.4") // agent B model
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
-      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("ko"); // changed
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
@@ -1024,10 +1010,10 @@ describe("runStartup — confirm issue (Stage 1)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Full flow with step mode + bypass permission
+// Full flow with step mode
 // ---------------------------------------------------------------------------
 describe("runStartup — alternate selections", () => {
-  test("step mode + bypass permission + ko language", async () => {
+  test("step mode + ko language", async () => {
     const config = defaultConfig();
     mockLoadConfig.mockReturnValue(config);
     mockSelect
@@ -1040,7 +1026,6 @@ describe("runStartup — alternate selections", () => {
       .mockResolvedValueOnce("gpt-5.3-codex") // agent B model
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("step") // execution mode
-      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("ko"); // language
     mockSearch.mockResolvedValueOnce("my-repo");
     mockInput.mockResolvedValueOnce("99");
@@ -1066,7 +1051,6 @@ describe("runStartup — alternate selections", () => {
     expect(result.agentB.cli).toBe("codex");
     expect(result.agentB.model).toBe("gpt-5.3-codex");
     expect(result.executionMode).toBe("step");
-    expect(result.claudePermissionMode).toBe("bypass");
     expect(result.language).toBe("ko");
   });
 });
@@ -1174,7 +1158,6 @@ describe("runStartup — pipeline settings", () => {
       .mockResolvedValueOnce("gpt-5.4") // agent B model
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
-      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("en"); // language
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
@@ -1291,7 +1274,6 @@ describe("runStartup — pipeline settings", () => {
       .mockResolvedValueOnce("gpt-5.4") // agent B model
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
-      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("en"); // language
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
@@ -1328,7 +1310,6 @@ describe("runStartup — pipeline settings", () => {
       .mockResolvedValueOnce("gpt-5.4") // agent B model
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
-      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("en"); // language
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
@@ -1384,7 +1365,7 @@ describe("selectTarget", () => {
     ]);
 
     await selectTarget();
-    // select called only once for owner (not for models, mode, permission, language).
+    // select called only once for owner (not for models, mode, language).
     expect(mockSelect).toHaveBeenCalledTimes(1);
     // getIssue NOT called (that happens in runStartup).
     expect(mockGetIssue).not.toHaveBeenCalled();
@@ -1427,7 +1408,7 @@ describe("runStartup with target parameter", () => {
       configDirty: false,
     };
     // Only prompts needed: agentA (cli+model+context+effort), agentB (cli+model+effort),
-    // executionMode, permissionMode, language, settings, confirm.
+    // executionMode, language, settings, confirm.
     mockSelect
       .mockResolvedValueOnce("claude") // agent A CLI
       .mockResolvedValueOnce("opus") // agent A model
@@ -1437,7 +1418,6 @@ describe("runStartup with target parameter", () => {
       .mockResolvedValueOnce("gpt-5.4") // agent B model
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
-      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("en"); // language
     mockCheckbox.mockResolvedValueOnce([]); // no settings adjusted
     mockConfirm.mockResolvedValueOnce(true); // confirm issue
@@ -1475,7 +1455,6 @@ describe("runStartup — quick-start", () => {
         effortLevel: "xhigh",
       },
       executionMode: "auto" as const,
-      claudePermissionMode: "bypass" as const,
     };
   }
 
@@ -1506,7 +1485,6 @@ describe("runStartup — quick-start", () => {
       effortLevel: "xhigh",
     });
     expect(result.executionMode).toBe("auto");
-    expect(result.claudePermissionMode).toBe("bypass");
     expect(result.language).toBe("en");
     // No agent selection prompts should have been shown.
     // select is called once for owner only.
@@ -1526,7 +1504,6 @@ describe("runStartup — quick-start", () => {
       .mockResolvedValueOnce("gpt-5.4") // agent B model
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("step") // execution mode
-      .mockResolvedValueOnce("auto") // permission mode
       .mockResolvedValueOnce("en"); // language
     mockSearch.mockResolvedValueOnce("agentcoop"); // repo
     mockInput.mockResolvedValueOnce("42"); // issue number
@@ -1576,7 +1553,6 @@ describe("runStartup — quick-start", () => {
       .mockResolvedValueOnce("gpt-5.4") // agent B model
       .mockResolvedValueOnce("xhigh") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
-      .mockResolvedValueOnce("bypass") // permission mode
       .mockResolvedValueOnce("en"); // language
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
@@ -1651,13 +1627,13 @@ describe("runStartup — quick-start", () => {
     expect(logs).toContain("Found saved configuration:");
     expect(logs).toContain("Agent A: Claude Opus 4.6 (1M) / High");
     expect(logs).toContain("Agent B: GPT-5.4 / Extra High");
-    expect(logs).toContain("Mode: auto / bypass");
+    expect(logs).toContain("Mode: auto");
     expect(logs).toContain("Language: English");
 
     consoleSpy.mockRestore();
   });
 
-  test("defaults executionMode and permissionMode when not saved", async () => {
+  test("defaults executionMode when not saved", async () => {
     const config = {
       ...defaultConfig(),
       agentA: {
@@ -1671,7 +1647,7 @@ describe("runStartup — quick-start", () => {
         model: "gpt-5.4",
         effortLevel: "xhigh",
       },
-      // executionMode and claudePermissionMode are undefined
+      // executionMode is undefined
     };
     mockLoadConfig.mockReturnValue(config);
     mockSelect.mockResolvedValueOnce("aicers");
@@ -1688,6 +1664,5 @@ describe("runStartup — quick-start", () => {
     const result = await runStartup();
 
     expect(result.executionMode).toBe("auto");
-    expect(result.claudePermissionMode).toBe("bypass");
   });
 });

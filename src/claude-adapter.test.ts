@@ -709,10 +709,8 @@ describe("ClaudeStreamTransformer", () => {
 // buildClaudeArgs
 // ---------------------------------------------------------------------------
 describe("buildClaudeArgs", () => {
-  test("builds basic args with auto permission mode and --verbose", () => {
-    const args = buildClaudeArgs("do something", {
-      permissionMode: "auto",
-    });
+  test("builds basic args with bypassPermissions and --verbose", () => {
+    const args = buildClaudeArgs("do something", {});
 
     expect(args).toEqual([
       "-p",
@@ -721,19 +719,17 @@ describe("buildClaudeArgs", () => {
       "stream-json",
       "--verbose",
       "--permission-mode",
-      "auto",
+      "bypassPermissions",
     ]);
   });
 
   test("always includes --verbose (required by stream-json)", () => {
-    const args = buildClaudeArgs("prompt", { permissionMode: "auto" });
+    const args = buildClaudeArgs("prompt", {});
     expect(args).toContain("--verbose");
   });
 
-  test("builds args with bypass permission mode", () => {
-    const args = buildClaudeArgs("prompt", {
-      permissionMode: "bypass",
-    });
+  test("always passes bypassPermissions", () => {
+    const args = buildClaudeArgs("prompt", {});
 
     expect(args).toContain("--permission-mode");
     expect(args).toContain("bypassPermissions");
@@ -742,7 +738,6 @@ describe("buildClaudeArgs", () => {
   test("includes --model when model is specified", () => {
     const args = buildClaudeArgs("prompt", {
       model: "opus",
-      permissionMode: "auto",
     });
 
     expect(args).toContain("--model");
@@ -750,16 +745,13 @@ describe("buildClaudeArgs", () => {
   });
 
   test("omits --model when model is undefined", () => {
-    const args = buildClaudeArgs("prompt", {
-      permissionMode: "auto",
-    });
+    const args = buildClaudeArgs("prompt", {});
 
     expect(args).not.toContain("--model");
   });
 
   test("includes --effort when effortLevel is set", () => {
     const args = buildClaudeArgs("prompt", {
-      permissionMode: "auto",
       effortLevel: "high",
     });
 
@@ -770,7 +762,6 @@ describe("buildClaudeArgs", () => {
   test("includes --effort max for Opus max effort", () => {
     const args = buildClaudeArgs("prompt", {
       model: "opus",
-      permissionMode: "auto",
       effortLevel: "max",
     });
 
@@ -779,9 +770,7 @@ describe("buildClaudeArgs", () => {
   });
 
   test("omits --effort when effortLevel is undefined", () => {
-    const args = buildClaudeArgs("prompt", {
-      permissionMode: "auto",
-    });
+    const args = buildClaudeArgs("prompt", {});
 
     expect(args).not.toContain("--effort");
   });
@@ -789,7 +778,6 @@ describe("buildClaudeArgs", () => {
   test("appends [1m] to model when contextWindow is 1m", () => {
     const args = buildClaudeArgs("prompt", {
       model: "opus",
-      permissionMode: "auto",
       contextWindow: "1m",
     });
 
@@ -799,7 +787,6 @@ describe("buildClaudeArgs", () => {
   test("does not modify model when contextWindow is 200k", () => {
     const args = buildClaudeArgs("prompt", {
       model: "opus",
-      permissionMode: "auto",
       contextWindow: "200k",
     });
 
@@ -808,20 +795,14 @@ describe("buildClaudeArgs", () => {
   });
 
   test("includes --resume when sessionId is given", () => {
-    const args = buildClaudeArgs(
-      "continue",
-      { permissionMode: "auto" },
-      "sess-123",
-    );
+    const args = buildClaudeArgs("continue", {}, "sess-123");
 
     expect(args).toContain("--resume");
     expect(args).toContain("sess-123");
   });
 
   test("omits --resume when sessionId is undefined", () => {
-    const args = buildClaudeArgs("prompt", {
-      permissionMode: "auto",
-    });
+    const args = buildClaudeArgs("prompt", {});
 
     expect(args).not.toContain("--resume");
   });
@@ -829,7 +810,7 @@ describe("buildClaudeArgs", () => {
   test("combines all options together", () => {
     const args = buildClaudeArgs(
       "full prompt",
-      { model: "sonnet", permissionMode: "bypass" },
+      { model: "sonnet" },
       "sess-xyz",
     );
 

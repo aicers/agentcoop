@@ -31,7 +31,6 @@ export interface Config {
   agentA?: SavedAgentConfig;
   agentB?: SavedAgentConfig;
   executionMode?: "auto" | "step";
-  claudePermissionMode?: "auto" | "bypass";
 }
 
 const DEFAULT_CONFIG: Config = {
@@ -127,11 +126,6 @@ export function loadConfig(): Config {
     executionMode:
       raw.executionMode === "auto" || raw.executionMode === "step"
         ? raw.executionMode
-        : undefined,
-    claudePermissionMode:
-      raw.claudePermissionMode === "auto" ||
-      raw.claudePermissionMode === "bypass"
-        ? raw.claudePermissionMode
         : undefined,
   };
 }
