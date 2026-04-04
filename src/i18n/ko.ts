@@ -198,6 +198,8 @@ export const ko: Messages = {
     "(\uB300\uAE30 \uC911 \u2014 \uB9AC\uBDF0 \uB2E8\uACC4\uC5D0\uC11C \uD65C\uC131\uD654)",
   "agentPane.linesAbove": (count) =>
     `\u2191 ${count}\uC904 \uB354 \uC788\uC74C`,
+  "agentPane.linesBelow": (count) =>
+    `\u2193 ${count}\uC904 \uB354 \uC788\uC74C`,
   "agent.labelA": "에이전트 A",
   "agent.labelB": "에이전트 B",
   "agent.labelARole": "에이전트 A (구현자)",

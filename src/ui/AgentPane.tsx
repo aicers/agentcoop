@@ -102,7 +102,19 @@ export function AgentPane({
   }
 
   const totalRows = allRows.length;
-  const maxOffset = Math.max(0, totalRows - visibleRows);
+  // Compute maxOffset so the user can scroll far enough to see the first
+  // row.  Add 1 only when a bottom indicator would actually appear at max
+  // scroll (i.e. when the viewport at that position cannot reach the last
+  // logical line).  For a single wrapped line, no bottom indicator is ever
+  // shown, so no extra row is needed.
+  let maxOffset = Math.max(0, totalRows - visibleRows);
+  if (maxOffset > 0 && visibleRows > 0) {
+    const endRowAtMax = totalRows - maxOffset; // = visibleRows
+    const lastIdxAtMax = allRows[endRowAtMax - 1]?.lineIdx ?? 0;
+    if (allLines.length - 1 - lastIdxAtMax > 0) {
+      maxOffset += 1;
+    }
+  }
   const effectiveOffset = Math.min(scrollOffset, maxOffset);
 
   // Auto-adjust scrollOffset when total rows grow (new completed lines
@@ -149,32 +161,49 @@ export function AgentPane({
   );
 
   // Compute the visible window from the flat row array.
+  //
+  // To avoid viewport size discontinuity at scroll transitions, we
+  // determine which indicators are needed first, then consistently
+  // allocate the remaining rows to content.
   let visibleRowEntries: RowEntry[];
   let linesAbove = 0;
+  let linesBelow = 0;
 
   if (visibleRows === 0) {
     visibleRowEntries = [];
   } else if (effectiveOffset === 0) {
     // Bottom-pinned (auto-follow).
-    const startRow = Math.max(0, totalRows - visibleRows);
+    // Tentatively check if a top indicator is needed.
+    const tentativeStart = Math.max(0, totalRows - visibleRows);
+    const needTopIndicator =
+      tentativeStart > 0 && allRows[tentativeStart].lineIdx > 0;
+
+    const contentRows = visibleRows - (needTopIndicator ? 1 : 0);
+    const startRow = Math.max(0, totalRows - contentRows);
     visibleRowEntries = allRows.slice(startRow);
     linesAbove = startRow > 0 ? allRows[startRow].lineIdx : 0;
   } else {
     // Scrolled up: row-level window.
     const endRow = totalRows - effectiveOffset;
 
-    // First pass: fill the viewport without the indicator.
-    let startRow = Math.max(0, endRow - visibleRows);
-    linesAbove = startRow > 0 ? allRows[startRow].lineIdx : 0;
+    // Tentatively check if indicators are needed using the full viewport.
+    const tentativeStart = Math.max(0, endRow - visibleRows);
+    const needTopIndicator =
+      tentativeStart > 0 && allRows[tentativeStart].lineIdx > 0;
+    // Count logical lines fully below the viewport (determined by
+    // endRow alone, independent of the top indicator).
+    const lastVisibleLineIdx = allRows[endRow - 1]?.lineIdx ?? 0;
+    const totalLogicalLines = allLines.length;
+    linesBelow = totalLogicalLines - 1 - lastVisibleLineIdx;
 
-    // If there are logical lines fully above the viewport the scroll
-    // indicator will be rendered, so reclaim 1 row for it.
-    if (linesAbove > 0) {
-      startRow = Math.max(0, endRow - (visibleRows - 1));
-      linesAbove = allRows[startRow].lineIdx;
-    }
+    const needBottomIndicator = linesBelow > 0;
+
+    const contentRows =
+      visibleRows - (needTopIndicator ? 1 : 0) - (needBottomIndicator ? 1 : 0);
+    const startRow = Math.max(0, endRow - contentRows);
 
     visibleRowEntries = allRows.slice(startRow, endRow);
+    linesAbove = startRow > 0 ? allRows[startRow].lineIdx : 0;
   }
 
   const hasOutput = allLines.length > 0;
@@ -195,10 +224,10 @@ export function AgentPane({
     }
   }
 
-  const scrollIndicator =
-    effectiveOffset > 0 && linesAbove > 0
-      ? t()["agentPane.linesAbove"](linesAbove)
-      : undefined;
+  const topIndicator =
+    linesAbove > 0 ? t()["agentPane.linesAbove"](linesAbove) : undefined;
+  const bottomIndicator =
+    linesBelow > 0 ? t()["agentPane.linesBelow"](linesBelow) : undefined;
 
   // Dim unfocused pane border so the focused pane is always distinguishable.
   const borderCol = isFocused ? color : "gray";
@@ -224,13 +253,14 @@ export function AgentPane({
         <Text dimColor>{placeholder}</Text>
       ) : (
         <>
-          {scrollIndicator && <Text dimColor>{scrollIndicator}</Text>}
+          {topIndicator && <Text dimColor>{topIndicator}</Text>}
           {visibleRowEntries.map((row, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: rows are derived without stable IDs
             <Text key={i} dimColor={row.isPrompt}>
               {row.text}
             </Text>
           ))}
+          {bottomIndicator && <Text dimColor>{bottomIndicator}</Text>}
         </>
       )}
     </Box>
