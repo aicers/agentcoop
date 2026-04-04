@@ -28,7 +28,7 @@ describe("AgentPane", () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(
       <AgentPane
-        label="Agent A (implementer)"
+        label="Agent A (author)"
         agent="a"
         emitter={emitter}
         color="blue"
@@ -36,7 +36,7 @@ describe("AgentPane", () => {
     );
 
     const frame = lastFrame();
-    expect(frame).toContain("Agent A (implementer)");
+    expect(frame).toContain("Agent A (author)");
     expect(frame).toContain("(waiting for output)");
   });
 
@@ -45,7 +45,7 @@ describe("AgentPane", () => {
     const { lastFrame } = render(
       <Box>
         <AgentPane
-          label="Agent A (implementer)"
+          label="Agent A (author)"
           agent="a"
           emitter={emitter}
           color="blue"
@@ -60,7 +60,7 @@ describe("AgentPane", () => {
     );
 
     const frame = lastFrame();
-    expect(frame).toContain("Agent A (implementer)");
+    expect(frame).toContain("Agent A (author)");
     expect(frame).toContain("Agent B (reviewer)");
   });
 
@@ -68,7 +68,7 @@ describe("AgentPane", () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(
       <AgentPane
-        label="Agent A (implementer)"
+        label="Agent A (author)"
         modelName="opus"
         agent="a"
         emitter={emitter}
@@ -77,7 +77,7 @@ describe("AgentPane", () => {
     );
 
     const frame = lastFrame();
-    expect(frame).toContain("Agent A (implementer) \u2014 opus");
+    expect(frame).toContain("Agent A (author) \u2014 opus");
   });
 
   test("renders streamed lines after agent:chunk events", async () => {
@@ -884,7 +884,7 @@ describe("StatusBar", () => {
     const frame = lastFrame();
     expect(frame).toContain("Stage 2: Implement");
     // Implement is not a looping stage — no round indicator.
-    expect(frame).not.toContain("Round:");
+    expect(frame).not.toContain("round");
     expect(frame).not.toContain("Initialising");
   });
 
@@ -910,11 +910,9 @@ describe("StatusBar", () => {
     await new Promise((r) => setTimeout(r, 50));
 
     const frame = lastFrame();
-    expect(frame).toContain("Stage 3: Self-check");
-    expect(frame).toContain("Round: 2 (done)");
+    expect(frame).toContain("Stage 3: Self-check (round 2, done)");
     expect(frame).toContain("Last: not approved");
-    expect(frame).toContain("Self-check: 1");
-    expect(frame).toContain("Review: 0");
+    expect(frame).toContain("Completed: self-check \u00d71, review \u00d70");
   });
 
   test("shows in-progress then done on successive events", async () => {
@@ -936,11 +934,11 @@ describe("StatusBar", () => {
       iteration: 0,
     });
     await new Promise((r) => setTimeout(r, 50));
-    expect(lastFrame()).toContain("Round: 1 (in progress)");
+    expect(lastFrame()).toContain("Stage 3: Self-check (round 1, in progress)");
 
     emitter.emit("stage:exit", { stageNumber: 3, outcome: "not_approved" });
     await new Promise((r) => setTimeout(r, 50));
-    expect(lastFrame()).toContain("Round: 1 (done)");
+    expect(lastFrame()).toContain("Stage 3: Self-check (round 1, done)");
 
     emitter.emit("stage:enter", {
       stageNumber: 3,
@@ -948,7 +946,7 @@ describe("StatusBar", () => {
       iteration: 1,
     });
     await new Promise((r) => setTimeout(r, 50));
-    expect(lastFrame()).toContain("Round: 2 (in progress)");
+    expect(lastFrame()).toContain("Stage 3: Self-check (round 2, in progress)");
   });
 
   test("clears outcome on new stage:enter", async () => {
@@ -1002,8 +1000,7 @@ describe("StatusBar", () => {
     await new Promise((r) => setTimeout(r, 50));
 
     const frame = lastFrame();
-    expect(frame).toContain("Self-check: 0");
-    expect(frame).toContain("Review: 1");
+    expect(frame).toContain("Completed: self-check \u00d70, review \u00d71");
   });
 
   test("hides cumulative counts when both are zero", () => {
@@ -1018,8 +1015,7 @@ describe("StatusBar", () => {
     );
 
     const frame = lastFrame() ?? "";
-    expect(frame).not.toContain("Self-check:");
-    expect(frame).not.toContain("Review:");
+    expect(frame).not.toContain("Completed:");
   });
 
   test("shows abbreviated base SHA when baseSha is provided", () => {

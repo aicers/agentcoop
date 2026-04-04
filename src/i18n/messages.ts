@@ -137,12 +137,22 @@ export interface Messages {
 
   "statusBar.initialising": string;
   "statusBar.stage": (number: number, name: string) => string;
-  "statusBar.roundInProgress": (round: number) => string;
-  "statusBar.roundDone": (round: number) => string;
+  "statusBar.stageRoundInProgress": (
+    number: number,
+    name: string,
+    round: number,
+  ) => string;
+  "statusBar.stageRoundDone": (
+    number: number,
+    name: string,
+    round: number,
+  ) => string;
   "statusBar.last": (outcome: string) => string;
   "statusBar.base": (sha: string) => string;
-  "statusBar.selfCheck": (count: number) => string;
-  "statusBar.review": (count: number) => string;
+  "statusBar.completed": (
+    selfCheckCount: number,
+    reviewCount: number,
+  ) => string;
   "outcome.completed": string;
   "outcome.fixed": string;
   "outcome.approved": string;
