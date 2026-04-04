@@ -17,25 +17,167 @@ import { StatusBar } from "./StatusBar.js";
 import { TokenBar } from "./TokenBar.js";
 import { createTuiUserPrompt } from "./TuiUserPrompt.js";
 
-/** Read terminal height from stdout.rows, re-rendering on resize. */
-export function useTerminalHeight(): number | undefined {
+// ---- Terminal dimension hooks ------------------------------------------------
+
+/** Read terminal dimensions from stdout, re-rendering on resize. */
+export function useTerminalDimensions(): {
+  height: number | undefined;
+  width: number | undefined;
+} {
   const { stdout } = useStdout();
   const isTTY = stdout.isTTY === true;
-  const [height, setHeight] = useState<number | undefined>(
-    isTTY ? stdout.rows : undefined,
-  );
+  const [dims, setDims] = useState<{
+    height: number | undefined;
+    width: number | undefined;
+  }>({
+    height: isTTY ? stdout.rows : undefined,
+    width: isTTY ? stdout.columns : undefined,
+  });
 
   useEffect(() => {
     if (!isTTY) return;
-    const onResize = () => setHeight(stdout.rows);
+    const onResize = () =>
+      setDims({ height: stdout.rows, width: stdout.columns });
     stdout.on("resize", onResize);
     return () => {
       stdout.off("resize", onResize);
     };
   }, [stdout, isTTY]);
 
-  return height;
+  return dims;
 }
+
+/** Read terminal height from stdout.rows, re-rendering on resize. */
+export function useTerminalHeight(): number | undefined {
+  return useTerminalDimensions().height;
+}
+
+// ---- Visibility flag computation ---------------------------------------------
+
+/** Minimum content rows per agent pane before hiding UI elements. */
+export const MIN_PANE_CONTENT = 3;
+
+export interface VisibilityFlags {
+  showTokenBar: boolean;
+  showKeyHints: boolean;
+  showPaneSeparator: boolean;
+  allowColumnLayout: boolean;
+}
+
+/** Compute the height of the InputArea in terminal rows. */
+export function inputAreaHeight(request: InputRequest | null): number {
+  if (!request) return 1;
+  if (request.choices) return 1 + request.choices.length;
+  return 2;
+}
+
+/**
+ * Compute flags for a specific layout, progressively hiding elements
+ * until each agent pane has at least MIN_PANE_CONTENT rows.
+ */
+function computeFlagsForLayout(
+  terminalHeight: number,
+  inputHeight: number,
+  hasTokenData: boolean,
+  layout: "row" | "column",
+): VisibilityFlags {
+  let showTokenBar = hasTokenData;
+  let showKeyHints = true;
+  let showPaneSeparator = true;
+  let allowColumnLayout = true;
+
+  function paneContentRows(
+    tokenBar: boolean,
+    keyHints: boolean,
+    separator: boolean,
+  ): number {
+    // StatusBar: border (2) + info line (1) + optional key hints (1).
+    const statusBarHeight = keyHints ? 4 : 3;
+    const tokenBarHeight = tokenBar ? 3 : 0;
+    const bottomChrome = inputHeight + statusBarHeight + tokenBarHeight;
+    const paneArea = terminalHeight - bottomChrome;
+    // AgentPane overhead: border (2) + label (1) + optional separator (1).
+    const paneOverhead = separator ? 4 : 3;
+    if (layout === "column") {
+      return Math.floor(paneArea / 2) - paneOverhead;
+    }
+    return paneArea - paneOverhead;
+  }
+
+  // 1. Hide TokenBar (lowest information priority).
+  if (
+    paneContentRows(showTokenBar, showKeyHints, showPaneSeparator) <
+    MIN_PANE_CONTENT
+  ) {
+    showTokenBar = false;
+  }
+
+  // 2. Hide StatusBar key hints line.
+  if (
+    paneContentRows(showTokenBar, showKeyHints, showPaneSeparator) <
+    MIN_PANE_CONTENT
+  ) {
+    showKeyHints = false;
+  }
+
+  // 3. Hide AgentPane separator line (saves 1 row per pane).
+  if (
+    paneContentRows(showTokenBar, showKeyHints, showPaneSeparator) <
+    MIN_PANE_CONTENT
+  ) {
+    showPaneSeparator = false;
+  }
+
+  // 4. Restrict column layout to prevent both panes from being unusable.
+  if (
+    layout === "column" &&
+    paneContentRows(showTokenBar, showKeyHints, showPaneSeparator) <
+      MIN_PANE_CONTENT
+  ) {
+    allowColumnLayout = false;
+  }
+
+  return { showTokenBar, showKeyHints, showPaneSeparator, allowColumnLayout };
+}
+
+/**
+ * Compute which UI elements to show based on available terminal height.
+ * Elements are hidden in priority order until each agent pane has at least
+ * MIN_PANE_CONTENT rows of content space.
+ *
+ * When column layout is forced to row, the flags are recomputed for row
+ * layout so we don't unnecessarily hide elements that fit in row mode.
+ */
+export function computeVisibilityFlags(
+  terminalHeight: number,
+  inputHeight: number,
+  hasTokenData: boolean,
+  preferredLayout: "row" | "column",
+): VisibilityFlags {
+  const flags = computeFlagsForLayout(
+    terminalHeight,
+    inputHeight,
+    hasTokenData,
+    preferredLayout,
+  );
+
+  // When column is forced to row, recompute for the effective (row) layout
+  // so that elements which fit in row mode are not hidden unnecessarily.
+  if (!flags.allowColumnLayout && preferredLayout === "column") {
+    const rowFlags = computeFlagsForLayout(
+      terminalHeight,
+      inputHeight,
+      hasTokenData,
+      "row",
+    );
+    rowFlags.allowColumnLayout = false;
+    return rowFlags;
+  }
+
+  return flags;
+}
+
+// ---- App component -----------------------------------------------------------
 
 export interface AppProps {
   emitter: PipelineEventEmitter;
@@ -63,12 +205,16 @@ export function App({
   modelNameB,
   onCancel,
 }: AppProps) {
-  const terminalHeight = useTerminalHeight();
+  const { height: terminalHeight, width: terminalWidth } =
+    useTerminalDimensions();
   const [inputRequest, setInputRequest] = useState<InputRequest | null>(null);
   const resolveRef = useRef<((value: string) => void) | null>(null);
   const [focusedPane, setFocusedPane] = useState<"a" | "b">("a");
   const [activeAgent, setActiveAgent] = useState<"a" | "b" | null>(null);
-  const [layout, setLayout] = useState<"row" | "column">("row");
+  const [preferredLayout, setPreferredLayout] = useState<"row" | "column">(
+    "row",
+  );
+  const [hasTokenData, setHasTokenData] = useState(false);
 
   // AbortController for pipeline cancellation on Ctrl+C.
   const abortController = useMemo(() => new AbortController(), []);
@@ -80,6 +226,44 @@ export function App({
   const onExitRef = useRef(onExit);
   const onPromptReadyRef = useRef(onPromptReady);
   const onCancelRef = useRef(onCancel);
+
+  // Track whether any token usage has been reported.
+  useEffect(() => {
+    const onUsage = () => setHasTokenData(true);
+    emitter.on("agent:usage", onUsage);
+    return () => {
+      emitter.off("agent:usage", onUsage);
+    };
+  }, [emitter]);
+
+  // Compute visibility flags based on terminal dimensions.
+  const inputHeight = inputAreaHeight(inputRequest);
+  const flags = useMemo<VisibilityFlags>(() => {
+    if (terminalHeight === undefined) {
+      return {
+        showTokenBar: true,
+        showKeyHints: true,
+        showPaneSeparator: true,
+        allowColumnLayout: true,
+      };
+    }
+    return computeVisibilityFlags(
+      terminalHeight,
+      inputHeight,
+      hasTokenData,
+      preferredLayout,
+    );
+  }, [terminalHeight, inputHeight, hasTokenData, preferredLayout]);
+
+  const effectiveLayout =
+    preferredLayout === "column" && !flags.allowColumnLayout
+      ? "row"
+      : preferredLayout;
+
+  // Content width budget for bordered components (StatusBar, TokenBar):
+  // terminal width minus border (2) and paddingX (2).
+  const borderedContentWidth =
+    terminalWidth !== undefined ? terminalWidth - 4 : undefined;
 
   const dispatch = useCallback((request: InputRequest): Promise<string> => {
     return new Promise<string>((resolve) => {
@@ -104,7 +288,7 @@ export function App({
       setFocusedPane((prev) => (prev === "a" ? "b" : "a"));
     }
     if (input === "l" && key.ctrl) {
-      setLayout((prev) => (prev === "row" ? "column" : "row"));
+      setPreferredLayout((prev) => (prev === "row" ? "column" : "row"));
     }
     if (input === "c" && key.ctrl && !cancelledRef.current) {
       cancelledRef.current = true;
@@ -160,7 +344,7 @@ export function App({
   return (
     <Box flexDirection="column" width="100%" height={terminalHeight ?? "100%"}>
       {/* Agent panes: side by side (row) or stacked (column) */}
-      <Box flexDirection={layout} flexGrow={1}>
+      <Box flexDirection={effectiveLayout} flexGrow={1}>
         <AgentPane
           label={t()["agent.labelARole"]}
           modelName={modelNameA}
@@ -170,6 +354,7 @@ export function App({
           isFocused={focusedPane === "a"}
           isActive={activeAgent === "a"}
           arrowScrollEnabled={!inputRequest}
+          showSeparator={flags.showPaneSeparator}
         />
         <AgentPane
           label={t()["agent.labelBRole"]}
@@ -180,18 +365,25 @@ export function App({
           isFocused={focusedPane === "b"}
           isActive={activeAgent === "b"}
           arrowScrollEnabled={!inputRequest}
+          showSeparator={flags.showPaneSeparator}
         />
       </Box>
 
       {/* Bottom: token bar + status bar + input area */}
-      <TokenBar emitter={emitter} />
+      <TokenBar
+        emitter={emitter}
+        visible={flags.showTokenBar}
+        contentWidth={borderedContentWidth}
+      />
       <StatusBar
         emitter={emitter}
         owner={pipelineOptions.context.owner}
         repo={pipelineOptions.context.repo}
         issueNumber={pipelineOptions.context.issueNumber}
         baseSha={pipelineOptions.context.baseSha}
-        layout={layout}
+        layout={effectiveLayout}
+        showKeyHints={flags.showKeyHints}
+        contentWidth={borderedContentWidth}
       />
       <InputArea request={inputRequest} onSubmit={handleSubmit} />
     </Box>

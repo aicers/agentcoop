@@ -7,15 +7,21 @@
 import { Box, Text, useInput, useStdout } from "ink";
 import { cleanup, render } from "ink-testing-library";
 import { useCallback, useEffect, useRef, useState } from "react";
+import stringWidth from "string-width";
 import { afterEach, describe, expect, test } from "vitest";
+import { initI18n } from "../i18n/index.js";
 import {
   type AgentInvokeEvent,
   PipelineEventEmitter,
 } from "../pipeline-events.js";
 import { AgentPane, splitIntoRows } from "./AgentPane.js";
-import { useTerminalHeight } from "./App.js";
+import {
+  computeVisibilityFlags,
+  inputAreaHeight,
+  useTerminalHeight,
+} from "./App.js";
 import { InputArea, type InputRequest } from "./InputArea.js";
-import { StatusBar } from "./StatusBar.js";
+import { fitInfoSegments, StatusBar } from "./StatusBar.js";
 import { formatTokenCount, TokenBar } from "./TokenBar.js";
 
 afterEach(() => {
@@ -1596,5 +1602,448 @@ describe("TokenBar", () => {
     const frame = lastFrame() ?? "";
     expect(frame).toContain("3.0K in");
     expect(frame).toContain("1.5K out");
+  });
+
+  test("renders nothing when visible is false even with data", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <TokenBar emitter={emitter} visible={false} />,
+    );
+
+    emitter.emit("agent:usage", {
+      agent: "a",
+      usage: { inputTokens: 1000, outputTokens: 500, cachedInputTokens: 0 },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).not.toContain("Agent A");
+    expect(frame).not.toContain("1.0K");
+  });
+
+  test("shows accumulated data when visible becomes true", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame, rerender } = render(
+      <TokenBar emitter={emitter} visible={false} />,
+    );
+
+    emitter.emit("agent:usage", {
+      agent: "a",
+      usage: { inputTokens: 5000, outputTokens: 2000, cachedInputTokens: 0 },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastFrame() ?? "").not.toContain("Agent A");
+
+    rerender(<TokenBar emitter={emitter} visible />);
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Agent A");
+    expect(frame).toContain("5.0K in");
+  });
+});
+
+describe("TokenBar width adaptation", () => {
+  test("truncates content to contentWidth so it cannot wrap", async () => {
+    const emitter = new PipelineEventEmitter();
+    // contentWidth=26 is narrower than the full token line (~60+ chars).
+    const { lastFrame } = render(
+      <TokenBar emitter={emitter} contentWidth={26} />,
+    );
+
+    emitter.emit("agent:usage", {
+      agent: "a",
+      usage: { inputTokens: 5000, outputTokens: 2000, cachedInputTokens: 0 },
+    });
+    emitter.emit("agent:usage", {
+      agent: "b",
+      usage: { inputTokens: 6000, outputTokens: 3000, cachedInputTokens: 0 },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    // Content should be truncated (ends with ellipsis).
+    expect(frame).toContain("\u2026");
+    // The full Agent B text should not appear since it exceeds 26 columns.
+    expect(frame).not.toContain("Agent B");
+    // Each rendered content line must fit within the width budget.
+    for (const line of frame.split("\n")) {
+      // Skip border lines (box-drawing characters).
+      if (line.startsWith("│") || line.startsWith("┌") || line.startsWith("└"))
+        continue;
+      expect(stringWidth(line)).toBeLessThanOrEqual(26);
+    }
+  });
+
+  test("truncates Korean (wide-char) content correctly", async () => {
+    await initI18n("ko");
+    try {
+      const emitter = new PipelineEventEmitter();
+      const { lastFrame } = render(
+        <TokenBar emitter={emitter} contentWidth={26} />,
+      );
+
+      emitter.emit("agent:usage", {
+        agent: "a",
+        usage: {
+          inputTokens: 5000,
+          outputTokens: 2000,
+          cachedInputTokens: 0,
+        },
+      });
+      emitter.emit("agent:usage", {
+        agent: "b",
+        usage: {
+          inputTokens: 6000,
+          outputTokens: 3000,
+          cachedInputTokens: 0,
+        },
+      });
+      await new Promise((r) => setTimeout(r, 50));
+
+      const frame = lastFrame() ?? "";
+      expect(frame).toContain("\u2026");
+      for (const line of frame.split("\n")) {
+        if (
+          line.startsWith("│") ||
+          line.startsWith("┌") ||
+          line.startsWith("└")
+        )
+          continue;
+        expect(stringWidth(line)).toBeLessThanOrEqual(26);
+      }
+    } finally {
+      await initI18n("en");
+    }
+  });
+});
+
+// ---- computeVisibilityFlags --------------------------------------------------
+
+describe("computeVisibilityFlags", () => {
+  test("shows everything when terminal has plenty of height", () => {
+    const flags = computeVisibilityFlags(40, 1, true, "row");
+    expect(flags.showTokenBar).toBe(true);
+    expect(flags.showKeyHints).toBe(true);
+    expect(flags.showPaneSeparator).toBe(true);
+    expect(flags.allowColumnLayout).toBe(true);
+  });
+
+  test("hides token bar first when space is tight", () => {
+    // Row: paneContent = 14 - 1(input) - 4(status) - 3(token) - 4(overhead) = 2 < 3
+    // Without token: 14 - 1 - 4 - 0 - 4 = 5 >= 3
+    const flags = computeVisibilityFlags(14, 1, true, "row");
+    expect(flags.showTokenBar).toBe(false);
+    expect(flags.showKeyHints).toBe(true);
+    expect(flags.showPaneSeparator).toBe(true);
+  });
+
+  test("hides key hints after token bar", () => {
+    // No token data, token bar already hidden.
+    // paneContent = 11 - 1 - 4 - 0 - 4 = 2 < 3 → hide hints
+    // Without hints: 11 - 1 - 3 - 0 - 4 = 3 >= 3
+    const flags = computeVisibilityFlags(11, 1, false, "row");
+    expect(flags.showTokenBar).toBe(false);
+    expect(flags.showKeyHints).toBe(false);
+    expect(flags.showPaneSeparator).toBe(true);
+  });
+
+  test("hides separator after key hints", () => {
+    // paneContent = 10 - 1 - 3 - 0 - 4 = 2 < 3 → hide separator
+    // Without separator: 10 - 1 - 3 - 0 - 3 = 3 >= 3
+    const flags = computeVisibilityFlags(10, 1, false, "row");
+    expect(flags.showTokenBar).toBe(false);
+    expect(flags.showKeyHints).toBe(false);
+    expect(flags.showPaneSeparator).toBe(false);
+  });
+
+  test("forces row layout when column panes are too small", () => {
+    // Column layout can't fit MIN_PANE_CONTENT even with all hidden.
+    // After forcing row, flags are recomputed for row mode.
+    // Row: paneContent = 12 - 1 - 4 - 0 - 4 = 3 >= 3 → hints and sep shown
+    const flags = computeVisibilityFlags(12, 1, false, "column");
+    expect(flags.allowColumnLayout).toBe(false);
+    expect(flags.showKeyHints).toBe(true);
+    expect(flags.showPaneSeparator).toBe(true);
+  });
+
+  test("preserves column layout when panes have enough space", () => {
+    const flags = computeVisibilityFlags(30, 1, false, "column");
+    expect(flags.allowColumnLayout).toBe(true);
+  });
+
+  test("token bar stays hidden when hasTokenData is false", () => {
+    const flags = computeVisibilityFlags(100, 1, false, "row");
+    expect(flags.showTokenBar).toBe(false);
+  });
+
+  test("accounts for taller input area", () => {
+    // With inputHeight=4: paneContent = 17 - 4 - 4 - 3 - 4 = 2 < 3 → hide token
+    const flags = computeVisibilityFlags(17, 4, true, "row");
+    expect(flags.showTokenBar).toBe(false);
+    expect(flags.showKeyHints).toBe(true);
+  });
+});
+
+// ---- inputAreaHeight ---------------------------------------------------------
+
+describe("inputAreaHeight", () => {
+  test("returns 1 for null request", () => {
+    expect(inputAreaHeight(null)).toBe(1);
+  });
+
+  test("returns 2 for text input request", () => {
+    expect(inputAreaHeight({ message: "Enter:" })).toBe(2);
+  });
+
+  test("returns 1 plus choices count for choice request", () => {
+    expect(
+      inputAreaHeight({
+        message: "Choose:",
+        choices: [
+          { label: "A", value: "a" },
+          { label: "B", value: "b" },
+        ],
+      }),
+    ).toBe(3);
+  });
+});
+
+// ---- fitInfoSegments ---------------------------------------------------------
+
+describe("fitInfoSegments", () => {
+  test("returns all segments when they fit", () => {
+    const segments = [
+      { text: "abc", dropPriority: 0 },
+      { text: "def", dropPriority: 1 },
+    ];
+    const result = fitInfoSegments(segments, 50);
+    expect(result).toHaveLength(2);
+    expect(result[0].text).toBe("abc");
+    expect(result[1].text).toBe("def");
+  });
+
+  test("drops highest priority segment first", () => {
+    const segments = [
+      { text: "required", dropPriority: 0 },
+      { text: "low-priority", dropPriority: 2 },
+      { text: "mid-priority", dropPriority: 1 },
+    ];
+    // "required"(8) + sep(5) + "low-priority"(12) + sep(5) + "mid-priority"(12) = 42
+    // Budget 30: drop "low-priority" (priority 2) first → 8+5+12 = 25 <= 30
+    const result = fitInfoSegments(segments, 30);
+    expect(result.map((s) => s.text)).toEqual(["required", "mid-priority"]);
+  });
+
+  test("drops multiple segments when needed", () => {
+    const segments = [
+      { text: "abc", dropPriority: 0 },
+      { text: "xxxxxxxx", dropPriority: 3 },
+      { text: "def", dropPriority: 0 },
+      { text: "yyyyyyyy", dropPriority: 2 },
+      { text: "zzzzzzzz", dropPriority: 1 },
+    ];
+    // Budget 15: drop priority 3, 2, 1 → "abc"(3) + sep(5) + "def"(3) = 11 <= 15
+    const result = fitInfoSegments(segments, 15);
+    expect(result.map((s) => s.text)).toEqual(["abc", "def"]);
+  });
+
+  test("truncates required segments as last resort", () => {
+    const segments = [
+      { text: "aicers/agentcoop#123", dropPriority: 0 },
+      { text: "Stage 2: Implement", dropPriority: 0 },
+    ];
+    // Both required, total = 20 + 5 + 18 = 43, budget = 20
+    // available = 20 - 5 = 15, each = 7, remainder = 1
+    // Seg 0: max 8 → "aicers/\u2026", Seg 1: max 7 → "Stage \u2026"
+    const result = fitInfoSegments(segments, 20);
+    expect(result).toHaveLength(2);
+    expect(result[0].text).toBe("aicers/\u2026");
+    expect(result[1].text).toBe("Stage \u2026");
+  });
+
+  test("merges segments when budget is smaller than separator + 1 col per segment", () => {
+    const segments = [
+      { text: "aicers/agentcoop#123", dropPriority: 0 },
+      { text: "Stage 2: Implement", dropPriority: 0 },
+    ];
+    // Two required segments need at least SEP(5) + 1 + 1 = 7 columns in
+    // separator mode. At budget=6 the separator form overflows, so the
+    // function should merge into one truncated string.
+    const result = fitInfoSegments(segments, 6);
+    expect(result).toHaveLength(1);
+    expect(result[0].text).toBe("aicer\u2026");
+  });
+
+  test("merges segments at budget=1 producing single ellipsis", () => {
+    const segments = [
+      { text: "aicers/agentcoop#123", dropPriority: 0 },
+      { text: "Stage 2: Implement", dropPriority: 0 },
+    ];
+    const result = fitInfoSegments(segments, 1);
+    expect(result).toHaveLength(1);
+    expect(result[0].text).toBe("\u2026");
+  });
+
+  test("handles empty segments array", () => {
+    const result = fitInfoSegments([], 50);
+    expect(result).toEqual([]);
+  });
+});
+
+// ---- StatusBar width adaptation ----------------------------------------------
+
+describe("StatusBar width adaptation", () => {
+  test("hides key hints when showKeyHints is false", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={49}
+        showKeyHints={false}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).not.toContain("Tab:Switch pane");
+    expect(frame).not.toContain("Ctrl+C:Quit");
+    // Info line should still be present.
+    expect(frame).toContain("aicers/agentcoop#49");
+  });
+
+  test("truncates key hints line to contentWidth so it cannot wrap", () => {
+    const emitter = new PipelineEventEmitter();
+    // contentWidth=26 is narrower than the full key-hints string (~100 chars).
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={49}
+        showKeyHints={true}
+        contentWidth={26}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    // Key hints should be present but truncated (ends with ellipsis).
+    expect(frame).toContain("\u2026");
+    // The full hints string should NOT appear since it exceeds 26 columns.
+    expect(frame).not.toContain("Ctrl+C:Quit");
+    // Each rendered line (excluding border box characters) should fit within
+    // the content width. Split by newlines and check non-border lines.
+    for (const line of frame.split("\n")) {
+      // Ink box border lines use box-drawing characters; skip them.
+      if (line.startsWith("│") || line.startsWith("┌") || line.startsWith("└"))
+        continue;
+      // Remaining content lines must not exceed contentWidth.
+      expect(stringWidth(line)).toBeLessThanOrEqual(26);
+    }
+  });
+
+  test("truncates Korean (wide-char) key hints correctly", async () => {
+    await initI18n("ko");
+    try {
+      const emitter = new PipelineEventEmitter();
+      const { lastFrame } = render(
+        <StatusBar
+          emitter={emitter}
+          owner="aicers"
+          repo="agentcoop"
+          issueNumber={49}
+          showKeyHints={true}
+          contentWidth={26}
+        />,
+      );
+
+      const frame = lastFrame() ?? "";
+      expect(frame).toContain("\u2026");
+      // Korean key hints end with Ctrl+C:종료; it should be truncated.
+      expect(frame).not.toContain("종료");
+      for (const line of frame.split("\n")) {
+        if (
+          line.startsWith("│") ||
+          line.startsWith("┌") ||
+          line.startsWith("└")
+        )
+          continue;
+        expect(stringWidth(line)).toBeLessThanOrEqual(26);
+      }
+    } finally {
+      await initI18n("en");
+    }
+  });
+
+  test("drops layout indicator first when contentWidth is narrow", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={49}
+        layout="row"
+        contentWidth={50}
+      />,
+    );
+
+    emitter.emit("stage:enter", {
+      stageNumber: 2,
+      stageName: "Implement",
+      iteration: 0,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("aicers/agentcoop#49");
+    expect(frame).toContain("Stage 2: Implement");
+    // Layout indicator should be dropped due to narrow width.
+    expect(frame).not.toContain("Layout:");
+  });
+});
+
+// ---- AgentPane showSeparator -------------------------------------------------
+
+describe("AgentPane showSeparator", () => {
+  test("hides separator when showSeparator is false", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <AgentPane
+        label="Agent A"
+        agent="a"
+        emitter={emitter}
+        color="blue"
+        showSeparator={false}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Agent A");
+    // The separator line has \u2500 characters inside the box (not in border).
+    // Border lines contain \u250C or \u2514; separator lines do not.
+    const lines = frame.split("\n");
+    const separatorLines = lines.filter(
+      (l) =>
+        l.includes("\u2500") && !l.includes("\u250C") && !l.includes("\u2514"),
+    );
+    expect(separatorLines).toHaveLength(0);
+  });
+
+  test("shows separator by default", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <AgentPane label="Agent A" agent="a" emitter={emitter} color="blue" />,
+    );
+
+    const frame = lastFrame() ?? "";
+    // Separator line has \u2500 inside the box (no corner chars).
+    const lines = frame.split("\n");
+    const separatorLines = lines.filter(
+      (l) =>
+        l.includes("\u2500") && !l.includes("\u250C") && !l.includes("\u2514"),
+    );
+    expect(separatorLines.length).toBeGreaterThan(0);
   });
 });

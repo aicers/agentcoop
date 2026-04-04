@@ -42,6 +42,8 @@ interface AgentPaneProps {
   isActive?: boolean;
   /** Whether up/down arrow scrolling is active (false during input prompts). */
   arrowScrollEnabled?: boolean;
+  /** Whether to show the separator line between header and content. */
+  showSeparator?: boolean;
 }
 
 export function AgentPane({
@@ -53,6 +55,7 @@ export function AgentPane({
   isFocused = false,
   isActive = false,
   arrowScrollEnabled = false,
+  showSeparator = true,
 }: AgentPaneProps) {
   const { lines, pendingLine } = useAgentLines(emitter, agent);
   const containerRef = useRef<DOMElement>(null);
@@ -78,8 +81,9 @@ export function AgentPane({
   useEffect(() => {
     if (containerRef.current) {
       const { height, width } = measureElement(containerRef.current);
-      // Reserve 2 rows for top/bottom border, 1 for label, 1 for separator.
-      setVisibleRows(height > 4 ? height - 4 : 0);
+      // Reserve rows: border (2) + label (1) + optional separator (1).
+      const overhead = showSeparator ? 4 : 3;
+      setVisibleRows(height > overhead ? height - overhead : 0);
       // Subtract 4 for borderStyle="single" (2) + paddingX={1} (2).
       setContentWidth(width > 4 ? width - 4 : 1);
     }
@@ -248,7 +252,7 @@ export function AgentPane({
         {isActive ? " \u25CF" : ""}
         {isFocused ? " [*]" : ""}
       </Text>
-      <Text dimColor>{"\u2500".repeat(contentWidth)}</Text>
+      {showSeparator && <Text dimColor>{"\u2500".repeat(contentWidth)}</Text>}
       {placeholder !== undefined ? (
         <Text dimColor>{placeholder}</Text>
       ) : (
