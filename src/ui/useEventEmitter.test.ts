@@ -181,6 +181,40 @@ describe("formatPromptForDisplay", () => {
     expect(lines[lines.length - 1]).toContain(PROMPT_SEPARATOR_CHAR);
   });
 
+  test("footer length matches header length", () => {
+    const lines = formatPromptForDisplay("Hello");
+    const header = lines[0];
+    const footer = lines[lines.length - 1];
+
+    expect(footer).toBeDefined();
+    expect(footer).toHaveLength(header.length);
+    // Footer should be all separator chars
+    expect(footer).toBe(PROMPT_SEPARATOR_CHAR.repeat(header.length));
+  });
+
+  test("footer length matches header length with stage name", () => {
+    const lines = formatPromptForDisplay("Hello", "Create PR");
+    const header = lines[0];
+    const footer = lines[lines.length - 1];
+
+    expect(footer).toBeDefined();
+    expect(footer).toHaveLength(header.length);
+    expect(footer).toBe(PROMPT_SEPARATOR_CHAR.repeat(header.length));
+  });
+
+  test("includes stage name in header when provided", () => {
+    const lines = formatPromptForDisplay("Hello", "Self-check");
+
+    expect(lines[0]).toContain("Prompt (Self-check)");
+  });
+
+  test("omits stage name from header when not provided", () => {
+    const lines = formatPromptForDisplay("Hello");
+
+    expect(lines[0]).toContain(" Prompt ");
+    expect(lines[0]).not.toContain("(");
+  });
+
   test("truncates long prompts to 8 lines with remainder count", () => {
     const prompt = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
     const lines = formatPromptForDisplay(prompt);
