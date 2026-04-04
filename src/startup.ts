@@ -151,6 +151,58 @@ export async function runStartup(
   } = target ?? (await selectTarget());
   let configDirty = initialDirty;
 
+  // Quick-start: offer to reuse saved configuration when both agents exist.
+  if (config.agentA && config.agentB) {
+    const m = t();
+    console.log();
+    console.log(m["quickStart.header"]);
+    console.log(m["quickStart.agentA"](modelDisplayName(config.agentA)));
+    console.log(m["quickStart.agentB"](modelDisplayName(config.agentB)));
+    console.log(
+      m["quickStart.mode"](
+        config.executionMode ?? "auto",
+        config.claudePermissionMode ?? "bypass",
+      ),
+    );
+    console.log(
+      m["quickStart.language"](
+        config.language === "ko"
+          ? m["startup.languageKorean"]
+          : m["startup.languageEnglish"],
+      ),
+    );
+    console.log();
+
+    const reuse = await confirm({
+      message: m["quickStart.usePrevious"],
+      default: true,
+    });
+
+    if (reuse) {
+      const issue = getIssue(owner, repo, issueNumber);
+      const confirmed = await confirmIssue(owner, repo, issue);
+      if (!confirmed) {
+        throw new Error(m["startup.issueNotConfirmed"]);
+      }
+
+      if (configDirty) {
+        saveConfig(config);
+      }
+
+      return {
+        owner,
+        repo,
+        issue,
+        agentA: config.agentA,
+        agentB: config.agentB,
+        executionMode: config.executionMode ?? "auto",
+        claudePermissionMode: config.claudePermissionMode ?? "bypass",
+        language: config.language,
+        pipelineSettings: config.pipelineSettings,
+      };
+    }
+  }
+
   const agentA = await selectAgent(
     t()["agent.labelARole"],
     config.agentA ?? DEFAULT_AGENT_A,

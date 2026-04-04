@@ -1,6 +1,15 @@
 import type { Messages } from "./messages.js";
 
 export const ko: Messages = {
+  // ---- quick-start -------------------------------------------------------
+
+  "quickStart.header": "저장된 설정 발견:",
+  "quickStart.agentA": (model) => `  에이전트 A: ${model}`,
+  "quickStart.agentB": (model) => `  에이전트 B: ${model}`,
+  "quickStart.mode": (exec, perm) => `  모드: ${exec} / ${perm}`,
+  "quickStart.language": (lang) => `  언어: ${lang}`,
+  "quickStart.usePrevious": "이전 설정을 사용하시겠습니까?",
+
   // ---- startup / config --------------------------------------------------
 
   "startup.enterOwner": "GitHub \uC18C\uC720\uC790 \uC785\uB825:",

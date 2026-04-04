@@ -773,7 +773,9 @@ describe("runStartup — config dirty tracking", () => {
       { name: "agentcoop", description: "" },
     ]);
     mockGetIssue.mockReturnValue(defaultIssue());
-    mockConfirm.mockResolvedValueOnce(true);
+    mockConfirm
+      .mockResolvedValueOnce(false) // decline quick-start
+      .mockResolvedValueOnce(true); // confirm issue
 
     await runStartup();
     expect(mockSaveConfig).not.toHaveBeenCalled();
@@ -1451,5 +1453,241 @@ describe("runStartup with target parameter", () => {
     expect(result.agentB.model).toBe("gpt-5.4");
     // Should NOT have called search (repo) or input (issue number).
     expect(mockSearch).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Quick-start — reuse previous configuration
+// ---------------------------------------------------------------------------
+describe("runStartup — quick-start", () => {
+  function configWithAgents(): Config {
+    return {
+      ...defaultConfig(),
+      agentA: {
+        cli: "claude" as const,
+        model: "opus",
+        contextWindow: "1m",
+        effortLevel: "high",
+      },
+      agentB: {
+        cli: "codex" as const,
+        model: "gpt-5.4",
+        effortLevel: "xhigh",
+      },
+      executionMode: "auto" as const,
+      claudePermissionMode: "bypass" as const,
+    };
+  }
+
+  test("reuses saved config when user accepts quick-start", async () => {
+    mockLoadConfig.mockReturnValue(configWithAgents());
+    mockSelect.mockResolvedValueOnce("aicers"); // owner
+    mockSearch.mockResolvedValueOnce("agentcoop"); // repo
+    mockInput.mockResolvedValueOnce("42"); // issue number
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm
+      .mockResolvedValueOnce(true) // accept quick-start
+      .mockResolvedValueOnce(true); // confirm issue
+
+    const result = await runStartup();
+
+    expect(result.agentA).toEqual({
+      cli: "claude",
+      model: "opus",
+      contextWindow: "1m",
+      effortLevel: "high",
+    });
+    expect(result.agentB).toEqual({
+      cli: "codex",
+      model: "gpt-5.4",
+      effortLevel: "xhigh",
+    });
+    expect(result.executionMode).toBe("auto");
+    expect(result.claudePermissionMode).toBe("bypass");
+    expect(result.language).toBe("en");
+    // No agent selection prompts should have been shown.
+    // select is called once for owner only.
+    expect(mockSelect).toHaveBeenCalledTimes(1);
+    expect(mockCheckbox).not.toHaveBeenCalled();
+  });
+
+  test("falls through to full flow when user declines quick-start", async () => {
+    mockLoadConfig.mockReturnValue(configWithAgents());
+    mockSelect
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("sonnet") // agent A model (different!)
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("medium") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("step") // execution mode
+      .mockResolvedValueOnce("auto") // permission mode
+      .mockResolvedValueOnce("en"); // language
+    mockSearch.mockResolvedValueOnce("agentcoop"); // repo
+    mockInput.mockResolvedValueOnce("42"); // issue number
+    mockCheckbox.mockResolvedValueOnce([]); // no pipeline settings adjusted
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm
+      .mockResolvedValueOnce(false) // decline quick-start
+      .mockResolvedValueOnce(true); // confirm issue
+
+    const result = await runStartup();
+
+    expect(result.agentA.model).toBe("sonnet");
+    expect(result.executionMode).toBe("step");
+  });
+
+  test("is not shown on first run (no saved agents)", async () => {
+    setupHappyPath();
+
+    await runStartup();
+
+    // confirm is called once for issue confirmation only.
+    // If quick-start were shown, confirm would be called twice.
+    expect(mockConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  test("is not shown when only agentA is saved", async () => {
+    const config = {
+      ...defaultConfig(),
+      agentA: {
+        cli: "claude" as const,
+        model: "opus",
+        contextWindow: "1m",
+        effortLevel: "high",
+      },
+    };
+    mockLoadConfig.mockReturnValue(config);
+    mockSelect
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("opus") // agent A model
+      .mockResolvedValueOnce("1m") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("xhigh") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("bypass") // permission mode
+      .mockResolvedValueOnce("en"); // language
+    mockSearch.mockResolvedValueOnce("agentcoop");
+    mockInput.mockResolvedValueOnce("42");
+    mockCheckbox.mockResolvedValueOnce([]);
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true); // confirm issue
+
+    await runStartup();
+
+    // confirm called once (issue only), not twice (quick-start + issue).
+    expect(mockConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  test("throws when user declines issue confirmation after quick-start", async () => {
+    mockLoadConfig.mockReturnValue(configWithAgents());
+    mockSelect.mockResolvedValueOnce("aicers");
+    mockSearch.mockResolvedValueOnce("agentcoop");
+    mockInput.mockResolvedValueOnce("42");
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm
+      .mockResolvedValueOnce(true) // accept quick-start
+      .mockResolvedValueOnce(false); // decline issue
+
+    await expect(runStartup()).rejects.toThrow("Issue not confirmed");
+    expect(mockSaveConfig).not.toHaveBeenCalled();
+  });
+
+  test("saves config when configDirty and quick-start accepted", async () => {
+    const config = configWithAgents();
+    config.owners = [];
+    mockLoadConfig.mockReturnValue(config);
+    mockInput
+      .mockResolvedValueOnce("new-org") // new owner (marks dirty)
+      .mockResolvedValueOnce("42"); // issue number
+    mockSearch.mockResolvedValueOnce("agentcoop");
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm
+      .mockResolvedValueOnce(true) // accept quick-start
+      .mockResolvedValueOnce(true); // confirm issue
+
+    await runStartup();
+
+    expect(mockSaveConfig).toHaveBeenCalledOnce();
+  });
+
+  test("displays saved config summary", async () => {
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    mockLoadConfig.mockReturnValue(configWithAgents());
+    mockSelect.mockResolvedValueOnce("aicers");
+    mockSearch.mockResolvedValueOnce("agentcoop");
+    mockInput.mockResolvedValueOnce("42");
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm
+      .mockResolvedValueOnce(true) // accept quick-start
+      .mockResolvedValueOnce(true); // confirm issue
+
+    await runStartup();
+
+    const logs = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+    expect(logs).toContain("Found saved configuration:");
+    expect(logs).toContain("Agent A: Claude Opus 4.6 (1M) / High");
+    expect(logs).toContain("Agent B: GPT-5.4 / Extra High");
+    expect(logs).toContain("Mode: auto / bypass");
+    expect(logs).toContain("Language: English");
+
+    consoleSpy.mockRestore();
+  });
+
+  test("defaults executionMode and permissionMode when not saved", async () => {
+    const config = {
+      ...defaultConfig(),
+      agentA: {
+        cli: "claude" as const,
+        model: "opus",
+        contextWindow: "1m",
+        effortLevel: "high",
+      },
+      agentB: {
+        cli: "codex" as const,
+        model: "gpt-5.4",
+        effortLevel: "xhigh",
+      },
+      // executionMode and claudePermissionMode are undefined
+    };
+    mockLoadConfig.mockReturnValue(config);
+    mockSelect.mockResolvedValueOnce("aicers");
+    mockSearch.mockResolvedValueOnce("agentcoop");
+    mockInput.mockResolvedValueOnce("42");
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm
+      .mockResolvedValueOnce(true) // accept quick-start
+      .mockResolvedValueOnce(true); // confirm issue
+
+    const result = await runStartup();
+
+    expect(result.executionMode).toBe("auto");
+    expect(result.claudePermissionMode).toBe("bypass");
   });
 });
