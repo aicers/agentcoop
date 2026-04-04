@@ -179,8 +179,8 @@ describe("module exports", () => {
   test("config module exports DEFAULT_PIPELINE_SETTINGS", async () => {
     const config = await import("../dist/config.js");
     expect(config.DEFAULT_PIPELINE_SETTINGS).toEqual({
-      selfCheckAutoIterations: 3,
-      reviewAutoRounds: 3,
+      selfCheckAutoIterations: 5,
+      reviewAutoRounds: 5,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });

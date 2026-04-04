@@ -10,8 +10,8 @@ export interface PipelineSettings {
 }
 
 export const DEFAULT_PIPELINE_SETTINGS: PipelineSettings = {
-  selfCheckAutoIterations: 3,
-  reviewAutoRounds: 3,
+  selfCheckAutoIterations: 5,
+  reviewAutoRounds: 5,
   inactivityTimeoutMinutes: 20,
   autoResumeAttempts: 3,
 };

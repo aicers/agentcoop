@@ -38,8 +38,8 @@ describe("loadConfig", () => {
       cloneBaseDir: "~/projects",
       language: "en",
       pipelineSettings: {
-        selfCheckAutoIterations: 3,
-        reviewAutoRounds: 3,
+        selfCheckAutoIterations: 5,
+        reviewAutoRounds: 5,
         inactivityTimeoutMinutes: 20,
         autoResumeAttempts: 3,
       },
@@ -55,8 +55,8 @@ describe("loadConfig", () => {
       cloneBaseDir: "~/projects",
       language: "en",
       pipelineSettings: {
-        selfCheckAutoIterations: 3,
-        reviewAutoRounds: 3,
+        selfCheckAutoIterations: 5,
+        reviewAutoRounds: 5,
         inactivityTimeoutMinutes: 20,
         autoResumeAttempts: 3,
       },
@@ -85,8 +85,8 @@ describe("loadConfig", () => {
     expect(config.cloneBaseDir).toBe("~/projects");
     expect(config.language).toBe("en");
     expect(config.pipelineSettings).toEqual({
-      selfCheckAutoIterations: 3,
-      reviewAutoRounds: 3,
+      selfCheckAutoIterations: 5,
+      reviewAutoRounds: 5,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -263,8 +263,8 @@ describe("loadConfig", () => {
     );
     const config = loadConfig();
     expect(config.pipelineSettings).toEqual({
-      selfCheckAutoIterations: 3,
-      reviewAutoRounds: 3,
+      selfCheckAutoIterations: 5,
+      reviewAutoRounds: 5,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -277,8 +277,8 @@ describe("loadConfig", () => {
     );
     const config = loadConfig();
     expect(config.pipelineSettings).toEqual({
-      selfCheckAutoIterations: 3,
-      reviewAutoRounds: 3,
+      selfCheckAutoIterations: 5,
+      reviewAutoRounds: 5,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -291,7 +291,7 @@ describe("loadConfig", () => {
     rmSync(configPath());
 
     const config2 = loadConfig();
-    expect(config2.pipelineSettings.selfCheckAutoIterations).toBe(3);
+    expect(config2.pipelineSettings.selfCheckAutoIterations).toBe(5);
   });
 
   test("partially valid pipelineSettings keeps valid values", () => {
@@ -309,7 +309,7 @@ describe("loadConfig", () => {
     );
     const config = loadConfig();
     expect(config.pipelineSettings.selfCheckAutoIterations).toBe(10);
-    expect(config.pipelineSettings.reviewAutoRounds).toBe(3);
+    expect(config.pipelineSettings.reviewAutoRounds).toBe(5);
     expect(config.pipelineSettings.inactivityTimeoutMinutes).toBe(20);
     expect(config.pipelineSettings.autoResumeAttempts).toBe(5);
   });
@@ -329,8 +329,8 @@ describe("loadConfig", () => {
     );
     const config = loadConfig();
     expect(config.pipelineSettings).toEqual({
-      selfCheckAutoIterations: 3,
-      reviewAutoRounds: 3,
+      selfCheckAutoIterations: 5,
+      reviewAutoRounds: 5,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -369,8 +369,8 @@ describe("loadConfig", () => {
     );
     const config = loadConfig();
     expect(config.pipelineSettings).toEqual({
-      selfCheckAutoIterations: 3,
-      reviewAutoRounds: 3,
+      selfCheckAutoIterations: 5,
+      reviewAutoRounds: 5,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -392,8 +392,8 @@ describe("loadConfig", () => {
     const config = loadConfig();
     // Strings are not valid — all should fall back.
     expect(config.pipelineSettings).toEqual({
-      selfCheckAutoIterations: 3,
-      reviewAutoRounds: 3,
+      selfCheckAutoIterations: 5,
+      reviewAutoRounds: 5,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -414,8 +414,8 @@ describe("loadConfig", () => {
     );
     const config = loadConfig();
     expect(config.pipelineSettings).toEqual({
-      selfCheckAutoIterations: 3,
-      reviewAutoRounds: 3,
+      selfCheckAutoIterations: 5,
+      reviewAutoRounds: 5,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -428,8 +428,8 @@ describe("loadConfig", () => {
     );
     const config = loadConfig();
     expect(config.pipelineSettings).toEqual({
-      selfCheckAutoIterations: 3,
-      reviewAutoRounds: 3,
+      selfCheckAutoIterations: 5,
+      reviewAutoRounds: 5,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -442,8 +442,8 @@ describe("loadConfig", () => {
     );
     const config = loadConfig();
     expect(config.pipelineSettings).toEqual({
-      selfCheckAutoIterations: 3,
-      reviewAutoRounds: 3,
+      selfCheckAutoIterations: 5,
+      reviewAutoRounds: 5,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -456,8 +456,8 @@ describe("saveConfig", () => {
   });
 
   const defaultPS = {
-    selfCheckAutoIterations: 3,
-    reviewAutoRounds: 3,
+    selfCheckAutoIterations: 5,
+    reviewAutoRounds: 5,
     inactivityTimeoutMinutes: 20,
     autoResumeAttempts: 3,
   };
