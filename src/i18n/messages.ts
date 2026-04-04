@@ -5,6 +5,15 @@
  * Template parameters use functions; plain strings are literals.
  */
 export interface Messages {
+  // ---- quick-start (startup.ts) -------------------------------------------
+
+  "quickStart.header": string;
+  "quickStart.agentA": (model: string) => string;
+  "quickStart.agentB": (model: string) => string;
+  "quickStart.mode": (exec: string, perm: string) => string;
+  "quickStart.language": (lang: string) => string;
+  "quickStart.usePrevious": string;
+
   // ---- startup / config (startup.ts) -------------------------------------
 
   "startup.enterOwner": string;

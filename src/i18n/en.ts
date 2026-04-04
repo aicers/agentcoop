@@ -1,6 +1,15 @@
 import type { Messages } from "./messages.js";
 
 export const en: Messages = {
+  // ---- quick-start -------------------------------------------------------
+
+  "quickStart.header": "Found saved configuration:",
+  "quickStart.agentA": (model) => `  Agent A: ${model}`,
+  "quickStart.agentB": (model) => `  Agent B: ${model}`,
+  "quickStart.mode": (exec, perm) => `  Mode: ${exec} / ${perm}`,
+  "quickStart.language": (lang) => `  Language: ${lang}`,
+  "quickStart.usePrevious": "Use previous settings?",
+
   // ---- startup / config --------------------------------------------------
 
   "startup.enterOwner": "Enter GitHub owner:",
