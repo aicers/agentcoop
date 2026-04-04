@@ -175,6 +175,9 @@ export const ko: Messages = {
   "statusBar.base": (sha) => `\uAE30\uC900: ${sha}`,
   "statusBar.completed": (selfCheckCount, reviewCount) =>
     `\uC644\uB8CC: \uC140\uD504 \uCCB4\uD06C \u00d7${selfCheckCount}, \uB9AC\uBDF0 \u00d7${reviewCount}`,
+  "statusBar.layout": (mode) => `\uB808\uC774\uC544\uC6C3: ${mode}`,
+  "statusBar.layoutHorizontal": "\uC218\uD3C9",
+  "statusBar.layoutVertical": "\uC218\uC9C1",
 
   "outcome.completed": "완료",
   "outcome.fixed": "수정됨",

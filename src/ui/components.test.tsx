@@ -1049,6 +1049,57 @@ describe("StatusBar", () => {
     const frame = lastFrame() ?? "";
     expect(frame).not.toContain("Base:");
   });
+
+  test("shows layout indicator when layout prop is provided", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box width={200}>
+        <StatusBar
+          emitter={emitter}
+          owner="aicers"
+          repo="agentcoop"
+          issueNumber={49}
+          layout="row"
+        />
+      </Box>,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Layout: horizontal");
+  });
+
+  test("shows vertical layout label when layout is column", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box width={200}>
+        <StatusBar
+          emitter={emitter}
+          owner="aicers"
+          repo="agentcoop"
+          issueNumber={49}
+          layout="column"
+        />
+      </Box>,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Layout: vertical");
+  });
+
+  test("hides layout indicator when layout prop is omitted", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={49}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).not.toContain("Layout:");
+  });
 });
 
 // ---- InputArea ---------------------------------------------------------------
@@ -1284,6 +1335,67 @@ describe("viewport height constraint", () => {
     const bHeaderIdx = after.indexOf("Agent B");
     const markerIdx = after.lastIndexOf("[*]");
     expect(markerIdx).toBeGreaterThan(bHeaderIdx);
+  });
+
+  test("Ctrl+L toggles layout between row and column", async () => {
+    const emitter = new PipelineEventEmitter();
+
+    // Harness that mimics App's Ctrl+L handler and passes layout to StatusBar.
+    function LayoutHarness() {
+      const [layout, setLayout] = useState<"row" | "column">("row");
+      useInput((input, key) => {
+        if (input === "l" && key.ctrl) {
+          setLayout((prev) => (prev === "row" ? "column" : "row"));
+        }
+      });
+      return (
+        <Box flexDirection="column" width={120} height={12}>
+          <Box flexDirection={layout} flexGrow={1}>
+            <AgentPane
+              label="Agent A"
+              agent="a"
+              emitter={emitter}
+              color="blue"
+              isFocused
+              arrowScrollEnabled
+            />
+            <AgentPane
+              label="Agent B"
+              agent="b"
+              emitter={emitter}
+              color="green"
+            />
+          </Box>
+          <StatusBar
+            emitter={emitter}
+            owner="aicers"
+            repo="agentcoop"
+            issueNumber={49}
+            layout={layout}
+          />
+        </Box>
+      );
+    }
+
+    const { lastFrame, stdin } = render(<LayoutHarness />);
+
+    // Initially horizontal layout.
+    const before = lastFrame() ?? "";
+    expect(before).toContain("Layout: horizontal");
+
+    // Press Ctrl+L — should toggle to vertical.
+    stdin.write("\x0C"); // Ctrl+L
+    await new Promise((r) => setTimeout(r, 50));
+
+    const toggled = lastFrame() ?? "";
+    expect(toggled).toContain("Layout: vertical");
+
+    // Press Ctrl+L again — back to horizontal.
+    stdin.write("\x0C");
+    await new Promise((r) => setTimeout(r, 50));
+
+    const restored = lastFrame() ?? "";
+    expect(restored).toContain("Layout: horizontal");
   });
 
   test("PageUp/PageDown work during active input prompts", async () => {

@@ -153,6 +153,9 @@ export interface Messages {
     selfCheckCount: number,
     reviewCount: number,
   ) => string;
+  "statusBar.layout": (mode: string) => string;
+  "statusBar.layoutHorizontal": string;
+  "statusBar.layoutVertical": string;
   "outcome.completed": string;
   "outcome.fixed": string;
   "outcome.approved": string;

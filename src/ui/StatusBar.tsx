@@ -19,6 +19,8 @@ interface StatusBarProps {
   issueNumber: number;
   /** Full SHA of the base commit; displayed abbreviated in the bar. */
   baseSha?: string;
+  /** Current pane layout direction. */
+  layout?: "row" | "column";
 }
 
 export function StatusBar({
@@ -27,6 +29,7 @@ export function StatusBar({
   repo,
   issueNumber,
   baseSha,
+  layout,
 }: StatusBarProps) {
   const [stage, setStage] = useState<StageEnterEvent | null>(null);
   const [lastOutcome, setLastOutcome] = useState<string | null>(null);
@@ -91,6 +94,13 @@ export function StatusBar({
 
   const issueLabel = `${owner}/${repo}#${issueNumber}`;
   const baseText = baseSha ? m["statusBar.base"](baseSha.slice(0, 7)) : "";
+  const layoutText = layout
+    ? m["statusBar.layout"](
+        layout === "row"
+          ? m["statusBar.layoutHorizontal"]
+          : m["statusBar.layoutVertical"],
+      )
+    : "";
 
   return (
     <Box borderStyle="single" borderColor="gray" paddingX={1}>
@@ -115,6 +125,12 @@ export function StatusBar({
         <Text>
           {"  |  "}
           {m["statusBar.completed"](selfCheckCount, reviewCount)}
+        </Text>
+      )}
+      {layoutText && (
+        <Text>
+          {"  |  "}
+          {layoutText}
         </Text>
       )}
     </Box>

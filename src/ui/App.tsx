@@ -61,6 +61,7 @@ export function App({
   const resolveRef = useRef<((value: string) => void) | null>(null);
   const [focusedPane, setFocusedPane] = useState<"a" | "b">("a");
   const [activeAgent, setActiveAgent] = useState<"a" | "b" | null>(null);
+  const [layout, setLayout] = useState<"row" | "column">("row");
 
   // Store props in refs so the mount effect never re-runs.
   const emitterRef = useRef(emitter);
@@ -84,10 +85,13 @@ export function App({
     setTimeout(() => resolve?.(value), 0);
   }, []);
 
-  // Switch focused pane with Tab (always active; no conflict with text input).
-  useInput((_input, key) => {
+  // Switch focused pane with Tab; toggle layout with Ctrl+L.
+  useInput((input, key) => {
     if (key.tab) {
       setFocusedPane((prev) => (prev === "a" ? "b" : "a"));
+    }
+    if (input === "l" && key.ctrl) {
+      setLayout((prev) => (prev === "row" ? "column" : "row"));
     }
   });
 
@@ -127,8 +131,8 @@ export function App({
 
   return (
     <Box flexDirection="column" width="100%" height={terminalHeight ?? "100%"}>
-      {/* Top row: two agent panes side by side */}
-      <Box flexDirection="row" flexGrow={1}>
+      {/* Agent panes: side by side (row) or stacked (column) */}
+      <Box flexDirection={layout} flexGrow={1}>
         <AgentPane
           label={t()["agent.labelARole"]}
           modelName={modelNameA}
@@ -158,6 +162,7 @@ export function App({
         repo={pipelineOptions.context.repo}
         issueNumber={pipelineOptions.context.issueNumber}
         baseSha={pipelineOptions.context.baseSha}
+        layout={layout}
       />
       <InputArea request={inputRequest} onSubmit={handleSubmit} />
     </Box>
