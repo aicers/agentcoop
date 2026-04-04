@@ -3,11 +3,12 @@
 ## Commit messages
 
 - Title: preferably under 50 characters, start with imperative verb (e.g.,
-  `Add`, `Fix`, `Remove`)
+  `Add`, `Fix`, `Remove`). Do NOT include issue or PR numbers in the title.
 - Body: wrap at 72 characters, free-form, explain *why* not *what*
 - Separate title and body with a blank line
 - Reference issues: use `Closes #N` to close an issue, or `Part of #N` when
-  the commit addresses part of an issue
+  the commit addresses part of an issue. These references go in the body, not
+  the title.
 
 ## Attribution
 
