@@ -6,9 +6,12 @@
  */
 import { Box, Text, useInput, useStdout } from "ink";
 import { cleanup, render } from "ink-testing-library";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { afterEach, describe, expect, test } from "vitest";
-import { PipelineEventEmitter } from "../pipeline-events.js";
+import {
+  type AgentInvokeEvent,
+  PipelineEventEmitter,
+} from "../pipeline-events.js";
 import { AgentPane, splitIntoRows } from "./AgentPane.js";
 import { useTerminalHeight } from "./App.js";
 import { InputArea, type InputRequest } from "./InputArea.js";
@@ -463,12 +466,12 @@ describe("AgentPane", () => {
 
     // Emit a long wrapped line followed by short lines that push its
     // first rows above the viewport.  The line wraps to ~5 terminal rows
-    // at the default contentWidth; 8 filler lines are enough to scroll
+    // at the default contentWidth; 6 filler lines are enough to scroll
     // it out while keeping it reachable with a single Page Up.
     const longLine = `HEAD_${"x".repeat(390)}_TAIL`;
     emitter.emit("agent:chunk", {
       agent: "a",
-      chunk: `${longLine}\n${"filler\n".repeat(8)}`,
+      chunk: `${longLine}\n${"filler\n".repeat(6)}`,
     });
     await new Promise((r) => setTimeout(r, 50));
 
@@ -580,6 +583,128 @@ describe("AgentPane", () => {
     // The marker must appear only once (only for the focused pane).
     const markerCount = (frame.match(/\[\*\]/g) ?? []).length;
     expect(markerCount).toBe(1);
+  });
+
+  test("active agent shows \u25CF indicator independently of focus", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isFocused={false}
+          isActive
+        />
+        <AgentPane
+          label="Agent B"
+          agent="b"
+          emitter={emitter}
+          color="green"
+          isFocused
+          isActive={false}
+        />
+      </Box>,
+    );
+
+    const frame = lastFrame() ?? "";
+    // Active indicator must appear once (only for the active pane).
+    const activeCount = (frame.match(/\u25CF/g) ?? []).length;
+    expect(activeCount).toBe(1);
+    // Focus marker must also appear once (on a different pane).
+    const focusCount = (frame.match(/\[\*\]/g) ?? []).length;
+    expect(focusCount).toBe(1);
+  });
+
+  test("active indicator clears after stage:exit", async () => {
+    // Regression: activeAgent must not remain stuck after an agent finishes.
+    // This mirrors App.tsx wiring: agent:invoke sets activeAgent, stage:exit
+    // clears it.
+    const emitter = new PipelineEventEmitter();
+
+    function ActiveTracker({ emitter }: { emitter: PipelineEventEmitter }) {
+      const [active, setActive] = useState<"a" | "b" | null>(null);
+      useEffect(() => {
+        const onInvoke = (ev: AgentInvokeEvent) => setActive(ev.agent);
+        const onExit = () => setActive(null);
+        emitter.on("agent:invoke", onInvoke);
+        emitter.on("stage:exit", onExit);
+        return () => {
+          emitter.off("agent:invoke", onInvoke);
+          emitter.off("stage:exit", onExit);
+        };
+      }, [emitter]);
+      return (
+        <Box>
+          <AgentPane
+            label="Agent A"
+            agent="a"
+            emitter={emitter}
+            color="blue"
+            isActive={active === "a"}
+          />
+          <AgentPane
+            label="Agent B"
+            agent="b"
+            emitter={emitter}
+            color="green"
+            isActive={active === "b"}
+          />
+        </Box>
+      );
+    }
+
+    const { lastFrame } = render(<ActiveTracker emitter={emitter} />);
+
+    // Invoke agent A → ● should appear.
+    emitter.emit("agent:invoke", { agent: "a", type: "invoke" });
+    await new Promise((r) => setTimeout(r, 50));
+    expect((lastFrame() ?? "").match(/\u25CF/g)?.length).toBe(1);
+
+    // Stage exits → ● should disappear from both panes.
+    emitter.emit("stage:exit", { stageNumber: 2, outcome: "completed" });
+    await new Promise((r) => setTimeout(r, 50));
+    expect((lastFrame() ?? "").match(/\u25CF/g) ?? []).toHaveLength(0);
+  });
+
+  test("no active indicator when isActive is false", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isFocused
+          isActive={false}
+        />
+        <AgentPane
+          label="Agent B"
+          agent="b"
+          emitter={emitter}
+          color="green"
+          isFocused={false}
+          isActive={false}
+        />
+      </Box>,
+    );
+
+    const frame = lastFrame() ?? "";
+    // Neither pane should show the active indicator.
+    const activeCount = (frame.match(/\u25CF/g) ?? []).length;
+    expect(activeCount).toBe(0);
+  });
+
+  test("pane header and content are separated by a horizontal line", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <AgentPane label="Agent A" agent="a" emitter={emitter} color="blue" />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("\u2500");
   });
 });
 

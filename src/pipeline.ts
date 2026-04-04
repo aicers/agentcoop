@@ -535,13 +535,18 @@ async function runStage(
       }
     : undefined;
 
-  // Build per-agent prompt sinks so the UI can display outgoing prompts.
+  // Build per-agent prompt sinks so the UI can display outgoing prompts
+  // and track which agent is currently running.
   const promptSinks = events
     ? {
-        a: (prompt: string) =>
-          events.emit("agent:prompt", { agent: "a", prompt }),
-        b: (prompt: string) =>
-          events.emit("agent:prompt", { agent: "b", prompt }),
+        a: (prompt: string) => {
+          events.emit("agent:invoke", { agent: "a", type: "invoke" });
+          events.emit("agent:prompt", { agent: "a", prompt });
+        },
+        b: (prompt: string) => {
+          events.emit("agent:invoke", { agent: "b", type: "invoke" });
+          events.emit("agent:prompt", { agent: "b", prompt });
+        },
       }
     : undefined;
 
