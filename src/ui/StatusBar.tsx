@@ -108,6 +108,7 @@ export function StatusBar({
       borderColor="gray"
       paddingX={1}
       flexDirection="column"
+      flexShrink={0}
     >
       <Box>
         <Text bold color="cyan">

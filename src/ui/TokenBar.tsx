@@ -69,7 +69,7 @@ export function TokenBar({ emitter }: TokenBarProps) {
   const labelB = m["agent.labelB"];
 
   return (
-    <Box borderStyle="single" borderColor="gray" paddingX={1}>
+    <Box borderStyle="single" borderColor="gray" paddingX={1} flexShrink={0}>
       <Text>
         {m["tokenBar.agentUsage"](
           labelA,
