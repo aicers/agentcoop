@@ -195,9 +195,22 @@ export interface UserPrompt {
   confirmMerge(message: string): Promise<boolean>;
 
   /**
-   * Report completion to the user (stage 9).
+   * Present a conflict notification and let the user choose between
+   * agent rebase and manual resolution (stage 9).
    */
-  reportCompletion(message: string): Promise<void>;
+  handleConflict(message: string): Promise<"agent_rebase" | "manual">;
+
+  /**
+   * Notify the user that the mergeable state could not be determined
+   * and let them choose to re-check or exit (stage 9).
+   */
+  handleUnknownMergeable(message: string): Promise<"recheck" | "exit">;
+
+  /**
+   * Wait for the user to signal that they have finished manual
+   * conflict resolution (stage 9).
+   */
+  waitForManualResolve(message: string): Promise<void>;
 
   /**
    * Ask user to confirm a cleanup action (e.g. stop services, delete
@@ -771,18 +784,45 @@ async function runStage(
 
 // ---- Stage 9: Done -------------------------------------------------------
 
-/**
- * Built-in stage-9 handler.  Reports completion, waits for the user to
- * confirm merge, then cleans up the worktree.
- *
- * Callbacks are injected so the handler stays independent of the
- * worktree module, keeping the engine testable.
- */
-export function createDoneStageHandler(options: {
-  /** Called to report completion before asking about merge. */
-  reportCompletion: (message: string) => Promise<void>;
-  /** Called to ask the user whether the PR has been merged. */
-  confirmMerge: (message: string) => Promise<boolean>;
+/** Result of the `checkMergeable` callback. */
+export type MergeableState = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+
+/** Result of the `rebaseOntoMain` callback. */
+export interface RebaseResult {
+  /** Whether the rebase succeeded and was force-pushed. */
+  success: boolean;
+  /** Descriptive message (success note or error detail). */
+  message: string;
+}
+
+/** Options for {@link createDoneStageHandler}. */
+export interface DoneStageOptions {
+  /**
+   * Check whether the PR has merge conflicts with the base branch.
+   * Returns the resolved mergeable state (with retries for UNKNOWN).
+   */
+  checkMergeable: (ctx: StageContext) => Promise<MergeableState>;
+  /** Prompt the user for conflict/unknown/merge choices. */
+  prompt: {
+    confirmMerge: (message: string) => Promise<boolean>;
+    handleConflict: (message: string) => Promise<"agent_rebase" | "manual">;
+    handleUnknownMergeable: (message: string) => Promise<"recheck" | "exit">;
+    waitForManualResolve: (message: string) => Promise<void>;
+  };
+  /**
+   * Invoke agent A to rebase onto origin/main, resolve conflicts,
+   * verify locally (build + full test suite), and only force-push
+   * when confident.  Limited to 1 attempt.
+   */
+  rebaseOntoMain: (ctx: StageContext) => Promise<RebaseResult>;
+  /**
+   * Poll CI and invoke the agent to fix failures after a rebase
+   * or manual conflict resolution.  Re-uses the `pollCiAndFix`
+   * pattern from the ci-check stage.
+   */
+  pollCiAndFix: (
+    ctx: StageContext,
+  ) => Promise<{ passed: boolean; message: string }>;
   /** Called to remove the worktree after merge is confirmed. */
   cleanup: () => void;
   /** Called to stop docker compose services. */
@@ -796,7 +836,18 @@ export function createDoneStageHandler(options: {
    * can bail out early on cancellation.
    */
   onNotMerged: (signal?: AbortSignal) => Promise<void>;
-}): StageDefinition {
+}
+
+/**
+ * Built-in stage-9 handler.  Checks for merge conflicts, offers
+ * agent rebase or manual resolution, then asks about merge.
+ *
+ * Callbacks are injected so the handler stays independent of the
+ * worktree module and GitHub CLI, keeping the engine testable.
+ */
+export function createDoneStageHandler(
+  options: DoneStageOptions,
+): StageDefinition {
   return {
     name: t()["stage.done"],
     number: 9,
@@ -807,34 +858,188 @@ export function createDoneStageHandler(options: {
         ctx.repo,
         ctx.issueNumber,
       );
-      await options.reportCompletion(summary);
 
-      // Bail out if cancelled during reportCompletion — runStage's
-      // post-handler signal check converts this into an abort result.
-      if (ctx.signal?.aborted) {
-        return { outcome: "completed", message: "" };
-      }
+      // Agent rebase is limited to 1 attempt across all loop-backs.
+      let rebaseAttempted = false;
 
-      const merged = await options.confirmMerge(m["pipeline.mergeConfirm"]);
+      // ---- Check mergeable state ------------------------------------------
+      const mergeableLoop = async (): Promise<
+        { done: true; result: StageResult } | { done: false }
+      > => {
+        const state = await options.checkMergeable(ctx);
+        if (ctx.signal?.aborted) {
+          return { done: true, result: { outcome: "completed", message: "" } };
+        }
 
-      if (ctx.signal?.aborted) {
-        return { outcome: "completed", message: "" };
-      }
+        if (state === "UNKNOWN") {
+          const choice = await options.prompt.handleUnknownMergeable(
+            m["pipeline.unknownMergeable"],
+          );
+          if (ctx.signal?.aborted) {
+            return {
+              done: true,
+              result: { outcome: "completed", message: "" },
+            };
+          }
+          if (choice === "recheck") {
+            return { done: false }; // caller will loop
+          }
+          // "exit" — fall through to onNotMerged cleanup
+          await options.onNotMerged(ctx.signal);
+          return {
+            done: true,
+            result: { outcome: "completed", message: summary },
+          };
+        }
 
-      if (merged) {
-        options.stopServices();
-        options.cleanup();
-        return {
-          outcome: "completed",
-          message: `${summary} ${m["pipeline.worktreeCleanedUp"]}`,
-        };
-      }
+        if (state === "CONFLICTING") {
+          const resolved = await handleConflicting(ctx, summary);
+          if (resolved === undefined) {
+            return { done: false }; // still conflicting after manual, re-check
+          }
+          return { done: true, result: resolved };
+        }
 
-      await options.onNotMerged(ctx.signal);
-      return {
-        outcome: "completed",
-        message: summary,
+        // MERGEABLE — proceed to merge confirmation.
+        return { done: true, result: await askMerge(ctx, summary) };
       };
+
+      // Allow the user to loop back via "re-check" or "still conflicting
+      // after manual resolve".
+      for (;;) {
+        const outcome = await mergeableLoop();
+        if (outcome.done) return outcome.result;
+      }
+
+      // ---- helper: CONFLICTING path --------------------------------------
+
+      async function handleConflicting(
+        ctx: StageContext,
+        summary: string,
+      ): Promise<StageResult | undefined> {
+        const m = t();
+
+        // When agent rebase was already attempted, skip straight to manual.
+        if (rebaseAttempted) {
+          await options.prompt.waitForManualResolve(
+            m["prompt.pressAnyKeyWhenDone"],
+          );
+          if (ctx.signal?.aborted) {
+            return { outcome: "completed", message: "" };
+          }
+          return afterResolution(ctx, summary);
+        }
+
+        const choice = await options.prompt.handleConflict(
+          m["pipeline.conflictsDetected"],
+        );
+        if (ctx.signal?.aborted) {
+          return { outcome: "completed", message: "" };
+        }
+
+        if (choice === "agent_rebase") {
+          rebaseAttempted = true;
+          const rebaseResult = await options.rebaseOntoMain(ctx);
+          if (ctx.signal?.aborted) {
+            return { outcome: "completed", message: "" };
+          }
+          if (!rebaseResult.success) {
+            // Agent could not resolve — notify and fall back to manual.
+            await options.prompt.waitForManualResolve(
+              m["pipeline.rebaseFailed"],
+            );
+            if (ctx.signal?.aborted) {
+              return { outcome: "completed", message: "" };
+            }
+            return afterResolution(ctx, summary);
+          }
+          // Agent rebase succeeded — re-check mergeable.
+          return afterResolution(ctx, summary);
+        }
+
+        // Manual resolve.
+        await options.prompt.waitForManualResolve(
+          m["prompt.pressAnyKeyWhenDone"],
+        );
+        if (ctx.signal?.aborted) {
+          return { outcome: "completed", message: "" };
+        }
+        return afterResolution(ctx, summary);
+      }
+
+      // ---- helper: after conflict resolution -------------------------------
+
+      async function afterResolution(
+        ctx: StageContext,
+        summary: string,
+      ): Promise<StageResult | undefined> {
+        // Re-check mergeable after resolution.
+        const state = await options.checkMergeable(ctx);
+        if (ctx.signal?.aborted) {
+          return { outcome: "completed", message: "" };
+        }
+        if (state === "CONFLICTING") {
+          // Still conflicting — return undefined so the top-level loop
+          // re-enters mergeableLoop → handleConflicting.
+          return undefined;
+        }
+        if (state === "UNKNOWN") {
+          // checkMergeable already exhausted its retry budget.  Show the
+          // unknown-state prompt immediately instead of re-running the
+          // full backoff cycle a second time.
+          const choice = await options.prompt.handleUnknownMergeable(
+            m["pipeline.unknownMergeable"],
+          );
+          if (ctx.signal?.aborted) {
+            return { outcome: "completed", message: "" };
+          }
+          if (choice === "recheck") {
+            return undefined; // re-enter outer loop (one fresh check)
+          }
+          // "exit"
+          await options.onNotMerged(ctx.signal);
+          return { outcome: "completed", message: summary };
+        }
+
+        // MERGEABLE — poll CI after resolution.
+        const ciResult = await options.pollCiAndFix(ctx);
+        if (ctx.signal?.aborted) {
+          return { outcome: "completed", message: "" };
+        }
+        if (!ciResult.passed) {
+          // CI fix exhausted — notify user, still complete the stage.
+          await options.onNotMerged(ctx.signal);
+          return { outcome: "completed", message: ciResult.message };
+        }
+
+        // CI green — ask about merge.
+        return askMerge(ctx, summary);
+      }
     },
   };
+
+  // ---- helper: MERGEABLE path (merge confirmation) -----------------------
+
+  async function askMerge(
+    ctx: StageContext,
+    summary: string,
+  ): Promise<StageResult> {
+    const m = t();
+    const merged = await options.prompt.confirmMerge(
+      `${summary}\n\n${m["pipeline.mergeConfirm"]}`,
+    );
+    if (ctx.signal?.aborted) {
+      return { outcome: "completed", message: "" };
+    }
+    if (merged) {
+      options.stopServices();
+      options.cleanup();
+      return {
+        outcome: "completed",
+        message: `${summary} ${m["pipeline.worktreeCleanedUp"]}`,
+      };
+    }
+    await options.onNotMerged(ctx.signal);
+    return { outcome: "completed", message: summary };
+  }
 }
