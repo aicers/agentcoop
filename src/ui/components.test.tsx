@@ -327,8 +327,8 @@ describe("AgentPane", () => {
 
     const frame = lastFrame() ?? "";
     expect(frame).toContain("line20");
-    // Indicator should be gone (back at bottom).
-    expect(frame).not.toContain("\u2191");
+    // Back at bottom — no "lines below" indicator.
+    expect(frame).not.toContain("\u2193");
   });
 
   test("Page Up still works when arrowScrollEnabled is false", async () => {
@@ -384,9 +384,9 @@ describe("AgentPane", () => {
     stdin.write("\x1b[A"); // Up arrow
     await new Promise((r) => setTimeout(r, 50));
 
-    // Arrow keys should be disabled — still at bottom.
+    // Arrow keys should be disabled — still at bottom (no "lines below").
     expect(lastFrame()).toContain("line20");
-    expect(lastFrame()).not.toContain("\u2191");
+    expect(lastFrame()).not.toContain("\u2193");
   });
 
   test("scrolling is disabled when isFocused is false", async () => {
@@ -413,8 +413,9 @@ describe("AgentPane", () => {
     stdin.write("\x1b[5~");
     await new Promise((r) => setTimeout(r, 50));
 
+    // Scrolling should be disabled — still at bottom (no "lines below").
     expect(lastFrame()).toContain("line20");
-    expect(lastFrame()).not.toContain("\u2191");
+    expect(lastFrame()).not.toContain("\u2193");
   });
 
   test("auto-follow keeps view at bottom when new lines arrive", async () => {
@@ -446,7 +447,8 @@ describe("AgentPane", () => {
 
     const frame = lastFrame() ?? "";
     expect(frame).toContain("newtail");
-    expect(frame).not.toContain("\u2191");
+    // Bottom-pinned — no "lines below" indicator.
+    expect(frame).not.toContain("\u2193");
   });
 
   test("scrolling through a single long wrapped line reveals earlier rows", async () => {
@@ -478,7 +480,11 @@ describe("AgentPane", () => {
     // HEAD_ should be scrolled out of view at the bottom-pinned position.
     expect(lastFrame()).not.toContain("HEAD_");
 
-    // Page Up — scroll through the content including wrapped rows.
+    // Page Up twice — scroll through the content including wrapped rows.
+    // The first Page Up may not reach HEAD_ because scroll indicators
+    // reduce the content area; a second Page Up ensures we get there.
+    stdin.write("\x1b[5~");
+    await new Promise((r) => setTimeout(r, 50));
     stdin.write("\x1b[5~");
     await new Promise((r) => setTimeout(r, 50));
 
@@ -695,6 +701,107 @@ describe("AgentPane", () => {
     // Neither pane should show the active indicator.
     const activeCount = (frame.match(/\u25CF/g) ?? []).length;
     expect(activeCount).toBe(0);
+  });
+
+  test("bottom-pinned mode shows lines-above indicator when content overflows", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box height={10}>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isFocused
+          arrowScrollEnabled
+        />
+      </Box>,
+    );
+
+    const chunk = Array.from({ length: 20 }, (_, i) => `line${i + 1}`)
+      .join("\n")
+      .concat("\n");
+    emitter.emit("agent:chunk", { agent: "a", chunk });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    // Bottom-pinned with lines above — top indicator must appear.
+    expect(frame).toContain("\u2191");
+    expect(frame).toContain("more lines");
+    // No bottom indicator at the very bottom.
+    expect(frame).not.toContain("\u2193");
+    // Newest line must still be visible.
+    expect(frame).toContain("line20");
+  });
+
+  test("scrolled-up mode shows lines-below indicator", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame, stdin } = render(
+      <Box height={10}>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isFocused
+          arrowScrollEnabled
+        />
+      </Box>,
+    );
+
+    const chunk = Array.from({ length: 20 }, (_, i) => `line${i + 1}`)
+      .join("\n")
+      .concat("\n");
+    emitter.emit("agent:chunk", { agent: "a", chunk });
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Scroll up one line.
+    stdin.write("\x1b[A");
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    // Both indicators should be visible.
+    expect(frame).toContain("\u2191");
+    expect(frame).toContain("\u2193");
+  });
+
+  test("single wrapped line scrolled up does not leave blank rows", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame, stdin } = render(
+      <Box height={10}>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          isFocused
+          arrowScrollEnabled
+        />
+      </Box>,
+    );
+
+    // Emit a single long line that wraps across many terminal rows.
+    const longLine = "x".repeat(900);
+    emitter.emit("agent:chunk", { agent: "a", chunk: `${longLine}\n` });
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Scroll up one row.
+    stdin.write("\x1b[A");
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    // A single logical line produces no "lines below" indicator, so no
+    // row should be reserved for it.  Every content row must contain
+    // part of the wrapped text — no blank trailing row.
+    expect(frame).not.toContain("\u2193");
+    const rows = frame.split("\n");
+    // The last row inside the box is the bottom border.  The row just
+    // above it should be filled with content, not empty.
+    const bottomBorderIdx = rows.findLastIndex((r) => r.includes("\u2514"));
+    if (bottomBorderIdx > 0) {
+      const lastContentRow = rows[bottomBorderIdx - 1].trim();
+      expect(lastContentRow.length).toBeGreaterThan(0);
+    }
   });
 
   test("pane header and content are separated by a horizontal line", () => {

@@ -161,6 +161,7 @@ export interface Messages {
   "agentPane.waiting": string;
   "agentPane.idle": string;
   "agentPane.linesAbove": (count: number) => string;
+  "agentPane.linesBelow": (count: number) => string;
   "agent.labelA": string;
   "agent.labelB": string;
   "agent.labelARole": string;

@@ -164,6 +164,7 @@ export const en: Messages = {
   "agentPane.waiting": "(waiting for output)",
   "agentPane.idle": "(idle — active in review stage)",
   "agentPane.linesAbove": (count) => `\u2191 ${count} more lines`,
+  "agentPane.linesBelow": (count) => `\u2193 ${count} more lines`,
   "agent.labelA": "Agent A",
   "agent.labelB": "Agent B",
   "agent.labelARole": "Agent A (implementer)",
