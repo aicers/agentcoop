@@ -121,6 +121,8 @@ export function createSelfCheckStageHandler(
         checkPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.usageSinks?.a,
       );
 
       if (checkResult.sessionId) {
@@ -140,6 +142,8 @@ export function createSelfCheckStageHandler(
         fixPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.usageSinks?.a,
       );
 
       if (fixResult.status === "error") {
@@ -159,6 +163,8 @@ export function createSelfCheckStageHandler(
             syncPrompt,
             ctx.worktreePath,
             ctx.streamSinks?.a,
+            undefined,
+            ctx.usageSinks?.a,
           );
 
           if (syncResult.status === "success") {

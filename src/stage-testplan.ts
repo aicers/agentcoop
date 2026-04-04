@@ -121,6 +121,8 @@ export function createTestPlanStageHandler(
         verifyPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.usageSinks?.a,
       );
 
       if (verifyResult.sessionId) {
@@ -140,6 +142,8 @@ export function createTestPlanStageHandler(
         selfCheckPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.usageSinks?.a,
       );
 
       if (checkResult.status === "error") {

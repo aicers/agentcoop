@@ -11,7 +11,7 @@
 
 import { t } from "./i18n/index.js";
 import type { PipelineEventEmitter } from "./pipeline-events.js";
-import type { PromptSink, StreamSink } from "./stage-util.js";
+import type { PromptSink, StreamSink, UsageSink } from "./stage-util.js";
 import { buildClarificationPrompt } from "./step-parser.js";
 
 // ---- public types --------------------------------------------------------
@@ -129,6 +129,12 @@ export interface StageContext {
    * user can see what the agent was asked to do.
    */
   promptSinks?: { a?: PromptSink; b?: PromptSink };
+  /**
+   * Optional sinks for reporting token usage after an agent invocation.
+   * Stage handlers call these with the usage data from `AgentResult`
+   * so the UI can display per-agent token consumption.
+   */
+  usageSinks?: { a?: UsageSink; b?: UsageSink };
 }
 
 // ---- user interaction interface ------------------------------------------
@@ -550,6 +556,16 @@ async function runStage(
       }
     : undefined;
 
+  // Build per-agent usage sinks so the UI can display token consumption.
+  const usageSinks = events
+    ? {
+        a: (usage: import("./agent.js").TokenUsage) =>
+          events.emit("agent:usage", { agent: "a", usage }),
+        b: (usage: import("./agent.js").TokenUsage) =>
+          events.emit("agent:usage", { agent: "b", usage }),
+      }
+    : undefined;
+
   while (true) {
     // Notify caller before each handler invocation for persistence.
     onStageTransition?.(stage.number, lc.iteration);
@@ -570,6 +586,7 @@ async function runStage(
       savedAgentBSessionId,
       streamSinks,
       promptSinks,
+      usageSinks,
     };
 
     // Clear one-shot fields after use.

@@ -165,6 +165,15 @@ export interface Messages {
   "outcome.needs_clarification": string;
   "outcome.error": string;
 
+  // ---- token bar (TokenBar.tsx) ------------------------------------------
+
+  "tokenBar.agentUsage": (
+    label: string,
+    inputTokens: string,
+    outputTokens: string,
+  ) => string;
+  "tokenBar.noUsage": string;
+
   // ---- input area (InputArea.tsx) ----------------------------------------
 
   "input.pipelineRunning": string;

@@ -37,6 +37,7 @@ import {
   type PromptSink,
   type StreamSink,
   sendFollowUp,
+  type UsageSink,
 } from "./stage-util.js";
 import { parseStepStatus } from "./step-parser.js";
 
@@ -198,6 +199,8 @@ export function createReviewStageHandler(
         reviewPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.b,
+        undefined,
+        ctx.usageSinks?.b,
       );
 
       if (reviewResult.sessionId) {
@@ -220,6 +223,7 @@ export function createReviewStageHandler(
           ctx.worktreePath,
           ctx.streamSinks?.b,
           ctx.promptSinks?.b,
+          ctx.usageSinks?.b,
         );
         if (error) return error;
 
@@ -246,6 +250,8 @@ export function createReviewStageHandler(
         fixPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.usageSinks?.a,
       );
 
       if (fixResult.sessionId) {
@@ -266,6 +272,8 @@ export function createReviewStageHandler(
         authorCheckPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.usageSinks?.a,
       );
 
       if (checkResult.status === "error") {
@@ -286,6 +294,8 @@ export function createReviewStageHandler(
           retryPrompt,
           ctx.worktreePath,
           ctx.streamSinks?.a,
+          undefined,
+          ctx.usageSinks?.a,
         );
 
         if (retryResult.status === "error") {
@@ -347,6 +357,7 @@ export function createReviewStageHandler(
           ctx.worktreePath,
           ctx.streamSinks?.b,
           ctx.promptSinks?.b,
+          ctx.usageSinks?.b,
         );
         if (error) return error;
         if (summary) {
@@ -380,6 +391,7 @@ async function handleUnresolvedSummary(
   cwd: string,
   sink?: StreamSink,
   promptSink?: PromptSink,
+  usageSink?: UsageSink,
 ): Promise<UnresolvedSummaryResult> {
   const summaryPrompt = buildUnresolvedSummaryPrompt(round);
   promptSink?.(summaryPrompt);
@@ -393,9 +405,14 @@ async function handleUnresolvedSummary(
       summaryPrompt,
       cwd,
       sink,
+      undefined,
+      usageSink,
     );
   } else {
-    const stream = opts.agentB.invoke(summaryPrompt, { cwd });
+    const stream = opts.agentB.invoke(summaryPrompt, {
+      cwd,
+      onUsage: usageSink,
+    });
     if (sink) drainToSink(stream, sink);
     result = await stream.result;
   }

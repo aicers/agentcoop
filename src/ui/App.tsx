@@ -14,6 +14,7 @@ import type {
 import { AgentPane } from "./AgentPane.js";
 import { InputArea, type InputRequest } from "./InputArea.js";
 import { StatusBar } from "./StatusBar.js";
+import { TokenBar } from "./TokenBar.js";
 import { createTuiUserPrompt } from "./TuiUserPrompt.js";
 
 /** Read terminal height from stdout.rows, re-rendering on resize. */
@@ -155,7 +156,8 @@ export function App({
         />
       </Box>
 
-      {/* Bottom: status bar + input area */}
+      {/* Bottom: token bar + status bar + input area */}
+      <TokenBar emitter={emitter} />
       <StatusBar
         emitter={emitter}
         owner={pipelineOptions.context.owner}

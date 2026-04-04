@@ -277,6 +277,156 @@ describe("parseClaudeStreamJson", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Token usage extraction
+// ---------------------------------------------------------------------------
+describe("parseClaudeStreamJson token usage", () => {
+  function streamJsonl(events: object[]): string {
+    return events.map((e) => JSON.stringify(e)).join("\n");
+  }
+
+  test("extracts usage from assistant event", () => {
+    const jsonl = streamJsonl([
+      { type: "system", subtype: "init", session_id: "s1" },
+      {
+        type: "assistant",
+        session_id: "s1",
+        message: {
+          content: [{ type: "text", text: "Hello" }],
+          usage: {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_read_input_tokens: 20,
+          },
+        },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "s1",
+        is_error: false,
+        result: "Hello",
+      },
+    ]);
+
+    const result = parseClaudeStreamJson(jsonl);
+    expect(result.usage).toEqual({
+      inputTokens: 100,
+      outputTokens: 50,
+      cachedInputTokens: 20,
+    });
+  });
+
+  test("accumulates usage across multiple assistant events", () => {
+    const jsonl = streamJsonl([
+      { type: "system", subtype: "init", session_id: "s1" },
+      {
+        type: "assistant",
+        session_id: "s1",
+        message: {
+          content: [{ type: "text", text: "Turn 1" }],
+          usage: { input_tokens: 100, output_tokens: 30 },
+        },
+      },
+      {
+        type: "assistant",
+        session_id: "s1",
+        message: {
+          content: [{ type: "text", text: "Turn 2" }],
+          usage: {
+            input_tokens: 200,
+            output_tokens: 40,
+            cache_creation_input_tokens: 10,
+          },
+        },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "s1",
+        is_error: false,
+        result: "Turn 2",
+      },
+    ]);
+
+    const result = parseClaudeStreamJson(jsonl);
+    expect(result.usage).toEqual({
+      inputTokens: 300,
+      outputTokens: 70,
+      cachedInputTokens: 10,
+    });
+  });
+
+  test("extracts usage from result event", () => {
+    const jsonl = streamJsonl([
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "s1",
+        is_error: false,
+        result: "ok",
+        usage: { input_tokens: 500, output_tokens: 100 },
+      },
+    ]);
+
+    const result = parseClaudeStreamJson(jsonl);
+    expect(result.usage).toEqual({
+      inputTokens: 500,
+      outputTokens: 100,
+      cachedInputTokens: 0,
+    });
+  });
+
+  test("does not double-count when both assistant and result have usage", () => {
+    const jsonl = streamJsonl([
+      { type: "system", subtype: "init", session_id: "s1" },
+      {
+        type: "assistant",
+        session_id: "s1",
+        message: {
+          content: [{ type: "text", text: "Hello" }],
+          usage: { input_tokens: 100, output_tokens: 50 },
+        },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "s1",
+        is_error: false,
+        result: "Hello",
+        usage: { input_tokens: 100, output_tokens: 50 },
+      },
+    ]);
+
+    const result = parseClaudeStreamJson(jsonl);
+    expect(result.usage).toEqual({
+      inputTokens: 100,
+      outputTokens: 50,
+      cachedInputTokens: 0,
+    });
+  });
+
+  test("returns undefined usage when no usage data present", () => {
+    const jsonl = streamJsonl([
+      { type: "system", subtype: "init", session_id: "s1" },
+      {
+        type: "assistant",
+        session_id: "s1",
+        message: { content: [{ type: "text", text: "Hi" }] },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "s1",
+        is_error: false,
+        result: "Hi",
+      },
+    ]);
+
+    expect(parseClaudeStreamJson(jsonl).usage).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // ClaudeStreamTransformer
 // ---------------------------------------------------------------------------
 describe("ClaudeStreamTransformer", () => {
@@ -470,6 +620,88 @@ describe("ClaudeStreamTransformer", () => {
     const t = new ClaudeStreamTransformer();
     t.push("garbage without newline");
     expect(t.flush()).toBe("");
+  });
+
+  test("emits usage via onUsage callback for assistant events", () => {
+    const t = new ClaudeStreamTransformer();
+    const usages: {
+      inputTokens: number;
+      outputTokens: number;
+      cachedInputTokens: number;
+    }[] = [];
+    t.onUsage = (u) => usages.push(u);
+
+    const chunk = [
+      JSON.stringify({
+        type: "assistant",
+        session_id: "s1",
+        message: {
+          content: [{ type: "text", text: "Hello" }],
+          usage: {
+            input_tokens: 200,
+            output_tokens: 50,
+            cache_read_input_tokens: 30,
+          },
+        },
+      }),
+      "",
+    ].join("\n");
+
+    t.push(chunk);
+    expect(usages).toEqual([
+      { inputTokens: 200, outputTokens: 50, cachedInputTokens: 30 },
+    ]);
+  });
+
+  test("does not emit usage for result events (avoids double-counting)", () => {
+    const t = new ClaudeStreamTransformer();
+    const usages: {
+      inputTokens: number;
+      outputTokens: number;
+      cachedInputTokens: number;
+    }[] = [];
+    t.onUsage = (u) => usages.push(u);
+
+    const chunk = [
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        session_id: "s1",
+        is_error: false,
+        result: "ok",
+        usage: { input_tokens: 500, output_tokens: 100 },
+      }),
+      "",
+    ].join("\n");
+
+    t.push(chunk);
+    expect(usages).toHaveLength(0);
+  });
+
+  test("emits usage on flush for buffered assistant event", () => {
+    const t = new ClaudeStreamTransformer();
+    const usages: {
+      inputTokens: number;
+      outputTokens: number;
+      cachedInputTokens: number;
+    }[] = [];
+    t.onUsage = (u) => usages.push(u);
+
+    t.push(
+      JSON.stringify({
+        type: "assistant",
+        session_id: "s1",
+        message: {
+          content: [{ type: "text", text: "end" }],
+          usage: { input_tokens: 100, output_tokens: 25 },
+        },
+      }),
+    );
+    expect(usages).toHaveLength(0);
+    t.flush();
+    expect(usages).toEqual([
+      { inputTokens: 100, outputTokens: 25, cachedInputTokens: 0 },
+    ]);
   });
 });
 

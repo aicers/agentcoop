@@ -106,6 +106,8 @@ export function createCreatePrStageHandler(
         prompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.usageSinks?.a,
       );
 
       if (prResult.sessionId) {
@@ -128,6 +130,8 @@ export function createCreatePrStageHandler(
         prCheckPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.usageSinks?.a,
       );
 
       if (checkResult.status === "error") {
@@ -147,6 +151,8 @@ export function createCreatePrStageHandler(
           clarifyPrompt,
           ctx.worktreePath,
           ctx.streamSinks?.a,
+          undefined,
+          ctx.usageSinks?.a,
         );
 
         if (retryResult.status === "error") {

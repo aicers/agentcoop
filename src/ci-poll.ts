@@ -206,7 +206,10 @@ export async function pollCiAndFix(
       failureLogs,
     );
     ctx.promptSinks?.a?.(fixPrompt);
-    const fixStream = agent.invoke(fixPrompt, { cwd: ctx.worktreePath });
+    const fixStream = agent.invoke(fixPrompt, {
+      cwd: ctx.worktreePath,
+      onUsage: ctx.usageSinks?.a,
+    });
     if (ctx.streamSinks?.a) {
       drainToSink(fixStream, ctx.streamSinks.a);
     }
