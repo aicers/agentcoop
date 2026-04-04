@@ -76,9 +76,12 @@ export function App({
   }, []);
 
   const handleSubmit = useCallback((value: string) => {
-    resolveRef.current?.(value);
+    const resolve = resolveRef.current;
     resolveRef.current = null;
     setInputRequest(null);
+    // Defer resolution so the current keypress event is fully drained
+    // before the next prompt's useInput handler is registered.
+    setTimeout(() => resolve?.(value), 0);
   }, []);
 
   // Switch focused pane with Tab (always active; no conflict with text input).
