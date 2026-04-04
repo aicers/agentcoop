@@ -4,8 +4,15 @@ import { confirm, select } from "@inquirer/prompts";
 import { render } from "ink";
 import React from "react";
 
-import type { AgentAdapter } from "./agent.js";
+import type { AgentAdapter, AgentStream } from "./agent.js";
 import { createClaudeAdapter } from "./claude-adapter.js";
+import {
+  closePr,
+  deleteRemoteBranch,
+  hasDockerComposeRunning,
+  remoteBranchExists,
+  stopDockerCompose,
+} from "./cleanup.js";
 import { createCodexAdapter } from "./codex-adapter.js";
 import type { PipelineSettings } from "./config.js";
 import { loadConfig } from "./config.js";
@@ -96,6 +103,124 @@ function createAdapter(
       | undefined,
     inactivityTimeoutMs,
   });
+}
+
+/**
+ * Wrap an `AgentAdapter` to track running agent streams.  When a stream
+ * starts, it is added to the set; when it finishes, it is removed.
+ * This enables the SIGINT handler to kill all running agents.
+ *
+ * Streams are tracked (rather than individual `ChildProcess` objects)
+ * so that the `child` property can be read at kill-time.  This is
+ * important for fallback streams (e.g. `withXhighFallback`) where the
+ * active child may change after the stream is created.
+ */
+function trackProcesses(
+  adapter: AgentAdapter,
+  tracker: Set<AgentStream>,
+): AgentAdapter {
+  function track(stream: AgentStream) {
+    tracker.add(stream);
+    stream.result.finally(() => tracker.delete(stream));
+    return stream;
+  }
+
+  return {
+    invoke(prompt, options) {
+      return track(adapter.invoke(prompt, options));
+    },
+    resume(sessionId, prompt, options) {
+      return track(adapter.resume(sessionId, prompt, options));
+    },
+  };
+}
+
+/** What cleanup actions were performed during cancellation. */
+interface CleanupResult {
+  deletedWorktree: boolean;
+  deletedRemoteBranch: boolean;
+  closedPr: boolean;
+}
+
+/**
+ * Run post-pipeline cancellation cleanup using interactive prompts.
+ */
+async function runCancellationCleanup(opts: {
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  branch: string;
+  worktreePath: string;
+  prNumber: number | undefined;
+}): Promise<CleanupResult> {
+  const m = t();
+  const result: CleanupResult = {
+    deletedWorktree: false,
+    deletedRemoteBranch: false,
+    closedPr: false,
+  };
+  console.log();
+  console.log(m["cleanup.header"]);
+
+  // Stop docker compose services.
+  if (hasDockerComposeRunning(opts.worktreePath)) {
+    const stop = await confirm({
+      message: m["cleanup.stopDockerCompose"],
+      default: true,
+    });
+    if (stop) {
+      console.log(m["cleanup.stoppingServices"]);
+      stopDockerCompose(opts.worktreePath);
+    }
+  }
+
+  // Delete local worktree and branch.
+  const deleteWt = await confirm({
+    message: m["cleanup.deleteWorktree"],
+    default: false,
+  });
+  if (deleteWt) {
+    console.log(m["cleanup.deletingWorktree"]);
+    removeWorktree(opts.owner, opts.repo, opts.issueNumber, opts.branch);
+    result.deletedWorktree = true;
+  }
+
+  // Delete remote branch (only if one was pushed).
+  if (remoteBranchExists(opts.owner, opts.repo, opts.branch)) {
+    const delRemote = await confirm({
+      message: m["cleanup.deleteRemoteBranch"](opts.branch),
+      default: false,
+    });
+    if (delRemote) {
+      console.log(m["cleanup.deletingRemoteBranch"]);
+      try {
+        deleteRemoteBranch(opts.owner, opts.repo, opts.branch);
+        result.deletedRemoteBranch = true;
+      } catch {
+        // Ignore — branch may already be deleted.
+      }
+    }
+  }
+
+  // Close PR (only if one exists).
+  if (opts.prNumber !== undefined) {
+    const close = await confirm({
+      message: m["cleanup.closePr"](opts.prNumber),
+      default: false,
+    });
+    if (close) {
+      console.log(m["cleanup.closingPr"]);
+      try {
+        closePr(opts.owner, opts.repo, opts.prNumber);
+        result.closedPr = true;
+      } catch {
+        // Ignore — PR may already be closed or merged.
+      }
+    }
+  }
+
+  console.log(m["cleanup.done"]);
+  return result;
 }
 
 // ---- stage name lookup (for display) -------------------------------------
@@ -308,18 +433,17 @@ try {
     console.log(m["boot.resumingFromStage"](startFromStage));
   }
 
-  // Create agent adapters.
+  // Create agent adapters with process tracking for Ctrl+C cleanup.
+  const activeStreams = new Set<AgentStream>();
   const inactivityTimeoutMs =
     pipelineSettings.inactivityTimeoutMinutes * 60_000;
-  const agentA = createAdapter(
-    agentAConfig,
-    claudePermissionMode,
-    inactivityTimeoutMs,
+  const agentA = trackProcesses(
+    createAdapter(agentAConfig, claudePermissionMode, inactivityTimeoutMs),
+    activeStreams,
   );
-  const agentB = createAdapter(
-    agentBConfig,
-    claudePermissionMode,
-    inactivityTimeoutMs,
+  const agentB = trackProcesses(
+    createAdapter(agentBConfig, claudePermissionMode, inactivityTimeoutMs),
+    activeStreams,
   );
 
   const issueCtx = { issueTitle, issueBody };
@@ -426,6 +550,7 @@ try {
     | {
         confirmMerge: UserPrompt["confirmMerge"];
         reportCompletion: UserPrompt["reportCompletion"];
+        confirmCleanup: UserPrompt["confirmCleanup"];
       }
     | undefined;
 
@@ -439,11 +564,71 @@ try {
       return true;
     },
     cleanup: () => removeWorktree(owner, repo, issueNumber, wt.branch),
+    stopServices: () => {
+      if (hasDockerComposeRunning(wt.path)) {
+        stopDockerCompose(wt.path);
+      }
+    },
+    hasRunningServices: () => hasDockerComposeRunning(wt.path),
+    onNotMerged: async (signal) => {
+      if (!tuiPrompt) return;
+      const m = t();
+
+      // Stop docker compose services.
+      if (hasDockerComposeRunning(wt.path)) {
+        const stop = await tuiPrompt.confirmCleanup(
+          m["cleanup.stopDockerCompose"],
+        );
+        if (signal?.aborted) return;
+        if (stop) stopDockerCompose(wt.path);
+      }
+
+      // Delete local worktree and branch.
+      const deleteWt = await tuiPrompt.confirmCleanup(
+        m["cleanup.deleteWorktree"],
+      );
+      if (signal?.aborted) return;
+      if (deleteWt) {
+        removeWorktree(owner, repo, issueNumber, wt.branch);
+      }
+
+      // Delete remote branch (only if pushed).
+      if (remoteBranchExists(owner, repo, wt.branch)) {
+        const delRemote = await tuiPrompt.confirmCleanup(
+          m["cleanup.deleteRemoteBranch"](wt.branch),
+        );
+        if (signal?.aborted) return;
+        if (delRemote) {
+          try {
+            deleteRemoteBranch(owner, repo, wt.branch);
+          } catch {
+            // Ignore — branch may already be deleted.
+          }
+        }
+      }
+
+      // Close PR (only if one exists).
+      // Refresh PR number in case it was detected during the pipeline.
+      const prNum = runState.prNumber ?? findPrNumber(owner, repo, wt.branch);
+      if (prNum !== undefined) {
+        const close = await tuiPrompt.confirmCleanup(
+          m["cleanup.closePr"](prNum),
+        );
+        if (signal?.aborted) return;
+        if (close) {
+          try {
+            closePr(owner, repo, prNum);
+          } catch {
+            // Ignore — PR may already be closed or merged.
+          }
+        }
+      }
+    },
   });
 
   // The `prompt` field is intentionally omitted here — it will be
   // supplied by the ink <App> component via TuiUserPrompt.
-  const pipelineOpts: Omit<PipelineOptions, "prompt" | "events"> = {
+  const pipelineOpts: Omit<PipelineOptions, "prompt" | "events" | "signal"> = {
     mode: executionMode,
     stages: [
       implementStage,
@@ -498,6 +683,14 @@ try {
   }
   process.stdin.ref();
 
+  // Suppress the default SIGINT handler so Ctrl+C does not kill the
+  // process before Ink can handle it.  The TUI component catches the
+  // Ctrl+C keypress and performs graceful cancellation instead.
+  const sigintHandler = () => {
+    // Handled by Ink useInput — do nothing at process level.
+  };
+  process.on("SIGINT", sigintHandler);
+
   const emitter = new PipelineEventEmitter();
 
   const pipelineResult = await new Promise<PipelineResult>((resolve) => {
@@ -512,26 +705,76 @@ try {
         onPromptReady: (prompt) => {
           tuiPrompt = prompt;
         },
+        onCancel: () => {
+          // Kill all tracked agent child processes so the pipeline
+          // can unwind quickly.  We read `.child` at kill-time so
+          // that fallback streams (withXhighFallback) target the
+          // currently active child, not the original one.
+          for (const stream of activeStreams) {
+            stream.child.kill();
+          }
+        },
         modelNameA: modelDisplayName(agentAConfig),
         modelNameB: modelDisplayName(agentBConfig),
       }),
     );
   });
 
+  // Remove the SIGINT suppressor so the default handler takes over
+  // (allows Ctrl+C to kill during cleanup prompts).
+  process.off("SIGINT", sigintHandler);
+
   console.log();
   console.log(pipelineResult.message);
 
-  console.log();
-  for (const line of formatIssueSyncSummary(
-    issueNumber,
-    issueChanges,
-    issueSyncStatus,
-  )) {
-    console.log(line);
-  }
+  // Handle graceful cancellation (Ctrl+C during pipeline).
+  if (pipelineResult.cancelled) {
+    const m = t();
+    console.log(m["pipeline.cancelledSaved"]);
 
-  if (pipelineResult.success) {
-    deleteRunState(owner, repo, issueNumber);
+    // Restore stdin for @inquirer/prompts cleanup flow.
+    if (process.stdin.isPaused()) {
+      process.stdin.resume();
+    }
+    process.stdin.ref();
+
+    try {
+      const cleanup = await runCancellationCleanup({
+        owner,
+        repo,
+        issueNumber,
+        branch: wt.branch,
+        worktreePath: wt.path,
+        prNumber: runState.prNumber ?? findPrNumber(owner, repo, wt.branch),
+      });
+
+      // If the user destroyed resume prerequisites (worktree, remote
+      // branch, or PR), the saved state would point at artifacts that
+      // no longer exist.  Delete it so the next run starts fresh
+      // instead of resuming into an inconsistent stage.
+      if (
+        cleanup.deletedWorktree ||
+        cleanup.deletedRemoteBranch ||
+        cleanup.closedPr
+      ) {
+        deleteRunState(owner, repo, issueNumber);
+      }
+    } catch {
+      // If cleanup prompts fail (e.g. second Ctrl+C), just exit.
+    }
+  } else {
+    console.log();
+    for (const line of formatIssueSyncSummary(
+      issueNumber,
+      issueChanges,
+      issueSyncStatus,
+    )) {
+      console.log(line);
+    }
+
+    if (pipelineResult.success) {
+      deleteRunState(owner, repo, issueNumber);
+    }
   }
 } catch (error) {
   if (

@@ -39,6 +39,7 @@ function makePrompt(overrides: Partial<UserPrompt> = {}): UserPrompt {
       .mockResolvedValue({ action: "halt" satisfies UserAction }),
     confirmMerge: vi.fn().mockResolvedValue(true),
     reportCompletion: vi.fn().mockResolvedValue(undefined),
+    confirmCleanup: vi.fn().mockResolvedValue(false),
     ...overrides,
   };
 }
@@ -1055,6 +1056,9 @@ function makeDoneOpts(
     reportCompletion: vi.fn().mockResolvedValue(undefined),
     confirmMerge: vi.fn().mockResolvedValue(true),
     cleanup: vi.fn(),
+    stopServices: vi.fn(),
+    hasRunningServices: vi.fn().mockReturnValue(false),
+    onNotMerged: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -1066,7 +1070,7 @@ describe("createDoneStageHandler", () => {
     expect(stage.name).toBe("Done");
   });
 
-  test("reports completion, confirms merge, then cleans up", async () => {
+  test("reports completion, confirms merge, stops services, then cleans up", async () => {
     const opts = makeDoneOpts();
     const stage = createDoneStageHandler(opts);
     const ctx: StageContext = {
@@ -1078,13 +1082,14 @@ describe("createDoneStageHandler", () => {
     const result = await stage.handler(ctx);
     expect(opts.reportCompletion).toHaveBeenCalledOnce();
     expect(opts.confirmMerge).toHaveBeenCalledOnce();
+    expect(opts.stopServices).toHaveBeenCalledOnce();
     expect(opts.cleanup).toHaveBeenCalledOnce();
     expect(result.outcome).toBe("completed");
     expect(result.message).toContain("org/repo#5");
     expect(result.message).toContain("cleaned up");
   });
 
-  test("preserves worktree when merge not confirmed", async () => {
+  test("calls onNotMerged when merge not confirmed", async () => {
     const opts = makeDoneOpts({
       confirmMerge: vi.fn().mockResolvedValue(false),
     });
@@ -1099,8 +1104,294 @@ describe("createDoneStageHandler", () => {
     expect(opts.reportCompletion).toHaveBeenCalledOnce();
     expect(opts.confirmMerge).toHaveBeenCalledOnce();
     expect(opts.cleanup).not.toHaveBeenCalled();
+    expect(opts.onNotMerged).toHaveBeenCalledOnce();
     expect(result.outcome).toBe("completed");
-    expect(result.message).toContain("preserved");
+    expect(result.message).toContain("org/repo#5");
+  });
+
+  test("abort during reportCompletion skips confirmMerge", async () => {
+    const controller = new AbortController();
+    const opts = makeDoneOpts({
+      reportCompletion: vi.fn().mockImplementation(async () => {
+        controller.abort();
+      }),
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+      signal: controller.signal,
+    };
+    await stage.handler(ctx);
+    expect(opts.reportCompletion).toHaveBeenCalledOnce();
+    expect(opts.confirmMerge).not.toHaveBeenCalled();
+    expect(opts.cleanup).not.toHaveBeenCalled();
+    expect(opts.onNotMerged).not.toHaveBeenCalled();
+  });
+
+  test("abort during confirmMerge skips cleanup and onNotMerged", async () => {
+    const controller = new AbortController();
+    const opts = makeDoneOpts({
+      confirmMerge: vi.fn().mockImplementation(async () => {
+        controller.abort();
+        return false;
+      }),
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+      signal: controller.signal,
+    };
+    await stage.handler(ctx);
+    expect(opts.reportCompletion).toHaveBeenCalledOnce();
+    expect(opts.confirmMerge).toHaveBeenCalledOnce();
+    expect(opts.cleanup).not.toHaveBeenCalled();
+    expect(opts.stopServices).not.toHaveBeenCalled();
+    expect(opts.onNotMerged).not.toHaveBeenCalled();
+  });
+
+  test("abort during onNotMerged propagates signal", async () => {
+    const controller = new AbortController();
+    const opts = makeDoneOpts({
+      confirmMerge: vi.fn().mockResolvedValue(false),
+      onNotMerged: vi.fn().mockImplementation(async (signal?: AbortSignal) => {
+        expect(signal).toBe(controller.signal);
+        controller.abort();
+      }),
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+      signal: controller.signal,
+    };
+    await stage.handler(ctx);
+    expect(opts.onNotMerged).toHaveBeenCalledOnce();
+    expect(opts.onNotMerged).toHaveBeenCalledWith(controller.signal);
+  });
+
+  test("full pipeline abort during stage 9 reportCompletion returns cancelled", async () => {
+    const controller = new AbortController();
+    const opts = makeDoneOpts({
+      reportCompletion: vi.fn().mockImplementation(async () => {
+        controller.abort();
+      }),
+    });
+    const stage = createDoneStageHandler(opts);
+    const result = await runPipeline(
+      makePipelineOpts({
+        stages: [stage],
+        signal: controller.signal,
+      }),
+    );
+    expect(result.success).toBe(false);
+    expect(result.cancelled).toBe(true);
+    expect(opts.confirmMerge).not.toHaveBeenCalled();
+  });
+
+  test("full pipeline abort during stage 9 confirmMerge returns cancelled", async () => {
+    const controller = new AbortController();
+    const opts = makeDoneOpts({
+      confirmMerge: vi.fn().mockImplementation(async () => {
+        controller.abort();
+        return true;
+      }),
+    });
+    const stage = createDoneStageHandler(opts);
+    const result = await runPipeline(
+      makePipelineOpts({
+        stages: [stage],
+        signal: controller.signal,
+      }),
+    );
+    expect(result.success).toBe(false);
+    expect(result.cancelled).toBe(true);
+    expect(opts.cleanup).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AbortSignal cancellation
+// ---------------------------------------------------------------------------
+describe("AbortSignal cancellation", () => {
+  test("pipeline returns cancelled result when aborted before first stage", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const stages = [
+      makeStage(2, async () => ({ outcome: "completed", message: "done" })),
+    ];
+    const result = await runPipeline(
+      makePipelineOpts({ stages, signal: controller.signal }),
+    );
+    expect(result.success).toBe(false);
+    expect(result.cancelled).toBe(true);
+    expect(result.stoppedAt).toBe(2);
+  });
+
+  test("pipeline returns cancelled when aborted during stage execution", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const stages = [
+      makeStage(2, async () => {
+        calls++;
+        if (calls === 1) {
+          // Abort during first iteration.
+          controller.abort();
+          return { outcome: "not_approved", message: "loop" };
+        }
+        return { outcome: "completed", message: "done" };
+      }),
+    ];
+    const result = await runPipeline(
+      makePipelineOpts({ stages, signal: controller.signal }),
+    );
+    expect(result.success).toBe(false);
+    expect(result.cancelled).toBe(true);
+    expect(calls).toBe(1);
+  });
+
+  test("pipeline does not set cancelled when abort signal is not used", async () => {
+    const stages = [
+      makeStage(2, async () => ({ outcome: "completed", message: "done" })),
+    ];
+    const prompt = makePrompt();
+    const result = await runPipeline(makePipelineOpts({ stages, prompt }));
+    expect(result.success).toBe(true);
+    expect(result.cancelled).toBeUndefined();
+  });
+
+  test("pipeline stops between stages when aborted", async () => {
+    const controller = new AbortController();
+    const calls: number[] = [];
+    const stages = [
+      makeStage(2, async () => {
+        calls.push(2);
+        controller.abort(); // abort after stage 2 completes
+        return { outcome: "completed", message: "" };
+      }),
+      makeStage(3, async () => {
+        calls.push(3);
+        return { outcome: "completed", message: "" };
+      }),
+    ];
+    const result = await runPipeline(
+      makePipelineOpts({ stages, signal: controller.signal }),
+    );
+    expect(result.success).toBe(false);
+    expect(result.cancelled).toBe(true);
+    expect(calls).toEqual([2]); // stage 3 never ran
+  });
+
+  test("step mode: abort during confirmNextStage returns cancelled", async () => {
+    const controller = new AbortController();
+    const prompt = makePrompt({
+      confirmNextStage: vi.fn().mockImplementation(async () => {
+        controller.abort();
+        return false;
+      }),
+    });
+    const stages = [
+      makeStage(2, async () => ({ outcome: "completed", message: "done" })),
+    ];
+    const result = await runPipeline(
+      makePipelineOpts({
+        mode: "step",
+        stages,
+        prompt,
+        signal: controller.signal,
+      }),
+    );
+    expect(result.success).toBe(false);
+    expect(result.cancelled).toBe(true);
+    expect(result.stoppedAt).toBe(2);
+  });
+
+  test("abort during handleBlocked returns cancelled", async () => {
+    const controller = new AbortController();
+    const prompt = makePrompt({
+      handleBlocked: vi.fn().mockImplementation(async () => {
+        controller.abort();
+        return { action: "proceed" };
+      }),
+    });
+    const stages = [
+      makeStage(2, async () => ({ outcome: "blocked", message: "stuck" })),
+    ];
+    const result = await runPipeline(
+      makePipelineOpts({ stages, prompt, signal: controller.signal }),
+    );
+    expect(result.success).toBe(false);
+    expect(result.cancelled).toBe(true);
+  });
+
+  test("abort during handleAmbiguous returns cancelled", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const prompt = makePrompt({
+      handleAmbiguous: vi.fn().mockImplementation(async () => {
+        controller.abort();
+        return { action: "proceed" };
+      }),
+    });
+    const stages = [
+      makeStage(2, async () => {
+        calls++;
+        return { outcome: "needs_clarification", message: "vague" };
+      }),
+    ];
+    const result = await runPipeline(
+      makePipelineOpts({ stages, prompt, signal: controller.signal }),
+    );
+    expect(result.success).toBe(false);
+    expect(result.cancelled).toBe(true);
+    // Two calls: first triggers auto-clarification, second triggers handleAmbiguous.
+    expect(calls).toBe(2);
+  });
+
+  test("abort during confirmContinueLoop returns cancelled", async () => {
+    const controller = new AbortController();
+    const prompt = makePrompt({
+      confirmContinueLoop: vi.fn().mockImplementation(async () => {
+        controller.abort();
+        return false;
+      }),
+    });
+    const stages = [
+      makeStage(2, async () => ({
+        outcome: "not_approved",
+        message: "loop",
+      })),
+    ];
+    const result = await runPipeline(
+      makePipelineOpts({ stages, prompt, signal: controller.signal }),
+    );
+    expect(result.success).toBe(false);
+    expect(result.cancelled).toBe(true);
+  });
+
+  test("abort during handler exception skips error prompt", async () => {
+    const controller = new AbortController();
+    const prompt = makePrompt();
+    const stages = [
+      makeStage(2, async () => {
+        controller.abort();
+        throw new Error("killed");
+      }),
+    ];
+    const result = await runPipeline(
+      makePipelineOpts({ stages, prompt, signal: controller.signal }),
+    );
+    expect(result.success).toBe(false);
+    expect(result.cancelled).toBe(true);
+    // handleError should not have been called — signal was checked first.
+    expect(prompt.handleError).not.toHaveBeenCalled();
   });
 });
 

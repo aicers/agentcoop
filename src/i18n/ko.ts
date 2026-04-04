@@ -257,6 +257,32 @@ export const ko: Messages = {
   "issueSync.summarySkipped": "  - \uB3D9\uAE30\uD654 \uAC74\uB108\uB6F0",
   "issueSync.summaryFailed": "  - \uB3D9\uAE30\uD654 \uC2E4\uD328",
 
+  // ---- cancellation / cleanup --------------------------------------------
+
+  "pipeline.cancelled":
+    "\uD30C\uC774\uD504\uB77C\uC778\uC774 \uCDE8\uC18C\uB418\uC5C8\uC2B5\uB2C8\uB2E4.",
+  "pipeline.cancelledSaved":
+    "\uC2E4\uD589 \uC0C1\uD0DC\uAC00 \uC800\uC7A5\uB418\uC5C8\uC2B5\uB2C8\uB2E4 \u2014 \uB098\uC911\uC5D0 \uC7AC\uAC1C\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.",
+  "cleanup.header": "\uC815\uB9AC \uC635\uC158:",
+  "cleanup.stopDockerCompose":
+    "Docker Compose \uC11C\uBE44\uC2A4\uAC00 \uC2E4\uD589 \uC911\uC785\uB2C8\uB2E4. \uC911\uC9C0\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?",
+  "cleanup.deleteWorktree":
+    "\uB85C\uCEEC \uC6CC\uD06C\uD2B8\uB9AC\uC640 \uBE0C\uB79C\uCE58\uB97C \uC0AD\uC81C\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?",
+  "cleanup.deleteRemoteBranch": (branch) =>
+    `\uC6D0\uACA9 \uBE0C\uB79C\uCE58 "${branch}"\uB97C \uC0AD\uC81C\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?`,
+  "cleanup.closePr": (prNumber) =>
+    `PR #${prNumber}\uC744(\uB97C) \uB2EB\uC73C\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?`,
+  "cleanup.stoppingServices":
+    "  Docker Compose \uC11C\uBE44\uC2A4 \uC911\uC9C0 \uC911...",
+  "cleanup.deletingWorktree":
+    "  \uB85C\uCEEC \uC6CC\uD06C\uD2B8\uB9AC \uBC0F \uBE0C\uB79C\uCE58 \uC0AD\uC81C \uC911...",
+  "cleanup.deletingRemoteBranch":
+    "  \uC6D0\uACA9 \uBE0C\uB79C\uCE58 \uC0AD\uC81C \uC911...",
+  "cleanup.closingPr": "  PR \uB2EB\uB294 \uC911...",
+  "cleanup.done": "\uC815\uB9AC \uC644\uB8CC.",
+  "prompt.yesCleanup": "\uC608",
+  "prompt.noSkipCleanup": "\uC544\uB2C8\uC624",
+
   // ---- worktree errors ---------------------------------------------------
 
   "worktree.alreadyExists": (path) =>

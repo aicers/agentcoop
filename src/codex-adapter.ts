@@ -435,8 +435,12 @@ function parseCodexInvokeOutput(
  * retry: the iterator first drains the failed attempt, then — on
  * fallback — continues yielding chunks from the retry stream so that
  * the pipeline UI keeps receiving output.
+ *
+ * The `child` property is a getter that always returns the currently
+ * active child process, so that cancellation (Ctrl+C) kills the right
+ * process even when the fallback retry is running.
  */
-function withXhighFallback(
+export function withXhighFallback(
   stream: AgentStream,
   retryFn: () => AgentStream,
 ): AgentStream {
@@ -465,7 +469,9 @@ function withXhighFallback(
 
   return {
     [Symbol.asyncIterator]: () => chunks(),
-    child: stream.child,
+    get child() {
+      return retryStream?.child ?? stream.child;
+    },
     result,
   };
 }

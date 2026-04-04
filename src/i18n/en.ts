@@ -224,6 +224,25 @@ export const en: Messages = {
   "issueSync.summarySkipped": "  - Sync skipped",
   "issueSync.summaryFailed": "  - Sync failed",
 
+  // ---- cancellation / cleanup --------------------------------------------
+
+  "pipeline.cancelled": "Pipeline cancelled.",
+  "pipeline.cancelledSaved":
+    "Run state saved — you can resume this pipeline later.",
+  "cleanup.header": "Cleanup options:",
+  "cleanup.stopDockerCompose":
+    "Docker Compose services are running. Stop them?",
+  "cleanup.deleteWorktree": "Delete local worktree and branch?",
+  "cleanup.deleteRemoteBranch": (branch) => `Delete remote branch "${branch}"?`,
+  "cleanup.closePr": (prNumber) => `Close PR #${prNumber}?`,
+  "cleanup.stoppingServices": "  Stopping Docker Compose services...",
+  "cleanup.deletingWorktree": "  Deleting local worktree and branch...",
+  "cleanup.deletingRemoteBranch": "  Deleting remote branch...",
+  "cleanup.closingPr": "  Closing PR...",
+  "cleanup.done": "Cleanup complete.",
+  "prompt.yesCleanup": "Yes",
+  "prompt.noSkipCleanup": "No",
+
   // ---- worktree errors ---------------------------------------------------
 
   "worktree.alreadyExists": (path) =>

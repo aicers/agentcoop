@@ -130,5 +130,17 @@ export function createTuiUserPrompt(dispatch: PromptDispatch): UserPrompt {
         choices: [{ label: t()["prompt.ok"], value: "ok" }],
       });
     },
+
+    async confirmCleanup(message: string): Promise<boolean> {
+      const m = t();
+      const response = await dispatch({
+        message,
+        choices: [
+          { label: m["prompt.yesCleanup"], value: "yes" },
+          { label: m["prompt.noSkipCleanup"], value: "no" },
+        ],
+      });
+      return response === "yes";
+    },
   };
 }

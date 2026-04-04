@@ -135,6 +135,11 @@ export interface StageContext {
    * so the UI can display per-agent token consumption.
    */
   usageSinks?: { a?: UsageSink; b?: UsageSink };
+  /**
+   * Abort signal for cancellation.  Stage handlers can check this after
+   * async operations to bail out early when the user presses Ctrl+C.
+   */
+  signal?: AbortSignal;
 }
 
 // ---- user interaction interface ------------------------------------------
@@ -193,6 +198,12 @@ export interface UserPrompt {
    * Report completion to the user (stage 9).
    */
   reportCompletion(message: string): Promise<void>;
+
+  /**
+   * Ask user to confirm a cleanup action (e.g. stop services, delete
+   * worktree).  Used in stage 9 "not merged" path.
+   */
+  confirmCleanup(message: string): Promise<boolean>;
 }
 
 // ---- loop control --------------------------------------------------------
@@ -305,6 +316,12 @@ export interface PipelineOptions {
    * agent-chunk events are emitted so the UI can render in real time.
    */
   events?: PipelineEventEmitter;
+  /**
+   * When provided, the pipeline checks this signal before each stage
+   * and handler invocation.  If aborted, the pipeline returns early
+   * with `cancelled: true`.
+   */
+  signal?: AbortSignal;
 }
 
 export interface PipelineResult {
@@ -313,6 +330,8 @@ export interface PipelineResult {
   /** The stage number where the pipeline stopped (on abort/halt). */
   stoppedAt: number | undefined;
   message: string;
+  /** True when the pipeline was stopped via an AbortSignal (Ctrl+C). */
+  cancelled?: boolean;
 }
 
 /**
@@ -333,6 +352,7 @@ export async function runPipeline(
     savedAgentASessionId,
     savedAgentBSessionId,
     events,
+    signal,
   } = options;
 
   // Sort stages by number to guarantee order.
@@ -372,11 +392,31 @@ export async function runPipeline(
   }
 
   while (i < sorted.length) {
+    // Check for cancellation before entering the next stage.
+    if (signal?.aborted) {
+      return {
+        success: false,
+        cancelled: true,
+        stoppedAt: sorted[i].number,
+        message: t()["pipeline.cancelled"],
+      };
+    }
+
     const stage = sorted[i];
 
     // In step mode, ask the user before entering each stage.
     if (mode === "step") {
       const ok = await prompt.confirmNextStage(stage.name);
+      // Re-check for cancellation after the prompt resolves — the signal
+      // may have been aborted while the user prompt was pending (Ctrl+C).
+      if (signal?.aborted) {
+        return {
+          success: false,
+          cancelled: true,
+          stoppedAt: stage.number,
+          message: t()["pipeline.cancelled"],
+        };
+      }
       if (!ok) {
         return {
           success: false,
@@ -407,6 +447,7 @@ export async function runPipeline(
       isResumeStage ? savedAgentASessionId : undefined,
       isResumeStage ? savedAgentBSessionId : undefined,
       events,
+      signal,
     );
 
     if (result.action === "abort") {
@@ -414,6 +455,7 @@ export async function runPipeline(
         success: false,
         stoppedAt: stage.number,
         message: result.message,
+        cancelled: signal?.aborted === true ? true : undefined,
       };
     }
 
@@ -446,6 +488,14 @@ export async function runPipeline(
           lc.iteration,
           result.message,
         );
+        if (signal?.aborted) {
+          return {
+            success: false,
+            cancelled: true,
+            stoppedAt: stage.number,
+            message: t()["pipeline.cancelled"],
+          };
+        }
         if (!approved) {
           return {
             success: false,
@@ -519,6 +569,7 @@ async function runStage(
   savedAgentASessionId?: string,
   savedAgentBSessionId?: string,
   events?: PipelineEventEmitter,
+  signal?: AbortSignal,
 ): Promise<StageRunResult> {
   const lc = createLoopControl(stage.autoBudget);
 
@@ -567,6 +618,11 @@ async function runStage(
     : undefined;
 
   while (true) {
+    // Check for cancellation before each handler invocation.
+    if (signal?.aborted) {
+      return { action: "abort", message: t()["pipeline.cancelled"] };
+    }
+
     // Notify caller before each handler invocation for persistence.
     onStageTransition?.(stage.number, lc.iteration);
 
@@ -587,6 +643,7 @@ async function runStage(
       streamSinks,
       promptSinks,
       usageSinks,
+      signal,
     };
 
     // Clear one-shot fields after use.
@@ -598,6 +655,9 @@ async function runStage(
     try {
       result = await stage.handler(ctx);
     } catch (err) {
+      if (signal?.aborted) {
+        return { action: "abort", message: t()["pipeline.cancelled"] };
+      }
       const errMsg = err instanceof Error ? err.message : String(err);
       const dispatched = await dispatchError(prompt, errMsg);
       if (dispatched === undefined) continue; // retry
@@ -608,6 +668,11 @@ async function runStage(
       stageNumber: stage.number,
       outcome: result.outcome,
     });
+
+    // Check for cancellation after handler returns.
+    if (signal?.aborted) {
+      return { action: "abort", message: t()["pipeline.cancelled"] };
+    }
 
     // ---- evaluate outcome ------------------------------------------------
 
@@ -634,6 +699,9 @@ async function runStage(
         result.message,
         !stage.requiresArtifact,
       );
+      if (signal?.aborted) {
+        return { action: "abort", message: t()["pipeline.cancelled"] };
+      }
       if (decision.action === "halt") {
         return { action: "abort", message: t()["pipeline.userHaltedBlocked"] };
       }
@@ -652,6 +720,9 @@ async function runStage(
         // Clarification already tried once — fall back to user.
         clarificationAttempted = false;
         const decision = await prompt.handleAmbiguous(result.message);
+        if (signal?.aborted) {
+          return { action: "abort", message: t()["pipeline.cancelled"] };
+        }
         if (decision.action === "halt") {
           return {
             action: "abort",
@@ -684,6 +755,9 @@ async function runStage(
         loopMessage,
       );
       loopMessage = "";
+      if (signal?.aborted) {
+        return { action: "abort", message: t()["pipeline.cancelled"] };
+      }
       if (!approved) {
         return {
           action: "abort",
@@ -711,6 +785,17 @@ export function createDoneStageHandler(options: {
   confirmMerge: (message: string) => Promise<boolean>;
   /** Called to remove the worktree after merge is confirmed. */
   cleanup: () => void;
+  /** Called to stop docker compose services. */
+  stopServices: () => void;
+  /** Called to check whether docker compose services are running. */
+  hasRunningServices: () => boolean;
+  /**
+   * Called when the user chooses "not merged".  Presents cleanup options
+   * (stop services, delete worktree, delete remote branch, close PR)
+   * and performs the selected actions.  Receives the abort signal so it
+   * can bail out early on cancellation.
+   */
+  onNotMerged: (signal?: AbortSignal) => Promise<void>;
 }): StageDefinition {
   return {
     name: t()["stage.done"],
@@ -724,9 +809,20 @@ export function createDoneStageHandler(options: {
       );
       await options.reportCompletion(summary);
 
+      // Bail out if cancelled during reportCompletion — runStage's
+      // post-handler signal check converts this into an abort result.
+      if (ctx.signal?.aborted) {
+        return { outcome: "completed", message: "" };
+      }
+
       const merged = await options.confirmMerge(m["pipeline.mergeConfirm"]);
 
+      if (ctx.signal?.aborted) {
+        return { outcome: "completed", message: "" };
+      }
+
       if (merged) {
+        options.stopServices();
         options.cleanup();
         return {
           outcome: "completed",
@@ -734,9 +830,10 @@ export function createDoneStageHandler(options: {
         };
       }
 
+      await options.onNotMerged(ctx.signal);
       return {
         outcome: "completed",
-        message: `${summary} ${m["pipeline.worktreePreserved"]}`,
+        message: summary,
       };
     },
   };
