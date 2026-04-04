@@ -219,6 +219,23 @@ export interface Messages {
   "issueSync.summarySkipped": string;
   "issueSync.summaryFailed": string;
 
+  // ---- cancellation / cleanup --------------------------------------------
+
+  "pipeline.cancelled": string;
+  "pipeline.cancelledSaved": string;
+  "cleanup.header": string;
+  "cleanup.stopDockerCompose": string;
+  "cleanup.deleteWorktree": string;
+  "cleanup.deleteRemoteBranch": (branch: string) => string;
+  "cleanup.closePr": (prNumber: number) => string;
+  "cleanup.stoppingServices": string;
+  "cleanup.deletingWorktree": string;
+  "cleanup.deletingRemoteBranch": string;
+  "cleanup.closingPr": string;
+  "cleanup.done": string;
+  "prompt.yesCleanup": string;
+  "prompt.noSkipCleanup": string;
+
   // ---- worktree errors ---------------------------------------------------
 
   "worktree.alreadyExists": (path: string) => string;

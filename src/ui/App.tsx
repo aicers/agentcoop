@@ -1,5 +1,5 @@
 import { Box, useInput, useStdout } from "ink";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../i18n/index.js";
 import type {
   PipelineOptions,
@@ -39,7 +39,7 @@ export function useTerminalHeight(): number | undefined {
 
 export interface AppProps {
   emitter: PipelineEventEmitter;
-  pipelineOptions: Omit<PipelineOptions, "prompt" | "events">;
+  pipelineOptions: Omit<PipelineOptions, "prompt" | "events" | "signal">;
   onExit: (result: PipelineResult) => void;
   /** Called once the TUI prompt is ready, so callers can late-bind to it. */
   onPromptReady?: (prompt: UserPrompt) => void;
@@ -47,6 +47,11 @@ export interface AppProps {
   modelNameA?: string;
   /** Short model identifier for Agent B (e.g., "gpt-5.4"). */
   modelNameB?: string;
+  /**
+   * Called when the user presses Ctrl+C so the caller can kill running
+   * agent child processes before the pipeline unwinds.
+   */
+  onCancel?: () => void;
 }
 
 export function App({
@@ -56,6 +61,7 @@ export function App({
   onPromptReady,
   modelNameA,
   modelNameB,
+  onCancel,
 }: AppProps) {
   const terminalHeight = useTerminalHeight();
   const [inputRequest, setInputRequest] = useState<InputRequest | null>(null);
@@ -64,11 +70,16 @@ export function App({
   const [activeAgent, setActiveAgent] = useState<"a" | "b" | null>(null);
   const [layout, setLayout] = useState<"row" | "column">("row");
 
+  // AbortController for pipeline cancellation on Ctrl+C.
+  const abortController = useMemo(() => new AbortController(), []);
+  const cancelledRef = useRef(false);
+
   // Store props in refs so the mount effect never re-runs.
   const emitterRef = useRef(emitter);
   const optsRef = useRef(pipelineOptions);
   const onExitRef = useRef(onExit);
   const onPromptReadyRef = useRef(onPromptReady);
+  const onCancelRef = useRef(onCancel);
 
   const dispatch = useCallback((request: InputRequest): Promise<string> => {
     return new Promise<string>((resolve) => {
@@ -87,12 +98,27 @@ export function App({
   }, []);
 
   // Switch focused pane with Tab; toggle layout with Ctrl+L.
+  // Ctrl+C triggers graceful cancellation.
   useInput((input, key) => {
     if (key.tab) {
       setFocusedPane((prev) => (prev === "a" ? "b" : "a"));
     }
     if (input === "l" && key.ctrl) {
       setLayout((prev) => (prev === "row" ? "column" : "row"));
+    }
+    if (input === "c" && key.ctrl && !cancelledRef.current) {
+      cancelledRef.current = true;
+      // Kill running agent child processes.
+      onCancelRef.current?.();
+      // Abort the pipeline.
+      abortController.abort();
+      // Force-resolve any pending dispatch so the pipeline can unwind.
+      if (resolveRef.current) {
+        const resolve = resolveRef.current;
+        resolveRef.current = null;
+        setInputRequest(null);
+        setTimeout(() => resolve("__cancelled__"), 0);
+      }
     }
   });
 
@@ -118,6 +144,7 @@ export function App({
       ...optsRef.current,
       prompt,
       events: emitterRef.current,
+      signal: abortController.signal,
     }).then(
       (result) => onExitRef.current(result),
       (err) => {
@@ -128,7 +155,7 @@ export function App({
         });
       },
     );
-  }, [dispatch]);
+  }, [dispatch, abortController]);
 
   return (
     <Box flexDirection="column" width="100%" height={terminalHeight ?? "100%"}>

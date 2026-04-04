@@ -216,4 +216,33 @@ describe("TuiUserPrompt", () => {
       );
     });
   });
+
+  describe("confirmCleanup", () => {
+    test("returns true for yes", async () => {
+      const dispatch = makeDispatch("yes");
+      const prompt = createTuiUserPrompt(dispatch);
+      expect(await prompt.confirmCleanup("Delete worktree?")).toBe(true);
+    });
+
+    test("returns false for no", async () => {
+      const dispatch = makeDispatch("no");
+      const prompt = createTuiUserPrompt(dispatch);
+      expect(await prompt.confirmCleanup("Delete worktree?")).toBe(false);
+    });
+
+    test("dispatches with yes/no choices", async () => {
+      const dispatch = makeDispatch("no");
+      const prompt = createTuiUserPrompt(dispatch);
+      await prompt.confirmCleanup("Stop services?");
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "Stop services?",
+          choices: expect.arrayContaining([
+            expect.objectContaining({ value: "yes" }),
+            expect.objectContaining({ value: "no" }),
+          ]),
+        }),
+      );
+    });
+  });
 });

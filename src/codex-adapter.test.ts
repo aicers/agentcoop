@@ -1,4 +1,6 @@
-import { describe, expect, test } from "vitest";
+import { EventEmitter } from "node:events";
+import { describe, expect, test, vi } from "vitest";
+import type { AgentResult, AgentStream } from "./agent.js";
 import {
   buildCodexInvokeArgs,
   buildCodexResumeArgs,
@@ -10,6 +12,7 @@ import {
   parseCodexJsonl,
   parseCodexPlainText,
   validateCodexReasoningEffort,
+  withXhighFallback,
 } from "./codex-adapter.js";
 
 // ---------------------------------------------------------------------------
@@ -1042,5 +1045,102 @@ describe("validateCodexReasoningEffort", () => {
 
   test("rejects empty string", () => {
     expect(() => validateCodexReasoningEffort("")).toThrow(/Unsupported/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// withXhighFallback — child tracking during fallback retry
+// ---------------------------------------------------------------------------
+
+function makeMockChild(): EventEmitter & { kill: ReturnType<typeof vi.fn> } {
+  const child = new EventEmitter();
+  (child as EventEmitter & { kill: ReturnType<typeof vi.fn> }).kill = vi.fn();
+  return child as EventEmitter & { kill: ReturnType<typeof vi.fn> };
+}
+
+function makeMockStream(
+  result: AgentResult,
+  child?: ReturnType<typeof makeMockChild>,
+): AgentStream {
+  const c = child ?? makeMockChild();
+  return {
+    async *[Symbol.asyncIterator]() {
+      // no chunks
+    },
+    result: Promise.resolve(result),
+    child: c as unknown as import("node:child_process").ChildProcess,
+  };
+}
+
+const CONFIG_PARSING_RESULT: AgentResult = {
+  sessionId: undefined,
+  responseText: "",
+  status: "error",
+  errorType: "config_parsing",
+  stderrText: "unknown variant `xhigh`",
+};
+
+const SUCCESS_RESULT: AgentResult = {
+  sessionId: "sess-1",
+  responseText: "ok",
+  status: "success",
+  errorType: undefined,
+  stderrText: "",
+};
+
+describe("withXhighFallback", () => {
+  test("child points to original child before fallback", () => {
+    const originalChild = makeMockChild();
+    const stream = makeMockStream(SUCCESS_RESULT, originalChild);
+    const wrapped = withXhighFallback(stream, () =>
+      makeMockStream(SUCCESS_RESULT),
+    );
+    expect(wrapped.child).toBe(originalChild);
+  });
+
+  test("child follows retry child after fallback triggers", async () => {
+    const originalChild = makeMockChild();
+    const retryChild = makeMockChild();
+    const firstStream = makeMockStream(CONFIG_PARSING_RESULT, originalChild);
+    const retryStream = makeMockStream(SUCCESS_RESULT, retryChild);
+
+    const wrapped = withXhighFallback(firstStream, () => retryStream);
+
+    // Wait for the result chain to settle so the fallback triggers.
+    await wrapped.result;
+
+    // child should now point to the retry child, not the original.
+    expect(wrapped.child).toBe(retryChild);
+    expect(wrapped.child).not.toBe(originalChild);
+  });
+
+  test("killing child during fallback targets the retry process", async () => {
+    const originalChild = makeMockChild();
+    const retryChild = makeMockChild();
+    const firstStream = makeMockStream(CONFIG_PARSING_RESULT, originalChild);
+    const retryStream = makeMockStream(SUCCESS_RESULT, retryChild);
+
+    const wrapped = withXhighFallback(firstStream, () => retryStream);
+
+    // Wait for fallback to trigger.
+    await wrapped.result;
+
+    // Simulate Ctrl+C: kill whatever .child currently points to.
+    wrapped.child.kill();
+
+    expect(retryChild.kill).toHaveBeenCalled();
+    expect(originalChild.kill).not.toHaveBeenCalled();
+  });
+
+  test("child stays as original when no fallback is needed", async () => {
+    const originalChild = makeMockChild();
+    const stream = makeMockStream(SUCCESS_RESULT, originalChild);
+    const retryFn = vi.fn();
+
+    const wrapped = withXhighFallback(stream, retryFn);
+    await wrapped.result;
+
+    expect(wrapped.child).toBe(originalChild);
+    expect(retryFn).not.toHaveBeenCalled();
   });
 });
