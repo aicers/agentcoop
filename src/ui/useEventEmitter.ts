@@ -17,23 +17,33 @@ export const PROMPT_LINE_PREFIX = "\u25B6 ";
 /** Prefix for the prompt separator lines. */
 export const PROMPT_SEPARATOR_CHAR = "\u2504";
 
+/** Number of separator characters on each side of the header label. */
+const SEPARATOR_HALF_LENGTH = 36;
+
 /**
  * Format a prompt string for display in the agent pane.
  *
  * The prompt is truncated to `MAX_PROMPT_LINES` lines with an
  * indicator showing how many lines were omitted.  Each line is
  * prefixed with `▶ ` so the renderer can apply distinct styling.
+ *
+ * When `stageName` is provided the header includes it for context,
+ * e.g. `┄┄ Prompt (Create PR) ┄┄`.  The footer is always computed
+ * dynamically to match the header length.
  */
-export function formatPromptForDisplay(prompt: string): string[] {
+export function formatPromptForDisplay(
+  prompt: string,
+  stageName?: string,
+): string[] {
   const rawLines = prompt.split("\n");
   const truncated = rawLines.length > MAX_PROMPT_LINES;
   const shown = truncated ? rawLines.slice(0, MAX_PROMPT_LINES) : rawLines;
 
-  const separator = PROMPT_SEPARATOR_CHAR.repeat(36);
-  const result = [
-    `${separator} Prompt ${separator}`,
-    ...shown.map((l) => `${PROMPT_LINE_PREFIX}${l}`),
-  ];
+  const label = stageName ? ` Prompt (${stageName}) ` : " Prompt ";
+  const halfSep = PROMPT_SEPARATOR_CHAR.repeat(SEPARATOR_HALF_LENGTH);
+  const header = `${halfSep}${label}${halfSep}`;
+
+  const result = [header, ...shown.map((l) => `${PROMPT_LINE_PREFIX}${l}`)];
 
   if (truncated) {
     result.push(
@@ -41,7 +51,7 @@ export function formatPromptForDisplay(prompt: string): string[] {
     );
   }
 
-  result.push(separator.repeat(2));
+  result.push(PROMPT_SEPARATOR_CHAR.repeat(header.length));
 
   return result;
 }
@@ -64,6 +74,19 @@ export function useAgentLines(
   const [lines, setLines] = useState<string[]>([]);
   const [pendingLine, setPendingLine] = useState("");
   const bufferRef = useRef("");
+  const stageNameRef = useRef<string | undefined>(undefined);
+
+  // Track the current stage name so prompt headers can include it.
+  useEffect(() => {
+    const handler = (ev: { stageName: string }) => {
+      stageNameRef.current = ev.stageName;
+    };
+
+    emitter.on("stage:enter", handler);
+    return () => {
+      emitter.off("stage:enter", handler);
+    };
+  }, [emitter]);
 
   useEffect(() => {
     const handler = (ev: { agent: "a" | "b"; chunk: string }) => {
@@ -96,7 +119,7 @@ export function useAgentLines(
     const handler = (ev: { agent: "a" | "b"; prompt: string }) => {
       if (ev.agent !== agent) return;
 
-      const formatted = formatPromptForDisplay(ev.prompt);
+      const formatted = formatPromptForDisplay(ev.prompt, stageNameRef.current);
 
       // Flush any pending partial line before injecting prompt lines
       // so the prompt appears on its own visual block.
