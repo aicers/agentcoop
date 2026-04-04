@@ -138,6 +138,8 @@ export function createSquashStageHandler(
         prompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.invokeHooks?.a,
       );
 
       if (squashResult.sessionId) {
@@ -158,6 +160,8 @@ export function createSquashStageHandler(
         squashCheckPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.invokeHooks?.a,
       );
 
       if (checkResult.status === "error") {
@@ -177,6 +181,8 @@ export function createSquashStageHandler(
           clarifyPrompt,
           ctx.worktreePath,
           ctx.streamSinks?.a,
+          undefined,
+          ctx.invokeHooks?.a,
         );
 
         if (retryResult.status === "error") {

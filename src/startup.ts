@@ -66,6 +66,15 @@ const CLAUDE_EFFORT_LEVELS = [
   { name: "High", value: "high" },
 ];
 
+const CLAUDE_OPUS_EFFORT_LEVELS = [
+  ...CLAUDE_EFFORT_LEVELS,
+  { name: "Max", value: "max" },
+];
+
+function claudeEffortChoices(model: string) {
+  return model === "opus" ? CLAUDE_OPUS_EFFORT_LEVELS : CLAUDE_EFFORT_LEVELS;
+}
+
 const CODEX_REASONING_LEVELS = [
   { name: "Low", value: "low" },
   { name: "Medium", value: "medium" },
@@ -85,7 +94,9 @@ function modelDisplayName(config: AgentConfig): string {
   }
   if (config.effortLevel) {
     const effortChoices =
-      config.cli === "claude" ? CLAUDE_EFFORT_LEVELS : CODEX_REASONING_LEVELS;
+      config.cli === "claude"
+        ? claudeEffortChoices(config.model)
+        : CODEX_REASONING_LEVELS;
     const effortName =
       effortChoices.find((e) => e.value === config.effortLevel)?.name ??
       config.effortLevel;
@@ -319,7 +330,7 @@ async function selectAgent(
   }
 
   const effortChoices =
-    cli === "claude" ? CLAUDE_EFFORT_LEVELS : CODEX_REASONING_LEVELS;
+    cli === "claude" ? claudeEffortChoices(model) : CODEX_REASONING_LEVELS;
   const effortLevel = await select({
     message: m["startup.agentEffort"](label),
     choices: effortChoices,

@@ -20,6 +20,17 @@ export type StreamSink = (chunk: string) => void;
 export type PromptSink = (prompt: string) => void;
 
 /**
+ * Lifecycle hooks called around agent invocations.  `onStart` fires
+ * before the agent process is started (with `"invoke"` for a fresh
+ * session or `"resume"` for a resumed one).  `onEnd` fires once the
+ * invocation finishes (including auto-retries on inactivity timeout).
+ */
+export interface InvokeHooks {
+  onStart?: (type: "invoke" | "resume") => void;
+  onEnd?: () => void;
+}
+
+/**
  * Log full diagnostic details for an agent process failure so that
  * transient or hard-to-reproduce errors leave a durable trail.
  */
@@ -208,15 +219,28 @@ export async function invokeOrResume(
   cwd: string,
   sink?: StreamSink,
   maxAutoResumes = 3,
+  hooks?: InvokeHooks,
 ): Promise<AgentResult> {
-  const result = await invokeOrResumeOnce(
-    agent,
-    savedSessionId,
-    prompt,
-    cwd,
-    sink,
-  );
-  return retryOnTimeout(agent, result, cwd, undefined, sink, maxAutoResumes);
+  hooks?.onStart?.(savedSessionId ? "resume" : "invoke");
+  try {
+    const result = await invokeOrResumeOnce(
+      agent,
+      savedSessionId,
+      prompt,
+      cwd,
+      sink,
+    );
+    return await retryOnTimeout(
+      agent,
+      result,
+      cwd,
+      undefined,
+      sink,
+      maxAutoResumes,
+    );
+  } finally {
+    hooks?.onEnd?.();
+  }
 }
 
 /**
@@ -269,6 +293,7 @@ export async function sendFollowUp(
   cwd: string,
   sink?: StreamSink,
   maxAutoResumes = 3,
+  hooks?: InvokeHooks,
 ): Promise<AgentResult> {
   if (sessionId === undefined) {
     throw new Error(
@@ -276,10 +301,22 @@ export async function sendFollowUp(
         "The agent CLI may have failed to return a session.",
     );
   }
-  const stream = agent.resume(sessionId, prompt, { cwd });
-  if (sink) drainToSink(stream, sink);
-  const result = await stream.result;
-  return retryOnTimeout(agent, result, cwd, sessionId, sink, maxAutoResumes);
+  hooks?.onStart?.("resume");
+  try {
+    const stream = agent.resume(sessionId, prompt, { cwd });
+    if (sink) drainToSink(stream, sink);
+    const result = await stream.result;
+    return await retryOnTimeout(
+      agent,
+      result,
+      cwd,
+      sessionId,
+      sink,
+      maxAutoResumes,
+    );
+  } finally {
+    hooks?.onEnd?.();
+  }
 }
 
 /**

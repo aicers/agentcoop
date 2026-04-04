@@ -137,7 +137,7 @@ export class ClaudeStreamTransformer extends JsonlLineTransformer {
 
 export type ClaudePermissionMode = "auto" | "bypass";
 
-export type ClaudeEffortLevel = "low" | "medium" | "high";
+export type ClaudeEffortLevel = "low" | "medium" | "high" | "max";
 
 export interface ClaudeAdapterOptions {
   model?: string;

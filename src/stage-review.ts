@@ -31,6 +31,7 @@ import { buildPrSyncInstructions } from "./issue-sync.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
   drainToSink,
+  type InvokeHooks,
   invokeOrResume,
   mapAgentError,
   mapResponseToResult,
@@ -195,6 +196,8 @@ export function createReviewStageHandler(
         reviewPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.b,
+        undefined,
+        ctx.invokeHooks?.b,
       );
 
       if (reviewResult.sessionId) {
@@ -217,6 +220,7 @@ export function createReviewStageHandler(
           ctx.worktreePath,
           ctx.streamSinks?.b,
           ctx.promptSinks?.b,
+          ctx.invokeHooks?.b,
         );
         if (error) return error;
 
@@ -243,6 +247,8 @@ export function createReviewStageHandler(
         fixPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.invokeHooks?.a,
       );
 
       if (fixResult.sessionId) {
@@ -263,6 +269,8 @@ export function createReviewStageHandler(
         authorCheckPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.invokeHooks?.a,
       );
 
       if (checkResult.status === "error") {
@@ -283,6 +291,8 @@ export function createReviewStageHandler(
           retryPrompt,
           ctx.worktreePath,
           ctx.streamSinks?.a,
+          undefined,
+          ctx.invokeHooks?.a,
         );
 
         if (retryResult.status === "error") {
@@ -344,6 +354,7 @@ export function createReviewStageHandler(
           ctx.worktreePath,
           ctx.streamSinks?.b,
           ctx.promptSinks?.b,
+          ctx.invokeHooks?.b,
         );
         if (error) return error;
         if (summary) {
@@ -377,6 +388,7 @@ async function handleUnresolvedSummary(
   cwd: string,
   sink?: StreamSink,
   promptSink?: PromptSink,
+  hooks?: InvokeHooks,
 ): Promise<UnresolvedSummaryResult> {
   const summaryPrompt = buildUnresolvedSummaryPrompt(round);
   promptSink?.(summaryPrompt);
@@ -390,11 +402,18 @@ async function handleUnresolvedSummary(
       summaryPrompt,
       cwd,
       sink,
+      undefined,
+      hooks,
     );
   } else {
-    const stream = opts.agentB.invoke(summaryPrompt, { cwd });
-    if (sink) drainToSink(stream, sink);
-    result = await stream.result;
+    hooks?.onStart?.("invoke");
+    try {
+      const stream = opts.agentB.invoke(summaryPrompt, { cwd });
+      if (sink) drainToSink(stream, sink);
+      result = await stream.result;
+    } finally {
+      hooks?.onEnd?.();
+    }
   }
 
   if (result.status === "error") {

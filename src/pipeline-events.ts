@@ -26,12 +26,17 @@ export interface AgentPromptEvent {
   prompt: string;
 }
 
+export interface AgentCompleteEvent {
+  agent: "a" | "b";
+}
+
 interface PipelineEventMap {
   "agent:chunk": [AgentChunkEvent];
   "agent:prompt": [AgentPromptEvent];
   "stage:enter": [StageEnterEvent];
   "stage:exit": [StageExitEvent];
   "agent:invoke": [AgentInvokeEvent];
+  "agent:complete": [AgentCompleteEvent];
 }
 
 export class PipelineEventEmitter extends EventEmitter<PipelineEventMap> {}

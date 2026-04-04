@@ -1,5 +1,6 @@
 import { Box, type DOMElement, measureElement, Text, useInput } from "ink";
 import { useEffect, useRef, useState } from "react";
+import wrapAnsi from "wrap-ansi";
 import { t } from "../i18n/index.js";
 import type {
   PipelineEventEmitter,
@@ -15,13 +16,10 @@ import {
 const REVIEW_STAGE = 7;
 
 /** Split a logical line into terminal rows of the given width. */
-function splitIntoRows(line: string, width: number): string[] {
-  if (line.length <= width) return [line];
-  const rows: string[] = [];
-  for (let i = 0; i < line.length; i += width) {
-    rows.push(line.slice(i, i + width));
-  }
-  return rows;
+export function splitIntoRows(line: string, width: number): string[] {
+  if (width < 1) return [line];
+  const wrapped = wrapAnsi(line, width, { hard: true, trim: false });
+  return wrapped.split("\n");
 }
 
 /** A single terminal row tagged with display metadata. */
@@ -40,8 +38,10 @@ interface AgentPaneProps {
   color: string;
   /** Whether this pane currently has keyboard focus for scrolling. */
   isFocused?: boolean;
-  /** Whether scroll keyboard shortcuts are active (false when input area is active). */
-  scrollEnabled?: boolean;
+  /** Whether this agent is currently producing output. */
+  isActive?: boolean;
+  /** Whether up/down arrow scrolling is active (false during input prompts). */
+  arrowScrollEnabled?: boolean;
 }
 
 export function AgentPane({
@@ -51,7 +51,8 @@ export function AgentPane({
   emitter,
   color,
   isFocused = false,
-  scrollEnabled = false,
+  isActive = false,
+  arrowScrollEnabled = false,
 }: AgentPaneProps) {
   const { lines, pendingLine } = useAgentLines(emitter, agent);
   const containerRef = useRef<DOMElement>(null);
@@ -77,10 +78,11 @@ export function AgentPane({
   useEffect(() => {
     if (containerRef.current) {
       const { height, width } = measureElement(containerRef.current);
-      // Reserve 2 rows for the top/bottom border and 1 for the label.
-      setVisibleRows(height > 3 ? height - 3 : 0);
-      // Subtract 2 for paddingX={1} (left + right).
-      setContentWidth(width > 2 ? width - 2 : 1);
+      // Reserve 2 rows for the top/bottom border, 1 for the label,
+      // and 1 for the title separator line.
+      setVisibleRows(height > 4 ? height - 4 : 0);
+      // Subtract 4 for borderStyle="single" (2) + paddingX={1} (2).
+      setContentWidth(width > 4 ? width - 4 : 1);
     }
   });
 
@@ -123,20 +125,28 @@ export function AgentPane({
     }
   }, [scrollOffset, maxOffset]);
 
-  // Handle scroll keyboard input.
+  // PageUp/PageDown: always active when focused (no conflict with text input).
   useInput(
     (_input, key) => {
       if (key.pageUp) {
         setScrollOffset((o) => o + visibleRows);
       } else if (key.pageDown) {
         setScrollOffset((o) => Math.max(0, o - visibleRows));
-      } else if (key.upArrow) {
+      }
+    },
+    { isActive: isFocused },
+  );
+
+  // Up/Down arrows: disabled during input prompts to avoid conflicts.
+  useInput(
+    (_input, key) => {
+      if (key.upArrow) {
         setScrollOffset((o) => o + 1);
       } else if (key.downArrow) {
         setScrollOffset((o) => Math.max(0, o - 1));
       }
     },
-    { isActive: isFocused && scrollEnabled },
+    { isActive: isFocused && arrowScrollEnabled },
   );
 
   // Compute the visible window from the flat row array.
@@ -191,8 +201,8 @@ export function AgentPane({
       ? t()["agentPane.linesAbove"](linesAbove)
       : undefined;
 
-  // Dim unfocused pane border when scroll mode is available.
-  const borderCol = scrollEnabled ? (isFocused ? color : "gray") : color;
+  // Dim unfocused pane border so the focused pane is always distinguishable.
+  const borderCol = isFocused ? color : "gray";
 
   return (
     <Box
@@ -207,7 +217,10 @@ export function AgentPane({
     >
       <Text bold color={borderCol}>
         {modelName ? `${label} \u2014 ${modelName}` : label}
+        {isFocused ? " [*]" : ""}
+        {isActive ? <Text color="yellow">{" \u25CF"}</Text> : ""}
       </Text>
+      <Text dimColor>{"\u2500".repeat(contentWidth)}</Text>
       {placeholder !== undefined ? (
         <Text dimColor>{placeholder}</Text>
       ) : (

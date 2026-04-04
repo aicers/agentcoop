@@ -46,6 +46,11 @@ export function buildImplementPrompt(
     `Implement the changes required to resolve this issue.  Work inside the`,
     `worktree directory listed above.  Make sure the code compiles and any`,
     `existing tests still pass.`,
+    ``,
+    `If the project uses external services (databases, message brokers, etc.),`,
+    `start the required infrastructure via Docker Compose and run the full test`,
+    `suite against it.  If a port conflict occurs, change the port rather than`,
+    `skipping the service.`,
   ];
 
   if (ctx.userInstruction) {
@@ -83,6 +88,8 @@ export function createImplementStageHandler(
         prompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.invokeHooks?.a,
       );
 
       if (implResult.sessionId) {
@@ -102,6 +109,8 @@ export function createImplementStageHandler(
         checkPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.invokeHooks?.a,
       );
 
       if (checkResult.status === "error") {

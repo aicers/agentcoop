@@ -11,7 +11,7 @@
 
 import { t } from "./i18n/index.js";
 import type { PipelineEventEmitter } from "./pipeline-events.js";
-import type { PromptSink, StreamSink } from "./stage-util.js";
+import type { InvokeHooks, PromptSink, StreamSink } from "./stage-util.js";
 import { buildClarificationPrompt } from "./step-parser.js";
 
 // ---- public types --------------------------------------------------------
@@ -123,6 +123,12 @@ export interface StageContext {
    * user can see what the agent was asked to do.
    */
   promptSinks?: { a?: PromptSink; b?: PromptSink };
+  /**
+   * Optional hooks for agent invocation lifecycle.  Stage handlers
+   * forward these to `invokeOrResume` / `sendFollowUp` so the UI can
+   * track which agent is currently running.
+   */
+  invokeHooks?: { a?: InvokeHooks; b?: InvokeHooks };
 }
 
 // ---- user interaction interface ------------------------------------------
@@ -539,6 +545,22 @@ async function runStage(
       }
     : undefined;
 
+  // Build per-agent invoke hooks so the UI can track which agent is running.
+  const invokeHooks = events
+    ? {
+        a: {
+          onStart: (type: "invoke" | "resume") =>
+            events.emit("agent:invoke", { agent: "a" as const, type }),
+          onEnd: () => events.emit("agent:complete", { agent: "a" as const }),
+        },
+        b: {
+          onStart: (type: "invoke" | "resume") =>
+            events.emit("agent:invoke", { agent: "b" as const, type }),
+          onEnd: () => events.emit("agent:complete", { agent: "b" as const }),
+        },
+      }
+    : undefined;
+
   while (true) {
     // Notify caller before each handler invocation for persistence.
     onStageTransition?.(stage.number, lc.iteration);
@@ -559,6 +581,7 @@ async function runStage(
       savedAgentBSessionId,
       streamSinks,
       promptSinks,
+      invokeHooks,
     };
 
     // Clear one-shot fields after use.

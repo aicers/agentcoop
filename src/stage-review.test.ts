@@ -10,6 +10,7 @@ import {
   createReviewStageHandler,
   type ReviewStageOptions,
 } from "./stage-review.js";
+import type { InvokeHooks } from "./stage-util.js";
 
 // ---- helpers ---------------------------------------------------------------
 
@@ -1161,5 +1162,75 @@ describe("onSessionId", () => {
     await stage.handler(ctx);
     expect(sessionCalls).toContainEqual(["b", "sess-b-1"]);
     expect(sessionCalls).toContainEqual(["a", "sess-a-1"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// invokeHooks — in-stage B → A handoff
+// ---------------------------------------------------------------------------
+describe("invokeHooks during in-stage B → A handoff", () => {
+  test("fires onStart/onEnd in B-complete-then-A-start order", async () => {
+    const events: string[] = [];
+
+    const hooksA: InvokeHooks = {
+      onStart: () => events.push("a:start"),
+      onEnd: () => events.push("a:end"),
+    };
+    const hooksB: InvokeHooks = {
+      onStart: () => events.push("b:start"),
+      onEnd: () => events.push("b:end"),
+    };
+
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "NOT_APPROVED",
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a",
+            responseText: "Fixed.",
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+
+    const opts = makeOpts({ agentA, agentB });
+    const stage = createReviewStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      invokeHooks: { a: hooksA, b: hooksB },
+    };
+    await stage.handler(ctx);
+
+    // B must complete before A starts — no stale active marker.
+    const bEnd = events.indexOf("b:end");
+    const aStart = events.indexOf("a:start");
+    expect(bEnd).toBeGreaterThanOrEqual(0);
+    expect(aStart).toBeGreaterThanOrEqual(0);
+    expect(bEnd).toBeLessThan(aStart);
+
+    // Each invocation should have a matching start/end pair.
+    expect(events.filter((e) => e === "b:start")).toHaveLength(1);
+    expect(events.filter((e) => e === "b:end")).toHaveLength(1);
+    // A has invoke + sendFollowUp = 2 start/end pairs.
+    expect(events.filter((e) => e === "a:start").length).toBeGreaterThanOrEqual(
+      1,
+    );
+    expect(events.filter((e) => e === "a:end").length).toBeGreaterThanOrEqual(
+      1,
+    );
   });
 });

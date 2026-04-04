@@ -535,6 +535,17 @@ describe("buildClaudeArgs", () => {
     expect(args).toContain("high");
   });
 
+  test("includes --effort max for Opus max effort", () => {
+    const args = buildClaudeArgs("prompt", {
+      model: "opus",
+      permissionMode: "auto",
+      effortLevel: "max",
+    });
+
+    expect(args).toContain("--effort");
+    expect(args).toContain("max");
+  });
+
   test("omits --effort when effortLevel is undefined", () => {
     const args = buildClaudeArgs("prompt", {
       permissionMode: "auto",

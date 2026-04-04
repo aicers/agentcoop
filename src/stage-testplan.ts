@@ -51,6 +51,22 @@ export function buildTestPlanVerifyPrompt(
     `1. Find the pull request for this branch (use \`gh pr view\`).`,
     `2. Go through each item in the PR's "Test plan" checklist.  For`,
     `   each item, actually run or verify the described test or behavior.`,
+    `   - Start all required infrastructure using Docker Compose.  If a`,
+    `     port conflict occurs, change the port rather than skipping the`,
+    `     service.`,
+    `   - If a browser is needed for testing, launch one (e.g., headless`,
+    `     Chrome via Playwright).`,
+    `   - For manual test items, do not defer them to the user.  Act as`,
+    `     the end user: launch the application, navigate the UI, verify`,
+    `     behavior, and check off each item yourself.  Use browser`,
+    `     automation (Playwright, headless Chrome) or direct CLI/API`,
+    `     interaction to replicate what a human user would do.`,
+    `   - Only flag a test item for the user if it is truly impossible`,
+    `     to verify programmatically (e.g., subjective visual design`,
+    `     judgment).`,
+    `   - When documentation or the PR requires screenshots, do not use`,
+    `     placeholders.  Actually start the application, open a browser,`,
+    `     and capture real screenshots.`,
     `3. Check off each verified item in the PR using \`gh\` commands.`,
     `4. Also go through the task checklist in the GitHub issue.  Check`,
     `   off each completed task using \`gh\` commands.`,
@@ -99,6 +115,8 @@ export function createTestPlanStageHandler(
         verifyPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.invokeHooks?.a,
       );
 
       if (verifyResult.sessionId) {
@@ -118,6 +136,8 @@ export function createTestPlanStageHandler(
         selfCheckPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.invokeHooks?.a,
       );
 
       if (checkResult.status === "error") {

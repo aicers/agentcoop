@@ -66,10 +66,16 @@ export function buildSelfCheckPrompt(
     `item, briefly note whether it passes or needs attention.`,
     ``,
     `1. **Correctness** — Does the implementation fully address the issue?`,
-    `2. **Tests** — Are there sufficient tests?  Do all tests pass?`,
+    `2. **Tests** — Are there sufficient tests?  Actually run the full test`,
+    `   suite and verify all tests pass.  If tests require infrastructure`,
+    `   (databases, message brokers, etc.), start it via Docker Compose.  If`,
+    `   a port conflict occurs, change the port rather than skipping the`,
+    `   service.`,
     `3. **Error handling** — Are errors handled gracefully?`,
     `4. **External services** — Are API calls, network requests, or external`,
-    `   service integrations correct and resilient?`,
+    `   service integrations correct and resilient?  Start all required`,
+    `   services (via Docker Compose or similar) and run integration tests`,
+    `   against them rather than skipping tests that need external services.`,
     `5. **Documentation consistency** — Are comments, READMEs, and inline`,
     `   docs consistent with the code changes?`,
     `6. **Security** — Are there any security concerns (injection, auth,`,
@@ -111,6 +117,8 @@ export function createSelfCheckStageHandler(
         checkPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.invokeHooks?.a,
       );
 
       if (checkResult.sessionId) {
@@ -130,6 +138,8 @@ export function createSelfCheckStageHandler(
         fixPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.invokeHooks?.a,
       );
 
       if (fixResult.status === "error") {
@@ -149,6 +159,8 @@ export function createSelfCheckStageHandler(
             syncPrompt,
             ctx.worktreePath,
             ctx.streamSinks?.a,
+            undefined,
+            ctx.invokeHooks?.a,
           );
 
           if (syncResult.status === "success") {

@@ -100,32 +100,45 @@ export function bootstrapRepo(owner: string, repo: string): string {
         EXEC_OPTS,
       );
       ensureFetchRefspec(dest);
+      // After a bare clone the repo only has refs/heads/*; fetch once
+      // to populate refs/remotes/origin/* so createWorktree() can
+      // reference origin/<baseBranch>.
+      execFileSync("git", ["fetch", "--all", "--prune"], {
+        ...EXEC_OPTS,
+        cwd: dest,
+      });
     }
   });
 
   return dest;
 }
 
-const FETCH_REFSPEC = "+refs/heads/*:refs/heads/*";
+const FETCH_REFSPEC = "+refs/heads/*:refs/remotes/origin/*";
 
 /**
- * Set `remote.origin.fetch` if it is missing or empty.
+ * Ensure `remote.origin.fetch` uses the correct refspec.
  *
  * `git clone --bare` does not create this config entry, so without it
  * `git fetch --all` has nothing to fetch and local refs stay stale.
+ *
+ * Existing bare repos may still have the legacy refspec
+ * `+refs/heads/*:refs/heads/*` which writes directly into local branch
+ * refs and conflicts with checked-out worktree branches.  This function
+ * replaces it with the remote-tracking variant.
  */
 function ensureFetchRefspec(cwd: string): void {
+  let current = "";
   try {
-    const current = (
+    current = (
       execFileSync("git", ["config", "remote.origin.fetch"], {
         ...EXEC_OPTS,
         cwd,
       }) as string
     ).trim();
-    if (current) return;
   } catch {
     // Config key missing — fall through to set it.
   }
+  if (current === FETCH_REFSPEC) return;
   execFileSync("git", ["config", "remote.origin.fetch", FETCH_REFSPEC], {
     ...EXEC_OPTS,
     cwd,
@@ -170,7 +183,7 @@ function getCheckedOutBranch(wtPath: string): string {
 export function countBranchCommits(cwd: string, baseBranch: string): number {
   const output = execFileSync(
     "git",
-    ["rev-list", "--count", `${baseBranch}..HEAD`],
+    ["rev-list", "--count", `origin/${baseBranch}..HEAD`],
     { ...EXEC_OPTS, cwd },
   ) as string;
   return Number.parseInt(output.trim(), 10);
@@ -279,7 +292,7 @@ export function createWorktree(options: {
         // Recreate.
         execFileSync(
           "git",
-          ["worktree", "add", "-b", branch, wtPath, baseBranch],
+          ["worktree", "add", "-b", branch, wtPath, `origin/${baseBranch}`],
           { ...EXEC_OPTS, cwd: bare },
         );
       });
@@ -295,10 +308,11 @@ export function createWorktree(options: {
   // Create the worktree with a new branch tracking the base branch.
   const lockPath = repoLockPath(owner, repo);
   withLock(lockPath, () => {
-    execFileSync("git", ["worktree", "add", "-b", branch, wtPath, baseBranch], {
-      ...EXEC_OPTS,
-      cwd: bare,
-    });
+    execFileSync(
+      "git",
+      ["worktree", "add", "-b", branch, wtPath, `origin/${baseBranch}`],
+      { ...EXEC_OPTS, cwd: bare },
+    );
   });
 
   return { path: wtPath, branch, hadUncommittedChanges: false };

@@ -188,6 +188,8 @@ export function createCiCheckStageHandler(
         prompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.invokeHooks?.a,
       );
 
       if (fixResult.sessionId) {

@@ -3,6 +3,7 @@ import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
 import type { CiRun, CiStatus, CiVerdict } from "./ci.js";
 import { type CiPollOptions, pollCiAndFix } from "./ci-poll.js";
 import type { StageContext } from "./pipeline.js";
+import type { InvokeHooks } from "./stage-util.js";
 
 // ---- helpers ---------------------------------------------------------------
 
@@ -525,5 +526,74 @@ describe("pollCiAndFix", () => {
     expect(result.message).toContain("still pending");
 
     vi.restoreAllMocks();
+  });
+
+  // -- invokeHooks fire around CI-fix invocation ------------------------------
+
+  test("fires invokeHooks onStart/onEnd around CI-fix invocation", async () => {
+    const events: string[] = [];
+    const hooksA: InvokeHooks = {
+      onStart: (type) => events.push(`a:start:${type}`),
+      onEnd: () => events.push("a:end"),
+    };
+
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      )
+      .mockReturnValueOnce(makeCiStatus("pass"));
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+
+    const agent = makeAgent();
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      invokeHooks: { a: hooksA },
+    };
+
+    await pollCiAndFix(
+      makeOpts({ ctx, agent, getCiStatus, collectFailureLogs }),
+    );
+
+    expect(events).toEqual(["a:start:invoke", "a:end"]);
+  });
+
+  test("fires invokeHooks onEnd even when agent errors during CI fix", async () => {
+    const events: string[] = [];
+    const hooksA: InvokeHooks = {
+      onStart: (type) => events.push(`a:start:${type}`),
+      onEnd: () => events.push("a:end"),
+    };
+
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      );
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+    const agent = makeAgent(
+      makeResult({
+        status: "error",
+        errorType: "execution_error",
+        stderrText: "crash",
+        responseText: "",
+      }),
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      invokeHooks: { a: hooksA },
+    };
+
+    await pollCiAndFix(
+      makeOpts({ ctx, agent, getCiStatus, collectFailureLogs }),
+    );
+
+    // onEnd must fire even when the agent errors — cleanup is guaranteed.
+    expect(events).toEqual(["a:start:invoke", "a:end"]);
+
+    errorSpy.mockRestore();
   });
 });
