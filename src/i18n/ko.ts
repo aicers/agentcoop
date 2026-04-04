@@ -129,11 +129,18 @@ export const ko: Messages = {
   "pipeline.pipelineCompleted": (owner, repo, issue) =>
     `${owner}/${repo}#${issue} \uD30C\uC774\uD504\uB77C\uC778\uC774 \uC644\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.`,
   "pipeline.mergeConfirm":
-    "PR\uC774 \uBCD1\uD569\uB418\uC5C8\uC2B5\uB2C8\uAE4C? \uD655\uC778\uD558\uBA74 \uC6CC\uD06C\uD2B8\uB9AC\uB97C \uC815\uB9AC\uD569\uB2C8\uB2E4.",
-  "pipeline.worktreeCleanedUp":
-    "\uC6CC\uD06C\uD2B8\uB9AC\uAC00 \uC815\uB9AC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.",
-  "pipeline.worktreePreserved":
-    "\uC6CC\uD06C\uD2B8\uB9AC\uAC00 \uBCF4\uC874\uB418\uC5C8\uC2B5\uB2C8\uB2E4 (\uBCD1\uD569 \uBBF8\uD655\uC778).",
+    "PR이 병합되었습니까? 확인하면 워크트리를 정리합니다.",
+  "pipeline.worktreeCleanedUp": "워크트리가 정리되었습니다.",
+  "pipeline.worktreePreserved": "워크트리가 보존되었습니다 (병합 미확인).",
+  "pipeline.conflictsDetected":
+    "파이프라인이 완료되었지만 main과 병합 충돌이 감지되었습니다.",
+  "pipeline.unknownMergeable": "재시도 후에도 병합 상태를 확인할 수 없습니다.",
+  "pipeline.rebaseSuccess":
+    "에이전트가 main으로 리베이스를 성공적으로 완료했습니다.",
+  "pipeline.rebaseFailed":
+    "에이전트가 충돌을 해결하지 못했습니다. 수동으로 해결해 주세요.",
+  "pipeline.stillConflicting": "해결 시도 후에도 여전히 충돌이 있습니다.",
+  "pipeline.ciPassedAfterRebase": "리베이스 후 CI를 통과했습니다.",
 
   // ---- TUI user prompts --------------------------------------------------
 
@@ -157,10 +164,13 @@ export const ko: Messages = {
   "prompt.ambiguous": (message) =>
     `\uBAA8\uD638\uD55C \uC5D0\uC774\uC804\uD2B8 \uC751\uB2F5:\n${message}`,
   "prompt.proceed": "\uC9C4\uD589",
-  "prompt.yesMerged": "\uC608, \uBCD1\uD569\uB428",
-  "prompt.noKeepWorktree":
-    "\uC544\uB2C8\uC624, \uC6CC\uD06C\uD2B8\uB9AC \uC720\uC9C0",
-  "prompt.ok": "\uD655\uC778",
+  "prompt.yesMerged": "예, 병합됨",
+  "prompt.noKeepWorktree": "아니오, 워크트리 유지",
+  "prompt.agentRebase": "에이전트 리베이스",
+  "prompt.manualResolve": "수동 해결",
+  "prompt.recheck": "재확인",
+  "prompt.exit": "종료",
+  "prompt.pressAnyKeyWhenDone": "완료되면 Enter를 누르세요.",
 
   // ---- status bar --------------------------------------------------------
 

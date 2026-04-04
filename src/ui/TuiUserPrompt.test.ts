@@ -201,17 +201,61 @@ describe("TuiUserPrompt", () => {
     });
   });
 
-  describe("reportCompletion", () => {
-    test("dispatches message and waits for acknowledgement", async () => {
-      const dispatch = makeDispatch("ok");
+  describe("handleConflict", () => {
+    test("returns agent_rebase when user selects agent rebase", async () => {
+      const dispatch = makeDispatch("agent_rebase");
       const prompt = createTuiUserPrompt(dispatch);
-      await prompt.reportCompletion("Pipeline done.");
+      expect(await prompt.handleConflict("conflicts detected")).toBe(
+        "agent_rebase",
+      );
+    });
+
+    test("returns manual when user selects manual resolve", async () => {
+      const dispatch = makeDispatch("manual");
+      const prompt = createTuiUserPrompt(dispatch);
+      expect(await prompt.handleConflict("conflicts detected")).toBe("manual");
+    });
+
+    test("dispatches with agent_rebase and manual choices", async () => {
+      const dispatch = makeDispatch("manual");
+      const prompt = createTuiUserPrompt(dispatch);
+      await prompt.handleConflict("conflicts");
       expect(dispatch).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: "Pipeline done.",
+          message: "conflicts",
           choices: expect.arrayContaining([
-            expect.objectContaining({ value: "ok" }),
+            expect.objectContaining({ value: "agent_rebase" }),
+            expect.objectContaining({ value: "manual" }),
           ]),
+        }),
+      );
+    });
+  });
+
+  describe("handleUnknownMergeable", () => {
+    test("returns recheck when user selects re-check", async () => {
+      const dispatch = makeDispatch("recheck");
+      const prompt = createTuiUserPrompt(dispatch);
+      expect(await prompt.handleUnknownMergeable("unknown state")).toBe(
+        "recheck",
+      );
+    });
+
+    test("returns exit when user selects exit", async () => {
+      const dispatch = makeDispatch("exit");
+      const prompt = createTuiUserPrompt(dispatch);
+      expect(await prompt.handleUnknownMergeable("unknown state")).toBe("exit");
+    });
+  });
+
+  describe("waitForManualResolve", () => {
+    test("dispatches message and waits for user input", async () => {
+      const dispatch = makeDispatch("");
+      const prompt = createTuiUserPrompt(dispatch);
+      await prompt.waitForManualResolve("Press Enter when done.");
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "Press Enter when done.",
         }),
       );
     });

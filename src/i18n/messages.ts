@@ -109,6 +109,12 @@ export interface Messages {
   "pipeline.mergeConfirm": string;
   "pipeline.worktreeCleanedUp": string;
   "pipeline.worktreePreserved": string;
+  "pipeline.conflictsDetected": string;
+  "pipeline.unknownMergeable": string;
+  "pipeline.rebaseSuccess": string;
+  "pipeline.rebaseFailed": string;
+  "pipeline.stillConflicting": string;
+  "pipeline.ciPassedAfterRebase": string;
 
   // ---- TUI user prompts (TuiUserPrompt.ts) -------------------------------
 
@@ -130,7 +136,11 @@ export interface Messages {
   "prompt.proceed": string;
   "prompt.yesMerged": string;
   "prompt.noKeepWorktree": string;
-  "prompt.ok": string;
+  "prompt.agentRebase": string;
+  "prompt.manualResolve": string;
+  "prompt.recheck": string;
+  "prompt.exit": string;
+  "prompt.pressAnyKeyWhenDone": string;
 
   // ---- status bar (StatusBar.tsx) ----------------------------------------
 

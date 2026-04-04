@@ -87,7 +87,9 @@ function makePrompt(overrides: Partial<UserPrompt> = {}): UserPrompt {
       .fn()
       .mockResolvedValue({ action: "halt" satisfies UserAction }),
     confirmMerge: vi.fn().mockResolvedValue(true),
-    reportCompletion: vi.fn().mockResolvedValue(undefined),
+    handleConflict: vi.fn().mockResolvedValue("manual"),
+    handleUnknownMergeable: vi.fn().mockResolvedValue("exit"),
+    waitForManualResolve: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }

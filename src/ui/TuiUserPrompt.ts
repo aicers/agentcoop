@@ -124,11 +124,32 @@ export function createTuiUserPrompt(dispatch: PromptDispatch): UserPrompt {
       return response === "yes";
     },
 
-    async reportCompletion(message: string): Promise<void> {
-      await dispatch({
+    async handleConflict(message: string): Promise<"agent_rebase" | "manual"> {
+      const m = t();
+      const response = await dispatch({
         message,
-        choices: [{ label: t()["prompt.ok"], value: "ok" }],
+        choices: [
+          { label: m["prompt.agentRebase"], value: "agent_rebase" },
+          { label: m["prompt.manualResolve"], value: "manual" },
+        ],
       });
+      return response as "agent_rebase" | "manual";
+    },
+
+    async handleUnknownMergeable(message: string): Promise<"recheck" | "exit"> {
+      const m = t();
+      const response = await dispatch({
+        message,
+        choices: [
+          { label: m["prompt.recheck"], value: "recheck" },
+          { label: m["prompt.exit"], value: "exit" },
+        ],
+      });
+      return response as "recheck" | "exit";
+    },
+
+    async waitForManualResolve(message: string): Promise<void> {
+      await dispatch({ message });
     },
 
     async confirmCleanup(message: string): Promise<boolean> {

@@ -110,6 +110,15 @@ export const en: Messages = {
     "Has the PR been merged? Confirm to clean up the worktree.",
   "pipeline.worktreeCleanedUp": "Worktree cleaned up.",
   "pipeline.worktreePreserved": "Worktree preserved (merge not confirmed).",
+  "pipeline.conflictsDetected":
+    "Pipeline completed, but merge conflicts with main detected.",
+  "pipeline.unknownMergeable":
+    "Could not determine merge status after retries.",
+  "pipeline.rebaseSuccess": "Agent rebased onto main successfully.",
+  "pipeline.rebaseFailed":
+    "Agent could not resolve conflicts. Please resolve manually.",
+  "pipeline.stillConflicting": "Still conflicting after resolution attempt.",
+  "pipeline.ciPassedAfterRebase": "CI passed after rebase.",
 
   // ---- TUI user prompts --------------------------------------------------
 
@@ -133,7 +142,11 @@ export const en: Messages = {
   "prompt.proceed": "Proceed",
   "prompt.yesMerged": "Yes, merged",
   "prompt.noKeepWorktree": "No, keep worktree",
-  "prompt.ok": "OK",
+  "prompt.agentRebase": "Let agent rebase",
+  "prompt.manualResolve": "Resolve manually",
+  "prompt.recheck": "Re-check",
+  "prompt.exit": "Exit",
+  "prompt.pressAnyKeyWhenDone": "Press Enter when done.",
 
   // ---- status bar --------------------------------------------------------
 

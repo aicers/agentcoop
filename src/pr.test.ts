@@ -5,7 +5,9 @@ vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
 }));
 
-const { findPrNumber } = await import("./pr.js");
+const { checkMergeable, findPrNumber, queryMergeableState } = await import(
+  "./pr.js"
+);
 
 const mockExecFileSync = vi.mocked(execFileSync);
 
@@ -67,5 +69,163 @@ describe("findPrNumber", () => {
   test("returns undefined on malformed JSON output", () => {
     mockExecFileSync.mockReturnValue("not json at all");
     expect(findPrNumber("org", "repo", "issue-5")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// queryMergeableState
+// ---------------------------------------------------------------------------
+describe("queryMergeableState", () => {
+  test("returns MERGEABLE when gh reports mergeable", () => {
+    mockExecFileSync.mockReturnValue(
+      JSON.stringify({ mergeable: "MERGEABLE" }),
+    );
+    expect(queryMergeableState("org", "repo", "branch")).toBe("MERGEABLE");
+  });
+
+  test("returns CONFLICTING when gh reports conflicting", () => {
+    mockExecFileSync.mockReturnValue(
+      JSON.stringify({ mergeable: "CONFLICTING" }),
+    );
+    expect(queryMergeableState("org", "repo", "branch")).toBe("CONFLICTING");
+  });
+
+  test("returns UNKNOWN when gh reports unknown", () => {
+    mockExecFileSync.mockReturnValue(JSON.stringify({ mergeable: "UNKNOWN" }));
+    expect(queryMergeableState("org", "repo", "branch")).toBe("UNKNOWN");
+  });
+
+  test("returns UNKNOWN for unexpected mergeable value", () => {
+    mockExecFileSync.mockReturnValue(
+      JSON.stringify({ mergeable: "SOMETHING_ELSE" }),
+    );
+    expect(queryMergeableState("org", "repo", "branch")).toBe("UNKNOWN");
+  });
+
+  test("returns UNKNOWN when gh command throws", () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error("gh: not authenticated");
+    });
+    expect(queryMergeableState("org", "repo", "branch")).toBe("UNKNOWN");
+  });
+
+  test("returns UNKNOWN on malformed JSON output", () => {
+    mockExecFileSync.mockReturnValue("not json");
+    expect(queryMergeableState("org", "repo", "branch")).toBe("UNKNOWN");
+  });
+
+  test("calls gh with correct arguments", () => {
+    mockExecFileSync.mockReturnValue(
+      JSON.stringify({ mergeable: "MERGEABLE" }),
+    );
+    queryMergeableState("aicers", "agentcoop", "feature-branch");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "gh",
+      [
+        "pr",
+        "view",
+        "--repo",
+        "aicers/agentcoop",
+        "feature-branch",
+        "--json",
+        "mergeable",
+      ],
+      { encoding: "utf-8" },
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkMergeable
+// ---------------------------------------------------------------------------
+describe("checkMergeable", () => {
+  const noDelay = async () => {};
+
+  test("returns MERGEABLE immediately when first query succeeds", async () => {
+    const query = vi.fn().mockReturnValue("MERGEABLE");
+    const result = await checkMergeable("o", "r", "b", {
+      queryMergeable: query,
+      delay: noDelay,
+    });
+    expect(result).toBe("MERGEABLE");
+    expect(query).toHaveBeenCalledOnce();
+  });
+
+  test("returns CONFLICTING immediately without retrying", async () => {
+    const query = vi.fn().mockReturnValue("CONFLICTING");
+    const result = await checkMergeable("o", "r", "b", {
+      queryMergeable: query,
+      delay: noDelay,
+    });
+    expect(result).toBe("CONFLICTING");
+    expect(query).toHaveBeenCalledOnce();
+  });
+
+  test("retries on UNKNOWN and resolves to MERGEABLE", async () => {
+    const query = vi
+      .fn()
+      .mockReturnValueOnce("UNKNOWN")
+      .mockReturnValueOnce("UNKNOWN")
+      .mockReturnValueOnce("MERGEABLE");
+    const result = await checkMergeable("o", "r", "b", {
+      queryMergeable: query,
+      delay: noDelay,
+      maxRetries: 5,
+    });
+    expect(result).toBe("MERGEABLE");
+    expect(query).toHaveBeenCalledTimes(3);
+  });
+
+  test("returns UNKNOWN after exhausting retries", async () => {
+    const query = vi.fn().mockReturnValue("UNKNOWN");
+    const result = await checkMergeable("o", "r", "b", {
+      queryMergeable: query,
+      delay: noDelay,
+      maxRetries: 3,
+    });
+    expect(result).toBe("UNKNOWN");
+    // 1 initial + 3 retries = 4 total
+    expect(query).toHaveBeenCalledTimes(4);
+  });
+
+  test("uses exponential backoff delays", async () => {
+    const query = vi.fn().mockReturnValue("UNKNOWN");
+    const delays: number[] = [];
+    const delay = async (ms: number) => {
+      delays.push(ms);
+    };
+    await checkMergeable("o", "r", "b", {
+      queryMergeable: query,
+      delay,
+      maxRetries: 3,
+      initialDelayMs: 100,
+    });
+    expect(delays).toEqual([100, 200, 400]);
+  });
+
+  test("does not delay after last retry", async () => {
+    const query = vi.fn().mockReturnValue("UNKNOWN");
+    const delays: number[] = [];
+    const delay = async (ms: number) => {
+      delays.push(ms);
+    };
+    await checkMergeable("o", "r", "b", {
+      queryMergeable: query,
+      delay,
+      maxRetries: 2,
+      initialDelayMs: 50,
+    });
+    // 2 retries → 2 delays (after attempt 0 and 1, not after attempt 2)
+    expect(delays).toEqual([50, 100]);
+  });
+
+  test("defaults to 5 retries when maxRetries not specified", async () => {
+    const query = vi.fn().mockReturnValue("UNKNOWN");
+    await checkMergeable("o", "r", "b", {
+      queryMergeable: query,
+      delay: noDelay,
+    });
+    // 1 initial + 5 retries = 6 total
+    expect(query).toHaveBeenCalledTimes(6);
   });
 });
