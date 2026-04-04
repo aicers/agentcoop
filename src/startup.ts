@@ -165,6 +165,13 @@ export async function runStartup(
           : m["startup.languageEnglish"],
       ),
     );
+    const ps = config.pipelineSettings;
+    const labels = settingLabels();
+    console.log(m["quickStart.pipelineSettings"]);
+    for (const key of SETTING_KEYS) {
+      const label = labels[key].padEnd(30);
+      console.log(`    ${label} ${formatSettingValue(key, ps[key])}`);
+    }
     console.log();
 
     const reuse = await confirm({
