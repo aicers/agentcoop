@@ -28,6 +28,7 @@ function makeRunState(overrides: Partial<RunState> = {}): RunState {
     issueNumber: 42,
     branch: "issue-42",
     worktreePath: "/tmp/wt/issue-42",
+    baseSha: undefined,
     prNumber: undefined,
     currentStage: 2,
     stageLoopCount: 0,
@@ -306,6 +307,20 @@ describe("resume preserves contextWindow and effortLevel", () => {
     expect(loaded).toBeDefined();
     expect(loaded?.agentA.contextWindow).toBeUndefined();
     expect(loaded?.agentA.effortLevel).toBeUndefined();
+  });
+
+  test("loads state saved without baseSha (backward compat)", () => {
+    const raw = { ...makeRunState() };
+    delete (raw as Record<string, unknown>).baseSha;
+    const path = runStatePath("org", "repo", 42);
+    mkdirSync(join(tmpHome, ".agentcoop", "runs", "org", "repo"), {
+      recursive: true,
+    });
+    writeFileSync(path, JSON.stringify(raw));
+    const loaded = loadRunState("org", "repo", 42);
+
+    expect(loaded).toBeDefined();
+    expect(loaded?.baseSha).toBeUndefined();
   });
 
   test("loads state saved without contextWindow/effortLevel (backward compat)", () => {

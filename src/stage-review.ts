@@ -146,8 +146,11 @@ export function buildAuthorFixPrompt(
     `3. Fix all agreed-upon items from the review.`,
     `4. Post a response as a PR comment prefixed with`,
     `   \`**[Author Round ${round}]**\` summarising what you changed.`,
-    `5. ${buildPrSyncInstructions(ctx.issueNumber)}`,
-    `6. Commit and push your changes so a new CI run is triggered.`,
+    `5. If your code changes affect the visual output shown in existing`,
+    `   screenshots, retake those screenshots by starting the application,`,
+    `   opening a browser, and capturing updated images.`,
+    `6. ${buildPrSyncInstructions(ctx.issueNumber)}`,
+    `7. Commit and push your changes so a new CI run is triggered.`,
   ];
 
   return lines.join("\n");

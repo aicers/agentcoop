@@ -131,6 +131,7 @@ export interface Messages {
   "statusBar.roundInProgress": (round: number) => string;
   "statusBar.roundDone": (round: number) => string;
   "statusBar.last": (outcome: string) => string;
+  "statusBar.base": (sha: string) => string;
   "statusBar.selfCheck": (count: number) => string;
   "statusBar.review": (count: number) => string;
   "outcome.completed": string;

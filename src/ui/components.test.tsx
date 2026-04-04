@@ -789,6 +789,38 @@ describe("StatusBar", () => {
     expect(frame).not.toContain("Self-check:");
     expect(frame).not.toContain("Review:");
   });
+
+  test("shows abbreviated base SHA when baseSha is provided", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={49}
+        baseSha="abc1234def567890"
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Base: abc1234");
+    expect(frame).not.toContain("abc1234def567890");
+  });
+
+  test("hides base SHA when baseSha is not provided", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={49}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).not.toContain("Base:");
+  });
 });
 
 // ---- InputArea ---------------------------------------------------------------

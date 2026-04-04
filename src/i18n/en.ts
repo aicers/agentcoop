@@ -134,6 +134,7 @@ export const en: Messages = {
   "statusBar.roundInProgress": (round) => `Round: ${round} (in progress)`,
   "statusBar.roundDone": (round) => `Round: ${round} (done)`,
   "statusBar.last": (outcome) => `Last: ${outcome}`,
+  "statusBar.base": (sha) => `Base: ${sha}`,
   "statusBar.selfCheck": (count) => `Self-check: ${count}`,
   "statusBar.review": (count) => `Review: ${count}`,
   "outcome.completed": "completed",

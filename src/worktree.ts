@@ -25,6 +25,8 @@ export interface WorktreeResult {
   branch: string;
   /** True when the worktree had uncommitted changes (only for "reuse"/"clean"). */
   hadUncommittedChanges: boolean;
+  /** Full SHA of the base commit (tip of origin/{baseBranch} at creation time). */
+  baseSha: string;
 }
 
 // ---- path helpers --------------------------------------------------------
@@ -174,6 +176,40 @@ function getCheckedOutBranch(wtPath: string): string {
   ).trim();
 }
 
+/**
+ * Resolve the full SHA of `origin/{baseBranch}` in the given worktree.
+ *
+ * Use this only for freshly created worktrees where HEAD is based on
+ * `origin/{baseBranch}`.  For reused worktrees (where origin may have
+ * advanced), use {@link resolveMergeBase} instead to find the actual
+ * fork point.
+ */
+export function resolveBaseSha(cwd: string, baseBranch: string): string {
+  return (
+    execFileSync("git", ["rev-parse", `origin/${baseBranch}`], {
+      ...EXEC_OPTS,
+      cwd,
+    }) as string
+  ).trim();
+}
+
+/**
+ * Find the merge-base between HEAD and `origin/{baseBranch}`.
+ *
+ * This returns the commit where the current branch diverged from the
+ * base branch — the correct squash boundary for reused worktrees
+ * where `origin/{baseBranch}` may have advanced since the worktree
+ * was originally created.
+ */
+export function resolveMergeBase(cwd: string, baseBranch: string): string {
+  return (
+    execFileSync("git", ["merge-base", `origin/${baseBranch}`, "HEAD"], {
+      ...EXEC_OPTS,
+      cwd,
+    }) as string
+  ).trim();
+}
+
 // ---- branch commit count -------------------------------------------------
 
 /**
@@ -296,13 +332,23 @@ export function createWorktree(options: {
           { ...EXEC_OPTS, cwd: bare },
         );
       });
-      return { path: wtPath, branch, hadUncommittedChanges: dirty };
+      const baseSha = resolveBaseSha(wtPath, baseBranch);
+      return { path: wtPath, branch, hadUncommittedChanges: dirty, baseSha };
     }
 
     // "reuse" — detect the actual branch in the worktree, which may
     // differ from the requested name (e.g. legacy `issue-N` worktrees).
+    // Use merge-base instead of resolveBaseSha because origin may have
+    // advanced since the worktree was originally created; merge-base
+    // finds the actual fork point of this branch.
     const actualBranch = getCheckedOutBranch(wtPath);
-    return { path: wtPath, branch: actualBranch, hadUncommittedChanges: dirty };
+    const baseSha = resolveMergeBase(wtPath, baseBranch);
+    return {
+      path: wtPath,
+      branch: actualBranch,
+      hadUncommittedChanges: dirty,
+      baseSha,
+    };
   }
 
   // Create the worktree with a new branch tracking the base branch.
@@ -315,7 +361,8 @@ export function createWorktree(options: {
     );
   });
 
-  return { path: wtPath, branch, hadUncommittedChanges: false };
+  const baseSha = resolveBaseSha(wtPath, baseBranch);
+  return { path: wtPath, branch, hadUncommittedChanges: false, baseSha };
 }
 
 /**

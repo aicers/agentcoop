@@ -149,6 +149,24 @@ describe("buildAuthorFixPrompt", () => {
     expect(prompt).toContain("[Author Round 2]");
     expect(prompt).toContain("Commit and push");
   });
+
+  test("instructs to retake screenshots when changes affect visuals", () => {
+    const prompt = buildAuthorFixPrompt(BASE_CTX, makeOpts(), 1);
+    expect(prompt).toContain("retake");
+    expect(prompt).toContain("screenshots");
+  });
+
+  test("step numbers are correctly ordered after screenshot step insertion", () => {
+    const prompt = buildAuthorFixPrompt(BASE_CTX, makeOpts(), 1);
+    // Verify the 7 steps appear in order. Extract step numbers.
+    const stepNumbers = [...prompt.matchAll(/^(\d+)\.\s/gm)].map((m) =>
+      Number(m[1]),
+    );
+    expect(stepNumbers).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    // Step 5 is about screenshots, step 7 is commit-and-push.
+    expect(prompt).toContain("5. If your code changes affect");
+    expect(prompt).toContain("7. Commit and push");
+  });
 });
 
 describe("buildAuthorCompletionCheckPrompt", () => {

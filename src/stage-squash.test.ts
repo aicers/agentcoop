@@ -104,7 +104,7 @@ describe("buildSquashPrompt", () => {
     expect(prompt).toContain("The widget is broken.");
   });
 
-  test("includes squash instructions", () => {
+  test("includes squash and force-push instructions", () => {
     const prompt = buildSquashPrompt(BASE_CTX, makeOpts());
     expect(prompt).toContain("Squash all commits");
     expect(prompt).toContain("Force-push the branch");
@@ -126,6 +126,19 @@ describe("buildSquashPrompt", () => {
   test("omits feedback section when no instruction", () => {
     const prompt = buildSquashPrompt(BASE_CTX, makeOpts());
     expect(prompt).not.toContain("Additional feedback");
+  });
+
+  test("includes base SHA in squash range when baseSha is set", () => {
+    const ctx = { ...BASE_CTX, baseSha: "abc1234def5678" };
+    const prompt = buildSquashPrompt(ctx, makeOpts());
+    expect(prompt).toContain("abc1234def5678");
+    expect(prompt).toContain("git reset --soft abc1234def5678");
+  });
+
+  test("falls back to generic squash when baseSha is absent", () => {
+    const prompt = buildSquashPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("Squash all commits on this branch");
+    expect(prompt).not.toContain("git reset --soft");
   });
 });
 

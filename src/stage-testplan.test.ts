@@ -92,10 +92,11 @@ describe("buildTestPlanVerifyPrompt", () => {
     expect(prompt).toContain("commit and push");
   });
 
-  test("instructs to start infrastructure via Docker Compose", () => {
+  test("instructs to start services using available tools", () => {
     const prompt = buildTestPlanVerifyPrompt(BASE_CTX, makeOpts());
     expect(prompt).toContain("Docker Compose");
-    expect(prompt).toContain("port conflict");
+    expect(prompt).toContain("pnpm dev");
+    expect(prompt).toContain("setup scripts");
   });
 
   test("instructs to act as end user for manual test items", () => {
@@ -110,6 +111,12 @@ describe("buildTestPlanVerifyPrompt", () => {
     expect(prompt).toContain("do not use");
     expect(prompt).toContain("placeholders");
     expect(prompt).toContain("capture real screenshots");
+  });
+
+  test("instructs to check parent issue checklists recursively", () => {
+    const prompt = buildTestPlanVerifyPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("parent issue");
+    expect(prompt).toContain("grandparent, recursively");
   });
 
   test("includes PR sync instructions before pushing", () => {
@@ -144,6 +151,12 @@ describe("buildTestPlanSelfCheckPrompt", () => {
   test("mentions CI status check", () => {
     const prompt = buildTestPlanSelfCheckPrompt();
     expect(prompt).toContain("CI still passing");
+  });
+
+  test("instructs to check parent issue checklists recursively", () => {
+    const prompt = buildTestPlanSelfCheckPrompt();
+    expect(prompt).toContain("parent issue");
+    expect(prompt).toContain("grandparent");
   });
 });
 
