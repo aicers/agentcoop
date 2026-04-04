@@ -7,7 +7,10 @@ import type {
   UserPrompt,
 } from "../pipeline.js";
 import { runPipeline } from "../pipeline.js";
-import type { PipelineEventEmitter } from "../pipeline-events.js";
+import type {
+  AgentInvokeEvent,
+  PipelineEventEmitter,
+} from "../pipeline-events.js";
 import { AgentPane } from "./AgentPane.js";
 import { InputArea, type InputRequest } from "./InputArea.js";
 import { StatusBar } from "./StatusBar.js";
@@ -57,6 +60,7 @@ export function App({
   const [inputRequest, setInputRequest] = useState<InputRequest | null>(null);
   const resolveRef = useRef<((value: string) => void) | null>(null);
   const [focusedPane, setFocusedPane] = useState<"a" | "b">("a");
+  const [activeAgent, setActiveAgent] = useState<"a" | "b" | null>(null);
 
   // Store props in refs so the mount effect never re-runs.
   const emitterRef = useRef(emitter);
@@ -83,6 +87,19 @@ export function App({
       setFocusedPane((prev) => (prev === "a" ? "b" : "a"));
     }
   });
+
+  // Track which agent is currently running.
+  // Set on agent:invoke, cleared on stage:exit (no agent runs between stages).
+  useEffect(() => {
+    const onInvoke = (ev: AgentInvokeEvent) => setActiveAgent(ev.agent);
+    const onStageExit = () => setActiveAgent(null);
+    emitter.on("agent:invoke", onInvoke);
+    emitter.on("stage:exit", onStageExit);
+    return () => {
+      emitter.off("agent:invoke", onInvoke);
+      emitter.off("stage:exit", onStageExit);
+    };
+  }, [emitter]);
 
   // Run the pipeline once on mount.
   useEffect(() => {
@@ -116,6 +133,7 @@ export function App({
           emitter={emitter}
           color="blue"
           isFocused={focusedPane === "a"}
+          isActive={activeAgent === "a"}
           arrowScrollEnabled={!inputRequest}
         />
         <AgentPane
@@ -125,6 +143,7 @@ export function App({
           emitter={emitter}
           color="green"
           isFocused={focusedPane === "b"}
+          isActive={activeAgent === "b"}
           arrowScrollEnabled={!inputRequest}
         />
       </Box>

@@ -38,6 +38,8 @@ interface AgentPaneProps {
   color: string;
   /** Whether this pane currently has keyboard focus for scrolling. */
   isFocused?: boolean;
+  /** Whether this agent is currently running (producing output). */
+  isActive?: boolean;
   /** Whether up/down arrow scrolling is active (false during input prompts). */
   arrowScrollEnabled?: boolean;
 }
@@ -49,6 +51,7 @@ export function AgentPane({
   emitter,
   color,
   isFocused = false,
+  isActive = false,
   arrowScrollEnabled = false,
 }: AgentPaneProps) {
   const { lines, pendingLine } = useAgentLines(emitter, agent);
@@ -75,10 +78,10 @@ export function AgentPane({
   useEffect(() => {
     if (containerRef.current) {
       const { height, width } = measureElement(containerRef.current);
-      // Reserve 2 rows for the top/bottom border and 1 for the label.
-      setVisibleRows(height > 3 ? height - 3 : 0);
-      // Subtract 2 for paddingX={1} (left + right).
-      setContentWidth(width > 2 ? width - 2 : 1);
+      // Reserve 2 rows for top/bottom border, 1 for label, 1 for separator.
+      setVisibleRows(height > 4 ? height - 4 : 0);
+      // Subtract 4 for borderStyle="single" (2) + paddingX={1} (2).
+      setContentWidth(width > 4 ? width - 4 : 1);
     }
   });
 
@@ -213,8 +216,10 @@ export function AgentPane({
     >
       <Text bold color={borderCol}>
         {modelName ? `${label} \u2014 ${modelName}` : label}
+        {isActive ? " \u25CF" : ""}
         {isFocused ? " [*]" : ""}
       </Text>
+      <Text dimColor>{"\u2500".repeat(contentWidth)}</Text>
       {placeholder !== undefined ? (
         <Text dimColor>{placeholder}</Text>
       ) : (
