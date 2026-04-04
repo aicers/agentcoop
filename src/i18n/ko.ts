@@ -189,6 +189,12 @@ export const ko: Messages = {
   "outcome.needs_clarification": "명확화 필요",
   "outcome.error": "오류",
 
+  // ---- token bar ----------------------------------------------------------
+
+  "tokenBar.agentUsage": (label, inputTokens, outputTokens) =>
+    `${label}: ${inputTokens} \uC785\uB825 / ${outputTokens} \uCD9C\uB825`,
+  "tokenBar.noUsage": "\uD1A0\uD070 \uB370\uC774\uD130 \uC5C6\uC74C",
+
   // ---- input area --------------------------------------------------------
 
   "input.pipelineRunning":

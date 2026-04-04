@@ -3,6 +3,7 @@ import type {
   AgentErrorType,
   AgentResult,
   InvokeOptions,
+  TokenUsage,
 } from "./agent.js";
 import { JsonlLineTransformer } from "./agent.js";
 import { spawnAgent } from "./spawn-agent.js";
@@ -25,6 +26,12 @@ export type ClaudeStreamEvent =
       type: "assistant";
       message: {
         content: { type: string; text?: string }[];
+        usage?: {
+          input_tokens?: number;
+          output_tokens?: number;
+          cache_read_input_tokens?: number;
+          cache_creation_input_tokens?: number;
+        };
       };
       session_id: string;
     }
@@ -35,6 +42,13 @@ export type ClaudeStreamEvent =
       is_error: boolean;
       result?: string;
       error?: string;
+      total_cost_usd?: number;
+      usage?: {
+        input_tokens?: number;
+        output_tokens?: number;
+        cache_read_input_tokens?: number;
+        cache_creation_input_tokens?: number;
+      };
     }
   | { type: string };
 
@@ -59,6 +73,10 @@ export function parseClaudeStreamJson(jsonl: string): AgentResult {
   let resultText = "";
   let isError = false;
   let subtype = "";
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cachedInputTokens = 0;
+  let hasAssistantUsage = false;
 
   for (const line of lines) {
     let event: ClaudeStreamEvent;
@@ -73,21 +91,48 @@ export function parseClaudeStreamJson(jsonl: string): AgentResult {
       sessionId ??= e.session_id;
     }
 
+    if (event.type === "assistant" && "message" in event) {
+      const e = event as Extract<ClaudeStreamEvent, { type: "assistant" }>;
+      const u = e.message.usage;
+      if (u) {
+        hasAssistantUsage = true;
+        inputTokens += u.input_tokens ?? 0;
+        outputTokens += u.output_tokens ?? 0;
+        cachedInputTokens +=
+          (u.cache_read_input_tokens ?? 0) +
+          (u.cache_creation_input_tokens ?? 0);
+      }
+    }
+
     if (event.type === "result") {
       const e = event as Extract<ClaudeStreamEvent, { type: "result" }>;
       sessionId = e.session_id || sessionId;
       resultText = e.result ?? e.error ?? "";
       isError = e.is_error;
       subtype = e.subtype;
+      if (!hasAssistantUsage) {
+        const u = e.usage;
+        if (u) {
+          inputTokens += u.input_tokens ?? 0;
+          outputTokens += u.output_tokens ?? 0;
+          cachedInputTokens +=
+            (u.cache_read_input_tokens ?? 0) +
+            (u.cache_creation_input_tokens ?? 0);
+        }
+      }
     }
   }
 
+  const hasUsage = inputTokens > 0 || outputTokens > 0 || cachedInputTokens > 0;
   return {
     sessionId: sessionId || undefined,
     responseText: resultText,
     status: isError ? "error" : "success",
     errorType: isError ? claudeErrorType(subtype) : undefined,
     stderrText: "",
+    usage: hasUsage
+      ? { inputTokens, outputTokens, cachedInputTokens }
+      : undefined,
   };
 }
 
@@ -128,6 +173,23 @@ export class ClaudeStreamTransformer extends JsonlLineTransformer {
       }
     }
     return text;
+  }
+
+  protected extractUsageFromEvent(event: unknown): TokenUsage | undefined {
+    const e = event as Record<string, unknown>;
+    if (e.type === "assistant" && "message" in e) {
+      const msg = e.message as Record<string, unknown> | undefined;
+      const u = msg?.usage as Record<string, number> | undefined;
+      if (!u) return undefined;
+      const inputTokens = u.input_tokens ?? 0;
+      const outputTokens = u.output_tokens ?? 0;
+      const cachedInputTokens =
+        (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+      if (inputTokens > 0 || outputTokens > 0 || cachedInputTokens > 0) {
+        return { inputTokens, outputTokens, cachedInputTokens };
+      }
+    }
+    return undefined;
   }
 }
 
@@ -240,6 +302,8 @@ export function createClaudeAdapter(
 
   return {
     invoke(prompt, options?: InvokeOptions) {
+      const transformer = new ClaudeStreamTransformer();
+      if (options?.onUsage) transformer.onUsage = options.onUsage;
       return spawnAgent({
         command: "claude",
         args: buildClaudeArgs(prompt, {
@@ -250,11 +314,13 @@ export function createClaudeAdapter(
         }),
         cwd: options?.cwd,
         parseResult: parseClaudeOutput,
-        chunkTransformer: new ClaudeStreamTransformer(),
+        chunkTransformer: transformer,
         inactivityTimeoutMs,
       });
     },
     resume(sessionId, prompt, options?: InvokeOptions) {
+      const transformer = new ClaudeStreamTransformer();
+      if (options?.onUsage) transformer.onUsage = options.onUsage;
       return spawnAgent({
         command: "claude",
         args: buildClaudeArgs(
@@ -264,7 +330,7 @@ export function createClaudeAdapter(
         ),
         cwd: options?.cwd,
         parseResult: parseClaudeOutput,
-        chunkTransformer: new ClaudeStreamTransformer(),
+        chunkTransformer: transformer,
         inactivityTimeoutMs,
       });
     },

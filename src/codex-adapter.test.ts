@@ -4,6 +4,7 @@ import {
   buildCodexResumeArgs,
   CodexStreamTransformer,
   detectCodexError,
+  extractCodexPlainTextTokens,
   extractCodexResumeResponse,
   extractSessionId,
   parseCodexJsonl,
@@ -42,6 +43,11 @@ describe("parseCodexJsonl", () => {
       status: "success",
       errorType: undefined,
       stderrText: "",
+      usage: {
+        inputTokens: 100,
+        outputTokens: 5,
+        cachedInputTokens: 0,
+      },
     });
   });
 
@@ -624,6 +630,67 @@ describe("CodexStreamTransformer", () => {
     t.push("garbage without newline");
     expect(t.flush()).toBe("");
   });
+
+  test("emits usage via onUsage callback for turn.completed events", () => {
+    const t = new CodexStreamTransformer();
+    const usages: {
+      inputTokens: number;
+      outputTokens: number;
+      cachedInputTokens: number;
+    }[] = [];
+    t.onUsage = (u) => usages.push(u);
+
+    const chunk = [
+      JSON.stringify({
+        type: "turn.completed",
+        usage: { input_tokens: 100, output_tokens: 20, cached_input_tokens: 5 },
+      }),
+      "",
+    ].join("\n");
+
+    t.push(chunk);
+    expect(usages).toEqual([
+      { inputTokens: 100, outputTokens: 20, cachedInputTokens: 5 },
+    ]);
+  });
+
+  test("emits usage on flush for buffered turn.completed", () => {
+    const t = new CodexStreamTransformer();
+    const usages: {
+      inputTokens: number;
+      outputTokens: number;
+      cachedInputTokens: number;
+    }[] = [];
+    t.onUsage = (u) => usages.push(u);
+
+    // No trailing newline → stays in buffer
+    t.push(
+      JSON.stringify({
+        type: "turn.completed",
+        usage: { input_tokens: 50, output_tokens: 10 },
+      }),
+    );
+    expect(usages).toHaveLength(0);
+    t.flush();
+    expect(usages).toEqual([
+      { inputTokens: 50, outputTokens: 10, cachedInputTokens: 0 },
+    ]);
+  });
+
+  test("does not emit usage when onUsage is not set", () => {
+    const t = new CodexStreamTransformer();
+
+    const chunk = [
+      JSON.stringify({
+        type: "turn.completed",
+        usage: { input_tokens: 100, output_tokens: 20 },
+      }),
+      "",
+    ].join("\n");
+
+    // Should not throw
+    t.push(chunk);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -769,6 +836,129 @@ describe("buildCodexResumeArgs", () => {
     });
 
     expect(args).toContain("model_reasoning_effort=xhigh");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Token usage extraction
+// ---------------------------------------------------------------------------
+describe("parseCodexJsonl token usage", () => {
+  test("extracts usage from turn.completed events", () => {
+    const lines = [
+      JSON.stringify({ type: "thread.started", thread_id: "sess-t" }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item_0", type: "agent_message", text: "ok" },
+      }),
+      JSON.stringify({
+        type: "turn.completed",
+        usage: {
+          input_tokens: 200,
+          cached_input_tokens: 50,
+          output_tokens: 30,
+        },
+      }),
+    ].join("\n");
+
+    const result = parseCodexJsonl(lines);
+    expect(result.usage).toEqual({
+      inputTokens: 200,
+      outputTokens: 30,
+      cachedInputTokens: 50,
+    });
+  });
+
+  test("accumulates usage across multiple turn.completed events", () => {
+    const lines = [
+      JSON.stringify({ type: "thread.started", thread_id: "sess-t2" }),
+      JSON.stringify({
+        type: "turn.completed",
+        usage: { input_tokens: 100, output_tokens: 10 },
+      }),
+      JSON.stringify({
+        type: "turn.completed",
+        usage: { input_tokens: 200, output_tokens: 20, cached_input_tokens: 5 },
+      }),
+    ].join("\n");
+
+    const result = parseCodexJsonl(lines);
+    expect(result.usage).toEqual({
+      inputTokens: 300,
+      outputTokens: 30,
+      cachedInputTokens: 5,
+    });
+  });
+
+  test("returns undefined usage when no turn.completed has usage", () => {
+    const lines = [
+      JSON.stringify({ type: "thread.started", thread_id: "sess-t3" }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item_0", type: "agent_message", text: "hi" },
+      }),
+    ].join("\n");
+
+    expect(parseCodexJsonl(lines).usage).toBeUndefined();
+  });
+
+  test("returns undefined usage when turn.completed lacks usage field", () => {
+    const lines = [
+      JSON.stringify({ type: "thread.started", thread_id: "sess-t4" }),
+      JSON.stringify({ type: "turn.completed" }),
+    ].join("\n");
+
+    expect(parseCodexJsonl(lines).usage).toBeUndefined();
+  });
+});
+
+describe("extractCodexPlainTextTokens", () => {
+  test("extracts token count from footer", () => {
+    const text = "codex\nresponse\ntokens used\n229\n";
+    expect(extractCodexPlainTextTokens(text)).toBe(229);
+  });
+
+  test("returns undefined when no footer", () => {
+    expect(extractCodexPlainTextTokens("just output")).toBeUndefined();
+  });
+
+  test("returns undefined for non-numeric count", () => {
+    expect(extractCodexPlainTextTokens("\ntokens used\nabc\n")).toBeUndefined();
+  });
+
+  test("returns undefined for zero count", () => {
+    expect(extractCodexPlainTextTokens("\ntokens used\n0\n")).toBeUndefined();
+  });
+});
+
+describe("parseCodexPlainText token usage", () => {
+  const BANNER = [
+    "OpenAI Codex v0.46.0 (research preview)",
+    "--------",
+    "workdir: /path",
+    "model: gpt-5.4",
+    "session id: sess-1",
+    "--------",
+  ].join("\n");
+
+  test("omits usage from resume output (combined total is ambiguous)", () => {
+    const text = [
+      BANNER,
+      "user",
+      "Question",
+      "codex",
+      "Answer",
+      "tokens used",
+      "500",
+    ].join("\n");
+
+    const result = parseCodexPlainText(text, 0, "");
+    expect(result.usage).toBeUndefined();
+  });
+
+  test("returns undefined usage when no tokens used footer", () => {
+    const text = [BANNER, "user", "Question", "codex", "Answer"].join("\n");
+    const result = parseCodexPlainText(text, 0, "");
+    expect(result.usage).toBeUndefined();
   });
 });
 

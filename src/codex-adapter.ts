@@ -4,6 +4,7 @@ import type {
   AgentResult,
   AgentStream,
   InvokeOptions,
+  TokenUsage,
 } from "./agent.js";
 import { JsonlLineTransformer } from "./agent.js";
 import { spawnAgent } from "./spawn-agent.js";
@@ -37,6 +38,18 @@ interface TurnFailedEvent {
 }
 
 /**
+ * `{"type":"turn.completed","usage":{"input_tokens":100,...}}`
+ */
+interface TurnCompletedEvent {
+  type: "turn.completed";
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cached_input_tokens?: number;
+  };
+}
+
+/**
  * `{"type":"error","message":"..."}`
  */
 interface ErrorEvent {
@@ -47,6 +60,7 @@ interface ErrorEvent {
 export type CodexJsonEvent =
   | ThreadStartedEvent
   | ItemCompletedEvent
+  | TurnCompletedEvent
   | TurnFailedEvent
   | ErrorEvent
   | { type: string };
@@ -65,6 +79,9 @@ export function parseCodexJsonl(jsonl: string): AgentResult {
   let responseText = "";
   let failed = false;
   let failMessage = "";
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cachedInputTokens = 0;
 
   for (const line of lines) {
     let event: CodexJsonEvent;
@@ -88,12 +105,26 @@ export function parseCodexJsonl(jsonl: string): AgentResult {
       }
     }
 
+    if (event.type === "turn.completed") {
+      const e = event as TurnCompletedEvent;
+      if (e.usage) {
+        inputTokens += e.usage.input_tokens ?? 0;
+        outputTokens += e.usage.output_tokens ?? 0;
+        cachedInputTokens += e.usage.cached_input_tokens ?? 0;
+      }
+    }
+
     if (event.type === "turn.failed") {
       const e = event as TurnFailedEvent;
       failed = true;
       failMessage = e.error.message;
     }
   }
+
+  const hasUsage = inputTokens > 0 || outputTokens > 0 || cachedInputTokens > 0;
+  const usage: TokenUsage | undefined = hasUsage
+    ? { inputTokens, outputTokens, cachedInputTokens }
+    : undefined;
 
   if (failed) {
     return {
@@ -102,6 +133,7 @@ export function parseCodexJsonl(jsonl: string): AgentResult {
       status: "error",
       errorType: detectCodexError(failMessage),
       stderrText: "",
+      usage,
     };
   }
 
@@ -111,6 +143,7 @@ export function parseCodexJsonl(jsonl: string): AgentResult {
     status: "success",
     errorType: undefined,
     stderrText: "",
+    usage,
   };
 }
 
@@ -192,6 +225,22 @@ export function extractSessionId(text: string): string | undefined {
   return match?.[1];
 }
 
+/**
+ * Extract the total token count from the "tokens used\n<count>" footer
+ * in Codex plain text output.  Returns undefined when the footer is
+ * absent or the count is not a valid number.
+ */
+export function extractCodexPlainTextTokens(text: string): number | undefined {
+  const marker = "\ntokens used\n";
+  const idx = text.lastIndexOf(marker);
+  if (idx === -1) return undefined;
+  const rest = text.slice(idx + marker.length).trim();
+  // The count may be on the first line only (ignore trailing content).
+  const firstLine = rest.split("\n")[0].trim();
+  const n = Number.parseInt(firstLine, 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
 export function parseCodexPlainText(
   text: string,
   exitCode: number | null,
@@ -209,6 +258,9 @@ export function parseCodexPlainText(
     status: failed ? "error" : "success",
     errorType,
     stderrText,
+    // Resume mode only reports a combined total ("tokens used"), not
+    // split input/output.  Emitting it as inputTokens would be
+    // misleading, so we omit usage entirely for this path.
   };
 }
 
@@ -228,6 +280,22 @@ export class CodexStreamTransformer extends JsonlLineTransformer {
     const item = e.item as Record<string, unknown> | undefined;
     if (item?.type !== "agent_message") return "";
     return (item.text as string) ?? "";
+  }
+
+  protected extractUsageFromEvent(
+    event: unknown,
+  ): import("./agent.js").TokenUsage | undefined {
+    const e = event as Record<string, unknown>;
+    if (e.type !== "turn.completed") return undefined;
+    const u = (e as { usage?: Record<string, number> }).usage;
+    if (!u) return undefined;
+    const inputTokens = u.input_tokens ?? 0;
+    const outputTokens = u.output_tokens ?? 0;
+    const cachedInputTokens = u.cached_input_tokens ?? 0;
+    if (inputTokens > 0 || outputTokens > 0 || cachedInputTokens > 0) {
+      return { inputTokens, outputTokens, cachedInputTokens };
+    }
+    return undefined;
   }
 }
 
@@ -413,12 +481,17 @@ export function createCodexAdapter(
 
   return {
     invoke(prompt, options?: InvokeOptions) {
+      function makeTransformer(): CodexStreamTransformer {
+        const t = new CodexStreamTransformer();
+        if (options?.onUsage) t.onUsage = options.onUsage;
+        return t;
+      }
       const stream = spawnAgent({
         command: "codex",
         args: buildCodexInvokeArgs(prompt, { model, reasoningEffort }),
         cwd: options?.cwd,
         parseResult: parseCodexInvokeOutput,
-        chunkTransformer: new CodexStreamTransformer(),
+        chunkTransformer: makeTransformer(),
         inactivityTimeoutMs,
       });
       if (reasoningEffort !== "xhigh") return stream;
@@ -431,7 +504,7 @@ export function createCodexAdapter(
           }),
           cwd: options?.cwd,
           parseResult: parseCodexInvokeOutput,
-          chunkTransformer: new CodexStreamTransformer(),
+          chunkTransformer: makeTransformer(),
           inactivityTimeoutMs,
         }),
       );

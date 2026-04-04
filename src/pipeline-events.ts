@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import type { TokenUsage } from "./agent.js";
 
 export interface AgentChunkEvent {
   agent: "a" | "b";
@@ -26,9 +27,15 @@ export interface AgentPromptEvent {
   prompt: string;
 }
 
+export interface AgentUsageEvent {
+  agent: "a" | "b";
+  usage: TokenUsage;
+}
+
 interface PipelineEventMap {
   "agent:chunk": [AgentChunkEvent];
   "agent:prompt": [AgentPromptEvent];
+  "agent:usage": [AgentUsageEvent];
   "stage:enter": [StageEnterEvent];
   "stage:exit": [StageExitEvent];
   "agent:invoke": [AgentInvokeEvent];

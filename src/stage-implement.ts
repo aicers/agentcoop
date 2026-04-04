@@ -91,6 +91,8 @@ export function createImplementStageHandler(
         prompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.usageSinks?.a,
       );
 
       if (implResult.sessionId) {
@@ -110,6 +112,8 @@ export function createImplementStageHandler(
         checkPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
+        undefined,
+        ctx.usageSinks?.a,
       );
 
       if (checkResult.status === "error") {

@@ -3,6 +3,7 @@ import {
   type AgentChunkEvent,
   type AgentInvokeEvent,
   type AgentPromptEvent,
+  type AgentUsageEvent,
   PipelineEventEmitter,
   type StageEnterEvent,
   type StageExitEvent,
@@ -91,6 +92,20 @@ describe("PipelineEventEmitter", () => {
     emitter.emit("agent:chunk", { agent: "a", chunk: "data" });
 
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  test("emits and receives agent:usage events", () => {
+    const emitter = new PipelineEventEmitter();
+    const handler = vi.fn();
+    emitter.on("agent:usage", handler);
+
+    const event: AgentUsageEvent = {
+      agent: "a",
+      usage: { inputTokens: 100, outputTokens: 50, cachedInputTokens: 10 },
+    };
+    emitter.emit("agent:usage", event);
+
+    expect(handler).toHaveBeenCalledWith(event);
   });
 
   test("different event types do not interfere", () => {

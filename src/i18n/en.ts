@@ -161,6 +161,12 @@ export const en: Messages = {
   "outcome.needs_clarification": "needs clarification",
   "outcome.error": "error",
 
+  // ---- token bar ----------------------------------------------------------
+
+  "tokenBar.agentUsage": (label, inputTokens, outputTokens) =>
+    `${label}: ${inputTokens} in / ${outputTokens} out`,
+  "tokenBar.noUsage": "No token data yet",
+
   // ---- input area --------------------------------------------------------
 
   "input.pipelineRunning": "Pipeline running...",

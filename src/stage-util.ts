@@ -3,7 +3,12 @@
  * step-status-to-outcome conversion, and inactivity auto-resume.
  */
 
-import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
+import type {
+  AgentAdapter,
+  AgentResult,
+  AgentStream,
+  TokenUsage,
+} from "./agent.js";
 import { t } from "./i18n/index.js";
 import type { StageOutcome, StageResult } from "./pipeline.js";
 import { type ParsedStep, parseStepStatus } from "./step-parser.js";
@@ -18,6 +23,12 @@ export type StreamSink = (chunk: string) => void;
  * Used by the UI to display outgoing prompts in the agent's pane.
  */
 export type PromptSink = (prompt: string) => void;
+
+/**
+ * Callback that receives token usage data after an agent invocation completes.
+ * Used by the UI to display per-agent token consumption.
+ */
+export type UsageSink = (usage: TokenUsage) => void;
 
 /**
  * Log full diagnostic details for an agent process failure so that
@@ -177,6 +188,7 @@ async function retryOnTimeout(
   fallbackSessionId: string | undefined,
   sink: StreamSink | undefined,
   maxRetries: number,
+  usageSink?: UsageSink,
 ): Promise<AgentResult> {
   let result = initial;
   let left = maxRetries;
@@ -185,7 +197,10 @@ async function retryOnTimeout(
     const sid = result.sessionId ?? fallbackSessionId;
     if (!sid) break;
     left--;
-    const stream = agent.resume(sid, DEFAULT_RESUME_PROMPT, { cwd });
+    const stream = agent.resume(sid, DEFAULT_RESUME_PROMPT, {
+      cwd,
+      onUsage: usageSink,
+    });
     if (sink) drainToSink(stream, sink);
     result = await stream.result;
   }
@@ -208,6 +223,7 @@ export async function invokeOrResume(
   cwd: string,
   sink?: StreamSink,
   maxAutoResumes = 3,
+  usageSink?: UsageSink,
 ): Promise<AgentResult> {
   const result = await invokeOrResumeOnce(
     agent,
@@ -215,8 +231,17 @@ export async function invokeOrResume(
     prompt,
     cwd,
     sink,
+    usageSink,
   );
-  return retryOnTimeout(agent, result, cwd, undefined, sink, maxAutoResumes);
+  return retryOnTimeout(
+    agent,
+    result,
+    cwd,
+    undefined,
+    sink,
+    maxAutoResumes,
+    usageSink,
+  );
 }
 
 /**
@@ -228,9 +253,11 @@ async function invokeOrResumeOnce(
   prompt: string,
   cwd: string,
   sink?: StreamSink,
+  usageSink?: UsageSink,
 ): Promise<AgentResult> {
+  const opts = { cwd, onUsage: usageSink };
   if (savedSessionId) {
-    const stream = agent.resume(savedSessionId, prompt, { cwd });
+    const stream = agent.resume(savedSessionId, prompt, opts);
     if (sink) drainToSink(stream, sink);
     const result = await stream.result;
     if (result.status === "success") {
@@ -249,7 +276,7 @@ async function invokeOrResumeOnce(
     }
     // Session expired or unknown error — fall back to fresh invoke.
   }
-  const stream = agent.invoke(prompt, { cwd });
+  const stream = agent.invoke(prompt, opts);
   if (sink) drainToSink(stream, sink);
   return stream.result;
 }
@@ -269,6 +296,7 @@ export async function sendFollowUp(
   cwd: string,
   sink?: StreamSink,
   maxAutoResumes = 3,
+  usageSink?: UsageSink,
 ): Promise<AgentResult> {
   if (sessionId === undefined) {
     throw new Error(
@@ -276,10 +304,21 @@ export async function sendFollowUp(
         "The agent CLI may have failed to return a session.",
     );
   }
-  const stream = agent.resume(sessionId, prompt, { cwd });
+  const stream = agent.resume(sessionId, prompt, {
+    cwd,
+    onUsage: usageSink,
+  });
   if (sink) drainToSink(stream, sink);
   const result = await stream.result;
-  return retryOnTimeout(agent, result, cwd, sessionId, sink, maxAutoResumes);
+  return retryOnTimeout(
+    agent,
+    result,
+    cwd,
+    sessionId,
+    sink,
+    maxAutoResumes,
+    usageSink,
+  );
 }
 
 /**

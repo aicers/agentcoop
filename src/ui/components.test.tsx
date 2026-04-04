@@ -16,6 +16,7 @@ import { AgentPane, splitIntoRows } from "./AgentPane.js";
 import { useTerminalHeight } from "./App.js";
 import { InputArea, type InputRequest } from "./InputArea.js";
 import { StatusBar } from "./StatusBar.js";
+import { formatTokenCount, TokenBar } from "./TokenBar.js";
 
 afterEach(() => {
   cleanup();
@@ -1510,5 +1511,90 @@ describe("viewport height constraint", () => {
     expect(after).not.toContain("A20");
     // Pane B must remain at the bottom (unaffected by pane A scroll).
     expect(after).toContain("B20");
+  });
+});
+
+// ---- formatTokenCount -------------------------------------------------------
+
+describe("formatTokenCount", () => {
+  test("returns exact number below 1000", () => {
+    expect(formatTokenCount(0)).toBe("0");
+    expect(formatTokenCount(42)).toBe("42");
+    expect(formatTokenCount(999)).toBe("999");
+  });
+
+  test("formats thousands with K suffix", () => {
+    expect(formatTokenCount(1000)).toBe("1.0K");
+    expect(formatTokenCount(1500)).toBe("1.5K");
+    expect(formatTokenCount(12345)).toBe("12.3K");
+    expect(formatTokenCount(99900)).toBe("99.9K");
+  });
+
+  test("rounds large K values without decimal", () => {
+    expect(formatTokenCount(100_000)).toBe("100K");
+    expect(formatTokenCount(500_000)).toBe("500K");
+  });
+
+  test("formats millions with M suffix", () => {
+    expect(formatTokenCount(1_000_000)).toBe("1.0M");
+    expect(formatTokenCount(2_500_000)).toBe("2.5M");
+  });
+});
+
+// ---- TokenBar ---------------------------------------------------------------
+
+describe("TokenBar", () => {
+  test("renders nothing when no usage events emitted", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(<TokenBar emitter={emitter} />);
+    // TokenBar returns null when there is no data, so the frame should
+    // be empty or contain no agent labels.
+    const frame = lastFrame() ?? "";
+    expect(frame).not.toContain("Agent A");
+  });
+
+  test("renders cumulative token usage after events", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(<TokenBar emitter={emitter} />);
+
+    emitter.emit("agent:usage", {
+      agent: "a",
+      usage: { inputTokens: 12300, outputTokens: 5100, cachedInputTokens: 0 },
+    });
+    emitter.emit("agent:usage", {
+      agent: "b",
+      usage: { inputTokens: 8700, outputTokens: 3200, cachedInputTokens: 0 },
+    });
+
+    // Allow React to re-render.
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Agent A");
+    expect(frame).toContain("12.3K in");
+    expect(frame).toContain("5.1K out");
+    expect(frame).toContain("Agent B");
+    expect(frame).toContain("8.7K in");
+    expect(frame).toContain("3.2K out");
+  });
+
+  test("accumulates usage across multiple events for same agent", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(<TokenBar emitter={emitter} />);
+
+    emitter.emit("agent:usage", {
+      agent: "a",
+      usage: { inputTokens: 1000, outputTokens: 500, cachedInputTokens: 0 },
+    });
+    emitter.emit("agent:usage", {
+      agent: "a",
+      usage: { inputTokens: 2000, outputTokens: 1000, cachedInputTokens: 0 },
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("3.0K in");
+    expect(frame).toContain("1.5K out");
   });
 });
