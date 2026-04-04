@@ -156,6 +156,7 @@ export interface Messages {
   "statusBar.layout": (mode: string) => string;
   "statusBar.layoutHorizontal": string;
   "statusBar.layoutVertical": string;
+  "statusBar.keyHints": string;
   "outcome.completed": string;
   "outcome.fixed": string;
   "outcome.approved": string;

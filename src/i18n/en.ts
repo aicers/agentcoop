@@ -151,6 +151,8 @@ export const en: Messages = {
   "statusBar.layout": (mode) => `Layout: ${mode}`,
   "statusBar.layoutHorizontal": "horizontal",
   "statusBar.layoutVertical": "vertical",
+  "statusBar.keyHints":
+    "Tab:Switch pane  \u2191\u2193:Scroll  PgUp/Dn:Page scroll  Ctrl+C:Quit",
   "outcome.completed": "completed",
   "outcome.fixed": "fixed",
   "outcome.approved": "approved",

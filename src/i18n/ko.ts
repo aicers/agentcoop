@@ -179,6 +179,8 @@ export const ko: Messages = {
   "statusBar.layoutHorizontal": "\uC218\uD3C9",
   "statusBar.layoutVertical": "\uC218\uC9C1",
 
+  "statusBar.keyHints":
+    "Tab:\uD328\uB110 \uC804\uD658  \u2191\u2193:\uC2A4\uD06C\uB864  PgUp/Dn:\uD398\uC774\uC9C0 \uC2A4\uD06C\uB864  Ctrl+C:\uC885\uB8CC",
   "outcome.completed": "완료",
   "outcome.fixed": "수정됨",
   "outcome.approved": "승인됨",

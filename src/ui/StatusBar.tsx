@@ -103,36 +103,44 @@ export function StatusBar({
     : "";
 
   return (
-    <Box borderStyle="single" borderColor="gray" paddingX={1}>
-      <Text bold color="cyan">
-        {issueLabel}
-      </Text>
-      {baseText && (
-        <Text>
-          {"  |  "}
-          {baseText}
+    <Box
+      borderStyle="single"
+      borderColor="gray"
+      paddingX={1}
+      flexDirection="column"
+    >
+      <Box>
+        <Text bold color="cyan">
+          {issueLabel}
         </Text>
-      )}
-      <Text>{"  |  "}</Text>
-      <Text bold>{stageText}</Text>
-      {outcomeText && (
-        <Text>
-          {"  |  "}
-          {outcomeText}
-        </Text>
-      )}
-      {(selfCheckCount > 0 || reviewCount > 0) && (
-        <Text>
-          {"  |  "}
-          {m["statusBar.completed"](selfCheckCount, reviewCount)}
-        </Text>
-      )}
-      {layoutText && (
-        <Text>
-          {"  |  "}
-          {layoutText}
-        </Text>
-      )}
+        {baseText && (
+          <Text>
+            {"  |  "}
+            {baseText}
+          </Text>
+        )}
+        <Text>{"  |  "}</Text>
+        <Text bold>{stageText}</Text>
+        {outcomeText && (
+          <Text>
+            {"  |  "}
+            {outcomeText}
+          </Text>
+        )}
+        {(selfCheckCount > 0 || reviewCount > 0) && (
+          <Text>
+            {"  |  "}
+            {m["statusBar.completed"](selfCheckCount, reviewCount)}
+          </Text>
+        )}
+        {layoutText && (
+          <Text>
+            {"  |  "}
+            {layoutText}
+          </Text>
+        )}
+      </Box>
+      <Text dimColor>{m["statusBar.keyHints"]}</Text>
     </Box>
   );
 }

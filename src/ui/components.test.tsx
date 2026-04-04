@@ -1100,6 +1100,22 @@ describe("StatusBar", () => {
     const frame = lastFrame() ?? "";
     expect(frame).not.toContain("Layout:");
   });
+
+  test("renders key hints line", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={49}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Tab:Switch pane");
+    expect(frame).toContain("Ctrl+C:Quit");
+  });
 });
 
 // ---- InputArea ---------------------------------------------------------------
