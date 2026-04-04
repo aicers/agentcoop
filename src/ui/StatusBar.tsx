@@ -59,21 +59,28 @@ export function StatusBar({
 
   const m = t();
 
-  const stageText = stage
-    ? m["statusBar.stage"](stage.stageNumber, stage.stageName)
-    : m["statusBar.initialising"];
-
   // Show current round (1-based) only on stages that can iterate.
   const showRound =
     stage !== null &&
     (stage.stageNumber === SELF_CHECK_STAGE ||
       stage.stageNumber === REVIEW_STAGE);
   const round = stage ? stage.iteration + 1 : 0;
-  const iterText = showRound
-    ? roundDone
-      ? m["statusBar.roundDone"](round)
-      : m["statusBar.roundInProgress"](round)
-    : "";
+
+  const stageText = stage
+    ? showRound
+      ? roundDone
+        ? m["statusBar.stageRoundDone"](
+            stage.stageNumber,
+            stage.stageName,
+            round,
+          )
+        : m["statusBar.stageRoundInProgress"](
+            stage.stageNumber,
+            stage.stageName,
+            round,
+          )
+      : m["statusBar.stage"](stage.stageNumber, stage.stageName)
+    : m["statusBar.initialising"];
 
   const outcomeKey = lastOutcome
     ? (`outcome.${lastOutcome}` as keyof typeof m)
@@ -98,12 +105,6 @@ export function StatusBar({
       )}
       <Text>{"  |  "}</Text>
       <Text bold>{stageText}</Text>
-      {iterText && (
-        <Text>
-          {"  |  "}
-          {iterText}
-        </Text>
-      )}
       {outcomeText && (
         <Text>
           {"  |  "}
@@ -113,9 +114,7 @@ export function StatusBar({
       {(selfCheckCount > 0 || reviewCount > 0) && (
         <Text>
           {"  |  "}
-          {m["statusBar.selfCheck"](selfCheckCount)}
-          {"  |  "}
-          {m["statusBar.review"](reviewCount)}
+          {m["statusBar.completed"](selfCheckCount, reviewCount)}
         </Text>
       )}
     </Box>

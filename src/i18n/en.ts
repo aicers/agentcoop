@@ -140,12 +140,14 @@ export const en: Messages = {
 
   "statusBar.initialising": "Initialising...",
   "statusBar.stage": (number, name) => `Stage ${number}: ${name}`,
-  "statusBar.roundInProgress": (round) => `Round: ${round} (in progress)`,
-  "statusBar.roundDone": (round) => `Round: ${round} (done)`,
+  "statusBar.stageRoundInProgress": (number, name, round) =>
+    `Stage ${number}: ${name} (round ${round}, in progress)`,
+  "statusBar.stageRoundDone": (number, name, round) =>
+    `Stage ${number}: ${name} (round ${round}, done)`,
   "statusBar.last": (outcome) => `Last: ${outcome}`,
   "statusBar.base": (sha) => `Base: ${sha}`,
-  "statusBar.selfCheck": (count) => `Self-check: ${count}`,
-  "statusBar.review": (count) => `Review: ${count}`,
+  "statusBar.completed": (selfCheckCount, reviewCount) =>
+    `Completed: self-check \u00d7${selfCheckCount}, review \u00d7${reviewCount}`,
   "outcome.completed": "completed",
   "outcome.fixed": "fixed",
   "outcome.approved": "approved",
@@ -167,7 +169,7 @@ export const en: Messages = {
   "agentPane.linesBelow": (count) => `\u2193 ${count} more lines`,
   "agent.labelA": "Agent A",
   "agent.labelB": "Agent B",
-  "agent.labelARole": "Agent A (implementer)",
+  "agent.labelARole": "Agent A (author)",
   "agent.labelBRole": "Agent B (reviewer)",
 
   // ---- CI / stage result messages -----------------------------------------

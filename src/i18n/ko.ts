@@ -167,14 +167,14 @@ export const ko: Messages = {
 
   "statusBar.initialising": "\uCD08\uAE30\uD654 \uC911...",
   "statusBar.stage": (number, name) => `${number}\uB2E8\uACC4: ${name}`,
-  "statusBar.roundInProgress": (round) =>
-    `\uB77C\uC6B4\uB4DC: ${round} (\uC9C4\uD589 \uC911)`,
-  "statusBar.roundDone": (round) =>
-    `\uB77C\uC6B4\uB4DC: ${round} (\uC644\uB8CC)`,
+  "statusBar.stageRoundInProgress": (number, name, round) =>
+    `${number}\uB2E8\uACC4: ${name} (\uB77C\uC6B4\uB4DC ${round}, \uC9C4\uD589 \uC911)`,
+  "statusBar.stageRoundDone": (number, name, round) =>
+    `${number}\uB2E8\uACC4: ${name} (\uB77C\uC6B4\uB4DC ${round}, \uC644\uB8CC)`,
   "statusBar.last": (outcome) => `\uC774\uC804: ${outcome}`,
-  "statusBar.base": (sha: string) => `기준: ${sha}`,
-  "statusBar.selfCheck": (count: number) => `셀프 체크: ${count}`,
-  "statusBar.review": (count: number) => `리뷰: ${count}`,
+  "statusBar.base": (sha) => `\uAE30\uC900: ${sha}`,
+  "statusBar.completed": (selfCheckCount, reviewCount) =>
+    `\uC644\uB8CC: \uC140\uD504 \uCCB4\uD06C \u00d7${selfCheckCount}, \uB9AC\uBDF0 \u00d7${reviewCount}`,
 
   "outcome.completed": "완료",
   "outcome.fixed": "수정됨",
@@ -202,7 +202,7 @@ export const ko: Messages = {
     `\u2193 ${count}\uC904 \uB354 \uC788\uC74C`,
   "agent.labelA": "에이전트 A",
   "agent.labelB": "에이전트 B",
-  "agent.labelARole": "에이전트 A (구현자)",
+  "agent.labelARole": "에이전트 A (작성자)",
   "agent.labelBRole": "에이전트 B (리뷰어)",
 
   // ---- CI / stage result messages -----------------------------------------
