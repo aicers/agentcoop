@@ -72,9 +72,15 @@ export function App({
   }, []);
 
   const handleSubmit = useCallback((value: string) => {
-    resolveRef.current?.(value);
+    const resolve = resolveRef.current;
     resolveRef.current = null;
     setInputRequest(null);
+    // Defer the promise resolution so Ink fully drains the current
+    // keypress event before the next prompt's useInput handler is
+    // registered.  Without this, pressing "1" on a single-choice
+    // prompt (e.g. OK) can also select option 1 on the immediately
+    // following prompt (e.g. merge confirmation).
+    setTimeout(() => resolve?.(value), 0);
   }, []);
 
   // Switch focused pane with Tab (always active; no conflict with text input).
