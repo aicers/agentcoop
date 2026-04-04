@@ -265,6 +265,11 @@ function forceRemoveWorktreeAndBranch(
 
   rmSync(wtPath, { recursive: true, force: true });
 
+  // Clean up stale worktree metadata so the branch is no longer
+  // considered "checked out" — otherwise `git branch -D` (and a
+  // subsequent `git worktree add -b`) can fail with a ghost ref.
+  execFileSync("git", ["worktree", "prune"], { ...EXEC_OPTS, cwd: bare });
+
   try {
     execFileSync("git", ["branch", "-D", branch], { ...EXEC_OPTS, cwd: bare });
   } catch {

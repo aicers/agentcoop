@@ -435,14 +435,12 @@ describe("createWorktree", () => {
   });
 
   test("cleans up and recreates when user chooses clean", () => {
-    mockExistsSync.mockReturnValueOnce(true).mockReturnValue(false);
-    // git status (hasUncommittedChanges), git rev-parse --abbrev-ref HEAD,
-    // git worktree remove, git branch -D, git worktree add, then
-    // git rev-parse origin/main (resolveBaseSha).
-    // Use mockImplementation as catch-all since call count depends on
-    // existsSync interleaving; the last execFileSync returns the SHA.
+    mockExistsSync
+      .mockReturnValueOnce(true) // createWorktree: existsSync(wtPath)
+      .mockReturnValueOnce(true) // hasUncommittedChanges: existsSync(wtPath)
+      .mockReturnValue(false);
     mockExecFileSync
-      .mockReturnValueOnce("" as never) // git status
+      .mockReturnValueOnce("" as never) // git status --porcelain
       .mockReturnValueOnce("issue-5\n" as never) // git rev-parse --abbrev-ref
       .mockImplementation(() => `${FAKE_BASE_SHA}\n` as never);
     const result = createWorktree({ ...baseOpts, conflictChoice: "clean" });
@@ -454,20 +452,24 @@ describe("createWorktree", () => {
       force: true,
     });
     const calls = mockExecFileSync.mock.calls.map((c) => c[1]);
-    expect(calls).toEqual(
-      expect.arrayContaining([
-        expect.arrayContaining(["worktree", "remove"]),
-        expect.arrayContaining(["branch", "-D"]),
-        expect.arrayContaining(["worktree", "add"]),
-        expect.arrayContaining(["rev-parse", "origin/main"]),
-      ]),
-    );
+    expect(calls).toEqual([
+      ["status", "--porcelain"],
+      ["rev-parse", "--abbrev-ref", "HEAD"],
+      ["worktree", "remove", "--force", result.path],
+      ["worktree", "prune"],
+      ["branch", "-D", "issue-5"],
+      ["worktree", "add", "-b", "issue-5", result.path, "origin/main"],
+      ["rev-parse", "origin/main"],
+    ]);
   });
 
   test("clean continues even if worktree remove fails", () => {
-    mockExistsSync.mockReturnValueOnce(true).mockReturnValue(false);
+    mockExistsSync
+      .mockReturnValueOnce(true) // createWorktree: existsSync(wtPath)
+      .mockReturnValueOnce(true) // hasUncommittedChanges: existsSync(wtPath)
+      .mockReturnValue(false);
     mockExecFileSync
-      .mockReturnValueOnce("" as never) // git status
+      .mockReturnValueOnce("" as never) // git status --porcelain
       .mockReturnValueOnce("issue-5\n" as never) // git rev-parse --abbrev-ref
       .mockImplementationOnce(() => {
         throw new Error("worktree remove failed");
@@ -485,7 +487,7 @@ describe("createWorktree", () => {
 // removeWorktree
 // ---------------------------------------------------------------------------
 describe("removeWorktree", () => {
-  test("removes worktree, directory, and branch", () => {
+  test("removes worktree, directory, prunes, and deletes branch", () => {
     removeWorktree("org", "repo", 5);
 
     const wtPath = worktreePath("org", "repo", 5);
@@ -502,16 +504,29 @@ describe("removeWorktree", () => {
     });
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "git",
+      ["worktree", "prune"],
+      expect.objectContaining({ cwd: bare }),
+    );
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
       ["branch", "-D", "issue-5"],
       expect.objectContaining({ cwd: bare }),
     );
   });
 
-  test("does not throw if worktree remove fails", () => {
-    mockExecFileSync.mockImplementation(() => {
-      throw new Error("already removed");
-    });
+  test("does not throw if worktree remove fails and still prunes", () => {
+    const bare = repoPath("org", "repo");
+    mockExecFileSync.mockImplementation(((_cmd: string, args: string[]) => {
+      if (args[0] === "worktree" && args[1] === "remove")
+        throw new Error("already removed");
+      return "" as never;
+    }) as typeof execFileSync);
     expect(() => removeWorktree("org", "repo", 5)).not.toThrow();
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["worktree", "prune"],
+      expect.objectContaining({ cwd: bare }),
+    );
   });
 
   test("uses custom branch name when provided", () => {
