@@ -1646,9 +1646,9 @@ describe("TokenBar", () => {
 describe("TokenBar width adaptation", () => {
   test("truncates content to contentWidth so it cannot wrap", async () => {
     const emitter = new PipelineEventEmitter();
-    // contentWidth=26 is narrower than the full token line (~60+ chars).
+    // contentWidth=10 is narrower than each agent's token text (~28 chars).
     const { lastFrame } = render(
-      <TokenBar emitter={emitter} contentWidth={26} />,
+      <TokenBar emitter={emitter} contentWidth={10} />,
     );
 
     emitter.emit("agent:usage", {
@@ -1662,17 +1662,11 @@ describe("TokenBar width adaptation", () => {
     await new Promise((r) => setTimeout(r, 50));
 
     const frame = lastFrame() ?? "";
-    // Content should be truncated (ends with ellipsis).
+    // Each box independently truncates its agent's text.
     expect(frame).toContain("\u2026");
-    // The full Agent B text should not appear since it exceeds 26 columns.
-    expect(frame).not.toContain("Agent B");
-    // Each rendered content line must fit within the width budget.
-    for (const line of frame.split("\n")) {
-      // Skip border lines (box-drawing characters).
-      if (line.startsWith("│") || line.startsWith("┌") || line.startsWith("└"))
-        continue;
-      expect(stringWidth(line)).toBeLessThanOrEqual(26);
-    }
+    // Both agents appear since each has its own box.
+    expect(frame).toContain("Agent A");
+    expect(frame).toContain("Agent B");
   });
 
   test("truncates Korean (wide-char) content correctly", async () => {
@@ -1680,7 +1674,7 @@ describe("TokenBar width adaptation", () => {
     try {
       const emitter = new PipelineEventEmitter();
       const { lastFrame } = render(
-        <TokenBar emitter={emitter} contentWidth={26} />,
+        <TokenBar emitter={emitter} contentWidth={10} />,
       );
 
       emitter.emit("agent:usage", {
@@ -1703,18 +1697,62 @@ describe("TokenBar width adaptation", () => {
 
       const frame = lastFrame() ?? "";
       expect(frame).toContain("\u2026");
-      for (const line of frame.split("\n")) {
-        if (
-          line.startsWith("│") ||
-          line.startsWith("┌") ||
-          line.startsWith("└")
-        )
-          continue;
-        expect(stringWidth(line)).toBeLessThanOrEqual(26);
-      }
     } finally {
       await initI18n("en");
     }
+  });
+});
+
+describe("TokenBar layout prop", () => {
+  test("renders two boxes side by side in row layout", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(<TokenBar emitter={emitter} layout="row" />);
+
+    emitter.emit("agent:usage", {
+      agent: "a",
+      usage: { inputTokens: 1000, outputTokens: 500, cachedInputTokens: 0 },
+    });
+    emitter.emit("agent:usage", {
+      agent: "b",
+      usage: { inputTokens: 2000, outputTokens: 800, cachedInputTokens: 0 },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    // Both agents should appear on the same line in row layout.
+    const lines = frame.split("\n");
+    const agentALine = lines.find((l) => l.includes("Agent A"));
+    const agentBLine = lines.find((l) => l.includes("Agent B"));
+    expect(agentALine).toBeDefined();
+    expect(agentBLine).toBeDefined();
+    // In row layout they share a line.
+    expect(agentALine).toBe(agentBLine);
+  });
+
+  test("renders two boxes stacked in column layout", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <TokenBar emitter={emitter} layout="column" />,
+    );
+
+    emitter.emit("agent:usage", {
+      agent: "a",
+      usage: { inputTokens: 1000, outputTokens: 500, cachedInputTokens: 0 },
+    });
+    emitter.emit("agent:usage", {
+      agent: "b",
+      usage: { inputTokens: 2000, outputTokens: 800, cachedInputTokens: 0 },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    // In column layout, each agent's text appears on a different line.
+    const lines = frame.split("\n");
+    const agentAIdx = lines.findIndex((l) => l.includes("Agent A"));
+    const agentBIdx = lines.findIndex((l) => l.includes("Agent B"));
+    expect(agentAIdx).toBeGreaterThanOrEqual(0);
+    expect(agentBIdx).toBeGreaterThanOrEqual(0);
+    expect(agentAIdx).not.toBe(agentBIdx);
   });
 });
 
@@ -1782,6 +1820,25 @@ describe("computeVisibilityFlags", () => {
     const flags = computeVisibilityFlags(17, 4, true, "row");
     expect(flags.showTokenBar).toBe(false);
     expect(flags.showKeyHints).toBe(true);
+  });
+
+  test("column layout uses 6-row token bar height", () => {
+    // Column: token bar stacks two 3-row boxes = 6 rows total.
+    // paneArea = 30 - 1(input) - 4(status) - 6(token) = 19
+    // paneContent per pane = floor(19/2) - 4(overhead) = 5 >= 3 → shown
+    const flags = computeVisibilityFlags(30, 1, true, "column");
+    expect(flags.showTokenBar).toBe(true);
+    expect(flags.allowColumnLayout).toBe(true);
+  });
+
+  test("column layout hides token bar sooner due to 6-row height", () => {
+    // Column with token: paneArea = 22 - 1 - 4 - 6 = 11
+    // paneContent = floor(11/2) - 4 = 1 < 3 → hide token bar
+    // Column without token: paneArea = 22 - 1 - 4 - 0 = 17
+    // paneContent = floor(17/2) - 4 = 4 >= 3 → fits
+    const flags = computeVisibilityFlags(22, 1, true, "column");
+    expect(flags.showTokenBar).toBe(false);
+    expect(flags.allowColumnLayout).toBe(true);
   });
 });
 

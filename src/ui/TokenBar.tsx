@@ -25,26 +25,27 @@ export function formatTokenCount(n: number): string {
   return `${m.toFixed(1)}M`;
 }
 
-const SEP = "  |  ";
-
 interface TokenBarProps {
   emitter: PipelineEventEmitter;
   /** When false, the bar stays mounted (accumulating data) but renders nothing. */
   visible?: boolean;
   /**
-   * Available width for content inside the bordered box.
+   * Available width for content inside each bordered box.
    * When provided, the content is rendered as a single truncated line and the
    * box height is fixed to 3 rows (top border + content + bottom border) so
    * that wrapping can never inflate the bar beyond what the height model in
    * App.tsx assumes.
    */
   contentWidth?: number;
+  /** Layout direction – must match the agent pane layout. */
+  layout?: "row" | "column";
 }
 
 export function TokenBar({
   emitter,
   visible = true,
   contentWidth,
+  layout = "row",
 }: TokenBarProps) {
   const [usageA, setUsageA] = useState<TokenUsage>({
     inputTokens: 0,
@@ -95,23 +96,40 @@ export function TokenBar({
     formatTokenCount(usageB.inputTokens),
     formatTokenCount(usageB.outputTokens),
   );
-  const fullLine = `${textA}${SEP}${textB}`;
 
-  const displayLine =
+  const displayA =
     contentWidth !== undefined
-      ? truncateWithEllipsis(fullLine, contentWidth)
-      : fullLine;
+      ? truncateWithEllipsis(textA, contentWidth)
+      : textA;
+  const displayB =
+    contentWidth !== undefined
+      ? truncateWithEllipsis(textB, contentWidth)
+      : textB;
+
+  const boxHeight = contentWidth !== undefined ? 3 : undefined;
 
   return (
-    <Box
-      borderStyle="single"
-      borderColor="gray"
-      paddingX={1}
-      flexShrink={0}
-      height={contentWidth !== undefined ? 3 : undefined}
-      overflow="hidden"
-    >
-      <Text>{displayLine}</Text>
+    <Box flexDirection={layout} flexShrink={0}>
+      <Box
+        flexGrow={1}
+        borderStyle="single"
+        borderColor="gray"
+        paddingX={1}
+        height={boxHeight}
+        overflow="hidden"
+      >
+        <Text>{displayA}</Text>
+      </Box>
+      <Box
+        flexGrow={1}
+        borderStyle="single"
+        borderColor="gray"
+        paddingX={1}
+        height={boxHeight}
+        overflow="hidden"
+      >
+        <Text>{displayB}</Text>
+      </Box>
     </Box>
   );
 }
