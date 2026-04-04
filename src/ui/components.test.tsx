@@ -6,7 +6,7 @@
  */
 import { Box, Text, useInput, useStdout } from "ink";
 import { cleanup, render } from "ink-testing-library";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { afterEach, describe, expect, test } from "vitest";
 import { PipelineEventEmitter } from "../pipeline-events.js";
 import { AgentPane, splitIntoRows } from "./AgentPane.js";
@@ -1080,5 +1080,87 @@ describe("viewport height constraint", () => {
     expect(after).not.toContain("A20");
     // Pane B must remain at the bottom (unaffected by pane A scroll).
     expect(after).toContain("B20");
+  });
+});
+
+// ---- Back-to-back prompt keypress isolation ---------------------------------
+
+describe("back-to-back prompt keypress isolation", () => {
+  /**
+   * Harness that reproduces App's dispatch/handleSubmit pattern.
+   * On mount it runs two consecutive prompts (like reportCompletion → confirmMerge).
+   * The first prompt has a single choice; the second has two.
+   * `onResult` is called with the second prompt's selected value.
+   */
+  function DoublePromptHarness({
+    onResult,
+  }: { onResult: (value: string) => void }) {
+    const [inputRequest, setInputRequest] = useState<InputRequest | null>(null);
+    const resolveRef = useRef<((value: string) => void) | null>(null);
+
+    const dispatch = useCallback((request: InputRequest): Promise<string> => {
+      return new Promise<string>((resolve) => {
+        resolveRef.current = resolve;
+        setInputRequest(request);
+      });
+    }, []);
+
+    const handleSubmit = useCallback((value: string) => {
+      const resolve = resolveRef.current;
+      resolveRef.current = null;
+      setInputRequest(null);
+      setTimeout(() => resolve?.(value), 0);
+    }, []);
+
+    useEffect(() => {
+      (async () => {
+        // First prompt: single OK choice (like reportCompletion).
+        await dispatch({
+          message: "Completed.",
+          choices: [{ label: "OK", value: "ok" }],
+        });
+        // Second prompt: two choices (like confirmMerge).
+        const answer = await dispatch({
+          message: "Merge?",
+          choices: [
+            { label: "Yes", value: "yes" },
+            { label: "No", value: "no" },
+          ],
+        });
+        onResult(answer);
+      })();
+    }, [dispatch, onResult]);
+
+    return <InputArea request={inputRequest} onSubmit={handleSubmit} />;
+  }
+
+  test("pressing 1 on first prompt does not auto-select on second prompt", async () => {
+    let result: string | undefined;
+    const { lastFrame, stdin } = render(
+      <DoublePromptHarness onResult={(v) => { result = v; }} />,
+    );
+
+    // Wait for the first prompt to render.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastFrame()).toContain("Completed.");
+    expect(lastFrame()).toContain("OK");
+
+    // Press "1" to select OK on the first prompt.
+    stdin.write("1");
+    await new Promise((r) => setTimeout(r, 100));
+
+    // The second prompt should now be visible, still waiting for input.
+    expect(lastFrame()).toContain("Merge?");
+    expect(lastFrame()).toContain("Yes");
+    expect(lastFrame()).toContain("No");
+
+    // The second prompt must NOT have been auto-resolved by the "1" keypress.
+    expect(result).toBeUndefined();
+
+    // Now explicitly select option 2 on the second prompt.
+    stdin.write("2");
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(result).toBe("no");
   });
 });
