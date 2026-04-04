@@ -46,6 +46,8 @@ export interface RunState {
   issueNumber: number;
   branch: string;
   worktreePath: string;
+  /** Full SHA of origin/{defaultBranch} at worktree creation time. */
+  baseSha: string | undefined;
   prNumber: number | undefined;
   currentStage: number;
   stageLoopCount: number;
@@ -115,6 +117,7 @@ function isValidRunState(
     typeof r.issueNumber === "number" &&
     typeof r.branch === "string" &&
     typeof r.worktreePath === "string" &&
+    isOptionalString(r.baseSha) &&
     (r.prNumber === undefined ||
       r.prNumber === null ||
       typeof r.prNumber === "number") &&
@@ -180,6 +183,7 @@ export function loadRunState(
   const normalised: RunState = {
     ...raw,
     version: (r.version as number) ?? 1,
+    baseSha: (r.baseSha as string | undefined) ?? undefined,
     prNumber: raw.prNumber ?? undefined,
     issueSyncStatus:
       (raw.issueSyncStatus as IssueSyncStatus | undefined) ?? "skipped",

@@ -44,13 +44,16 @@ export function buildImplementPrompt(
     `## Instructions`,
     ``,
     `Implement the changes required to resolve this issue.  Work inside the`,
-    `worktree directory listed above.  Make sure the code compiles and any`,
-    `existing tests still pass.`,
+    `worktree directory listed above — it is freshly based on the latest`,
+    `remote default branch, so you are working on top of the most recent`,
+    `upstream state.  Make sure the code compiles and any existing tests`,
+    `still pass.`,
     ``,
-    `If the project uses external services (databases, message brokers, etc.),`,
-    `start the required infrastructure via Docker Compose and run the full test`,
-    `suite against it.  If a port conflict occurs, change the port rather than`,
-    `skipping the service.`,
+    `If the project uses external services (databases, message brokers,`,
+    `dev servers, etc.), start them using whatever tools the project`,
+    `provides (Docker Compose, \`pnpm dev\`, setup scripts, etc.) and run`,
+    `the full test suite against them.  If a port conflict occurs, change`,
+    `the port rather than skipping the service.`,
   ];
 
   if (ctx.userInstruction) {

@@ -17,6 +17,8 @@ interface StatusBarProps {
   owner: string;
   repo: string;
   issueNumber: number;
+  /** Full SHA of the base commit; displayed abbreviated in the bar. */
+  baseSha?: string;
 }
 
 export function StatusBar({
@@ -24,6 +26,7 @@ export function StatusBar({
   owner,
   repo,
   issueNumber,
+  baseSha,
 }: StatusBarProps) {
   const [stage, setStage] = useState<StageEnterEvent | null>(null);
   const [lastOutcome, setLastOutcome] = useState<string | null>(null);
@@ -80,12 +83,19 @@ export function StatusBar({
   const outcomeText = outcomeLabel ? m["statusBar.last"](outcomeLabel) : "";
 
   const issueLabel = `${owner}/${repo}#${issueNumber}`;
+  const baseText = baseSha ? m["statusBar.base"](baseSha.slice(0, 7)) : "";
 
   return (
     <Box borderStyle="single" borderColor="gray" paddingX={1}>
       <Text bold color="cyan">
         {issueLabel}
       </Text>
+      {baseText && (
+        <Text>
+          {"  |  "}
+          {baseText}
+        </Text>
+      )}
       <Text>{"  |  "}</Text>
       <Text bold>{stageText}</Text>
       {iterText && (

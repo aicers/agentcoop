@@ -93,11 +93,16 @@ describe("buildImplementPrompt", () => {
     expect(prompt).not.toContain("Additional feedback");
   });
 
-  test("instructs to start infrastructure and run tests against it", () => {
+  test("instructs to start services and run tests against them", () => {
     const prompt = buildImplementPrompt(BASE_CTX, makeOpts());
     expect(prompt).toContain("Docker Compose");
-    expect(prompt).toContain("port conflict");
-    expect(prompt).toContain("run the full test");
+    expect(prompt).toContain("port");
+    expect(prompt).toContain("full test suite");
+  });
+  test("mentions worktree is based on latest remote default branch", () => {
+    const prompt = buildImplementPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("freshly based on the latest");
+    expect(prompt).toContain("remote default branch");
   });
 });
 

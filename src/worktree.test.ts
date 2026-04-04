@@ -27,6 +27,8 @@ const {
   bootstrapRepo,
   hasUncommittedChanges,
   getHeadSha,
+  resolveBaseSha,
+  resolveMergeBase,
   createWorktree,
   removeWorktree,
 } = await import("./worktree.js");
@@ -284,6 +286,60 @@ describe("getHeadSha", () => {
 });
 
 // ---------------------------------------------------------------------------
+// resolveBaseSha
+// ---------------------------------------------------------------------------
+describe("resolveBaseSha", () => {
+  test("returns trimmed SHA from git rev-parse", () => {
+    mockExecFileSync.mockReturnValue("abc123def456\n" as never);
+    expect(resolveBaseSha("/tmp/wt", "main")).toBe("abc123def456");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["rev-parse", "origin/main"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  test("works with non-main base branch", () => {
+    mockExecFileSync.mockReturnValue("deadbeef\n" as never);
+    expect(resolveBaseSha("/tmp/wt", "develop")).toBe("deadbeef");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["rev-parse", "origin/develop"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  test("propagates error when git fails", () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error("unknown revision");
+    });
+    expect(() => resolveBaseSha("/tmp/wt", "main")).toThrow("unknown revision");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveMergeBase
+// ---------------------------------------------------------------------------
+describe("resolveMergeBase", () => {
+  test("returns trimmed SHA from git merge-base", () => {
+    mockExecFileSync.mockReturnValue("deadbeef123\n" as never);
+    expect(resolveMergeBase("/tmp/wt", "main")).toBe("deadbeef123");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["merge-base", "origin/main", "HEAD"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  test("propagates error when git fails", () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error("no merge base");
+    });
+    expect(() => resolveMergeBase("/tmp/wt", "main")).toThrow("no merge base");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // createWorktree
 // ---------------------------------------------------------------------------
 describe("createWorktree", () => {
@@ -294,12 +350,17 @@ describe("createWorktree", () => {
     baseBranch: "main",
   };
 
+  const FAKE_BASE_SHA = "abc1234def5678";
+
   test("creates worktree when path does not exist", () => {
     mockExistsSync.mockReturnValue(false);
+    // git worktree add, then git rev-parse origin/main
+    mockExecFileSync.mockImplementation(() => `${FAKE_BASE_SHA}\n` as never);
     const result = createWorktree(baseOpts);
 
     expect(result.path).toBe(worktreePath("org", "repo", 5));
     expect(result.branch).toBe("issue-5");
+    expect(result.baseSha).toBe(FAKE_BASE_SHA);
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "git",
       ["worktree", "add", "-b", "issue-5", result.path, "origin/main"],
@@ -309,12 +370,14 @@ describe("createWorktree", () => {
 
   test("uses custom branch name when provided", () => {
     mockExistsSync.mockReturnValue(false);
+    mockExecFileSync.mockImplementation(() => `${FAKE_BASE_SHA}\n` as never);
     const result = createWorktree({
       ...baseOpts,
       branch: "alice/issue-5",
     });
 
     expect(result.branch).toBe("alice/issue-5");
+    expect(result.baseSha).toBe(FAKE_BASE_SHA);
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "git",
       ["worktree", "add", "-b", "alice/issue-5", result.path, "origin/main"],
@@ -327,33 +390,39 @@ describe("createWorktree", () => {
     expect(() => createWorktree(baseOpts)).toThrow("Worktree already exists");
   });
 
-  test("reuses existing worktree", () => {
+  test("reuses existing worktree with merge-base for baseSha", () => {
     mockExistsSync.mockReturnValue(true);
-    // First call: git status --porcelain (clean)
-    // Second call: git rev-parse --abbrev-ref HEAD
+    // 1: git status --porcelain (clean)
+    // 2: git rev-parse --abbrev-ref HEAD
+    // 3: git merge-base origin/main HEAD (baseSha via merge-base)
     mockExecFileSync
       .mockReturnValueOnce("" as never)
-      .mockReturnValueOnce("issue-5\n" as never);
+      .mockReturnValueOnce("issue-5\n" as never)
+      .mockReturnValueOnce(`${FAKE_BASE_SHA}\n` as never);
     const result = createWorktree({ ...baseOpts, conflictChoice: "reuse" });
     expect(result.path).toBe(worktreePath("org", "repo", 5));
     expect(result.branch).toBe("issue-5");
+    expect(result.baseSha).toBe(FAKE_BASE_SHA);
     expect(result.hadUncommittedChanges).toBe(false);
-    // hasUncommittedChanges + getCheckedOutBranch, no git worktree add.
-    expect(mockExecFileSync).toHaveBeenCalledTimes(2);
+    // hasUncommittedChanges + getCheckedOutBranch + resolveMergeBase.
+    expect(mockExecFileSync).toHaveBeenCalledTimes(3);
+    // Verify merge-base is called (not rev-parse origin/main).
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "git",
-      ["status", "--porcelain"],
+      ["merge-base", "origin/main", "HEAD"],
       expect.objectContaining({ cwd: result.path }),
     );
   });
 
   test("reuse reports hadUncommittedChanges when dirty", () => {
     mockExistsSync.mockReturnValue(true);
-    // First call: git status --porcelain (dirty)
-    // Second call: git rev-parse --abbrev-ref HEAD
+    // 1: git status --porcelain (dirty)
+    // 2: git rev-parse --abbrev-ref HEAD
+    // 3: git merge-base origin/main HEAD (baseSha)
     mockExecFileSync
       .mockReturnValueOnce(" M file.ts\n" as never)
-      .mockReturnValueOnce("issue-5\n" as never);
+      .mockReturnValueOnce("issue-5\n" as never)
+      .mockReturnValueOnce(`${FAKE_BASE_SHA}\n` as never);
     const result = createWorktree({ ...baseOpts, conflictChoice: "reuse" });
     expect(result.hadUncommittedChanges).toBe(true);
   });
@@ -366,48 +435,49 @@ describe("createWorktree", () => {
   });
 
   test("cleans up and recreates when user chooses clean", () => {
-    // First call: existsSync for the worktree path → true (conflict)
-    // Second call: existsSync inside the new worktree add → false
     mockExistsSync.mockReturnValueOnce(true).mockReturnValue(false);
-    // Call sequence: git status, git rev-parse, git worktree remove,
-    // git branch -D, git worktree add
+    // git status (hasUncommittedChanges), git rev-parse --abbrev-ref HEAD,
+    // git worktree remove, git branch -D, git worktree add, then
+    // git rev-parse origin/main (resolveBaseSha).
+    // Use mockImplementation as catch-all since call count depends on
+    // existsSync interleaving; the last execFileSync returns the SHA.
     mockExecFileSync
-      .mockReturnValueOnce("" as never)
-      .mockReturnValueOnce("issue-5\n" as never)
-      .mockImplementation(() => "" as never);
+      .mockReturnValueOnce("" as never) // git status
+      .mockReturnValueOnce("issue-5\n" as never) // git rev-parse --abbrev-ref
+      .mockImplementation(() => `${FAKE_BASE_SHA}\n` as never);
     const result = createWorktree({ ...baseOpts, conflictChoice: "clean" });
 
     expect(result.path).toBe(worktreePath("org", "repo", 5));
+    expect(result.baseSha).toBe(FAKE_BASE_SHA);
     expect(mockRmSync).toHaveBeenCalledWith(result.path, {
       recursive: true,
       force: true,
     });
-    // Should call git worktree remove, git branch -D, then git worktree add.
     const calls = mockExecFileSync.mock.calls.map((c) => c[1]);
     expect(calls).toEqual(
       expect.arrayContaining([
         expect.arrayContaining(["worktree", "remove"]),
         expect.arrayContaining(["branch", "-D"]),
         expect.arrayContaining(["worktree", "add"]),
+        expect.arrayContaining(["rev-parse", "origin/main"]),
       ]),
     );
   });
 
   test("clean continues even if worktree remove fails", () => {
     mockExistsSync.mockReturnValueOnce(true).mockReturnValue(false);
-    // Call sequence: git status (clean), git rev-parse → branch,
-    // git worktree remove (fails), rmSync, git branch -D, git worktree add
     mockExecFileSync
       .mockReturnValueOnce("" as never) // git status
-      .mockReturnValueOnce("issue-5\n" as never) // git rev-parse
+      .mockReturnValueOnce("issue-5\n" as never) // git rev-parse --abbrev-ref
       .mockImplementationOnce(() => {
         throw new Error("worktree remove failed");
       })
-      .mockImplementation(() => "" as never);
+      .mockImplementation(() => `${FAKE_BASE_SHA}\n` as never);
 
     // Should not throw — the error is caught.
     const result = createWorktree({ ...baseOpts, conflictChoice: "clean" });
     expect(result.path).toBe(worktreePath("org", "repo", 5));
+    expect(result.baseSha).toBe(FAKE_BASE_SHA);
   });
 });
 
@@ -482,11 +552,13 @@ describe("createWorktree — legacy worktree branch detection", () => {
 
   test("reuse returns actual checked-out branch, not requested branch", () => {
     mockExistsSync.mockReturnValue(true);
-    // First call: git status --porcelain (clean)
-    // Second call: git rev-parse --abbrev-ref HEAD → legacy branch
+    // 1: git status --porcelain (clean)
+    // 2: git rev-parse --abbrev-ref HEAD → legacy branch
+    // 3: git merge-base origin/main HEAD (baseSha via merge-base)
     mockExecFileSync
       .mockReturnValueOnce("" as never)
-      .mockReturnValueOnce("issue-5\n" as never);
+      .mockReturnValueOnce("issue-5\n" as never)
+      .mockReturnValueOnce("abc1234def5678\n" as never);
     const result = createWorktree({
       ...baseOpts,
       branch: "alice/issue-5",
@@ -497,16 +569,10 @@ describe("createWorktree — legacy worktree branch detection", () => {
 
   test("clean removes the actual checked-out branch, not the requested one", () => {
     mockExistsSync.mockReturnValue(true);
-    // Call sequence:
-    // 1. git status --porcelain (clean)
-    // 2. git rev-parse --abbrev-ref HEAD → legacy branch
-    // 3. git worktree remove (forceRemove)
-    // 4. git branch -D (forceRemove)
-    // 5. git worktree add (recreate)
     mockExecFileSync
-      .mockReturnValueOnce("" as never)
-      .mockReturnValueOnce("issue-5\n" as never)
-      .mockImplementation(() => "" as never);
+      .mockReturnValueOnce("" as never) // git status
+      .mockReturnValueOnce("issue-5\n" as never) // git rev-parse --abbrev-ref
+      .mockImplementation(() => "abc1234def5678\n" as never);
     const result = createWorktree({
       ...baseOpts,
       branch: "alice/issue-5",
@@ -520,16 +586,11 @@ describe("createWorktree — legacy worktree branch detection", () => {
     );
     // The new worktree is created with the requested branch name.
     expect(result.branch).toBe("alice/issue-5");
+    expect(result.baseSha).toBe("abc1234def5678");
   });
 
   test("clean tolerates non-git directory and falls back to requested branch", () => {
     mockExistsSync.mockReturnValue(true);
-    // Call sequence:
-    // 1. git status --porcelain → fails (not a git dir) → hasUncommittedChanges returns false
-    // 2. git rev-parse --abbrev-ref HEAD → fails (not a git dir)
-    // 3. git worktree remove (forceRemove, may fail)
-    // 4. git branch -D (forceRemove, may fail)
-    // 5. git worktree add (recreate)
     mockExecFileSync
       .mockImplementationOnce(() => {
         throw new Error("not a git repository");
@@ -537,7 +598,7 @@ describe("createWorktree — legacy worktree branch detection", () => {
       .mockImplementationOnce(() => {
         throw new Error("not a git repository");
       })
-      .mockImplementation(() => "" as never);
+      .mockImplementation(() => "abc1234def5678\n" as never);
     const result = createWorktree({
       ...baseOpts,
       branch: "alice/issue-5",
@@ -545,6 +606,7 @@ describe("createWorktree — legacy worktree branch detection", () => {
     });
     // Should not throw — falls back to the requested branch.
     expect(result.branch).toBe("alice/issue-5");
+    expect(result.baseSha).toBe("abc1234def5678");
   });
 });
 

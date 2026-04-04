@@ -135,6 +135,7 @@ export function App({
         owner={pipelineOptions.context.owner}
         repo={pipelineOptions.context.repo}
         issueNumber={pipelineOptions.context.issueNumber}
+        baseSha={pipelineOptions.context.baseSha}
       />
       <InputArea request={inputRequest} onSubmit={handleSubmit} />
     </Box>

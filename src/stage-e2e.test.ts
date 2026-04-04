@@ -1678,6 +1678,77 @@ describe("Stage 8 (Squash) through pipeline", () => {
   });
 });
 
+describe("Stage 8 (Squash) baseSha integration", () => {
+  test("squash prompt includes baseSha when context has it", async () => {
+    let capturedPrompt = "";
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockImplementation((prompt: string) => {
+        capturedPrompt = prompt;
+        return makeStream(
+          makeResult({ sessionId: "s1", responseText: "Squashed." }),
+        );
+      }),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+
+    const stage = createSquashStageHandler({
+      agent,
+      ...ISSUE_CTX,
+      defaultBranch: "main",
+      countBranchCommits: () => 3,
+      getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
+      collectFailureLogs: vi.fn().mockReturnValue(""),
+      delay: vi.fn().mockResolvedValue(undefined),
+      pollIntervalMs: 100,
+      pollTimeoutMs: 1000,
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
+    });
+
+    const ctx = { ...BASE_CTX, baseSha: "abc1234def567890" };
+    await runPipeline(makePipelineOpts({ stages: [stage], context: ctx }));
+
+    expect(capturedPrompt).toContain("abc1234def567890");
+    expect(capturedPrompt).toContain("git reset --soft abc1234def567890");
+  });
+
+  test("squash prompt uses generic wording when baseSha is absent", async () => {
+    let capturedPrompt = "";
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockImplementation((prompt: string) => {
+        capturedPrompt = prompt;
+        return makeStream(
+          makeResult({ sessionId: "s1", responseText: "Squashed." }),
+        );
+      }),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+
+    const stage = createSquashStageHandler({
+      agent,
+      ...ISSUE_CTX,
+      defaultBranch: "main",
+      countBranchCommits: () => 3,
+      getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
+      collectFailureLogs: vi.fn().mockReturnValue(""),
+      delay: vi.fn().mockResolvedValue(undefined),
+      pollIntervalMs: 100,
+      pollTimeoutMs: 1000,
+      getHeadSha: stubGetHeadSha,
+      emptyRunsGracePeriodMs: 0,
+    });
+
+    await runPipeline(makePipelineOpts({ stages: [stage] }));
+
+    expect(capturedPrompt).toContain("Squash all commits on this branch");
+    expect(capturedPrompt).not.toContain("git reset --soft");
+  });
+});
+
 // ---- Stage 7 (Review) through pipeline ---------------------------------------
 
 describe("Stage 7 (Review) through pipeline", () => {

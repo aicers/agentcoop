@@ -86,7 +86,13 @@ describe("buildSelfCheckPrompt", () => {
   test("external services item instructs to run integration tests", () => {
     const prompt = buildSelfCheckPrompt(BASE_CTX, makeOpts());
     expect(prompt).toContain("run integration tests");
-    expect(prompt).toContain("rather than skipping tests");
+    expect(prompt).toContain("rather than skipping");
+  });
+
+  test("documentation item instructs to verify screenshots", () => {
+    const prompt = buildSelfCheckPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("screenshots");
+    expect(prompt).toContain("do not use placeholders");
   });
 
   test("includes repo and issue context", () => {
