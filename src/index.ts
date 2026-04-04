@@ -63,7 +63,6 @@ interface RunParams {
   agentAConfig: AgentConfig;
   agentBConfig: AgentConfig;
   executionMode: "auto" | "step";
-  claudePermissionMode: "auto" | "bypass";
   pipelineSettings: PipelineSettings;
   issueTitle: string;
   issueBody: string;
@@ -77,13 +76,11 @@ interface RunParams {
 
 function createAdapter(
   agentConfig: AgentConfig,
-  permissionMode: "auto" | "bypass",
   inactivityTimeoutMs?: number,
 ): AgentAdapter {
   if (agentConfig.cli === "claude") {
     return createClaudeAdapter({
       model: agentConfig.model,
-      permissionMode,
       effortLevel: agentConfig.effortLevel as
         | "low"
         | "medium"
@@ -328,7 +325,6 @@ try {
           effortLevel: savedState.agentB.effortLevel,
         },
         executionMode: savedState.executionMode,
-        claudePermissionMode: savedState.claudePermissionMode,
         pipelineSettings: target.config.pipelineSettings,
         issueTitle: issue.title,
         issueBody: issue.body,
@@ -367,7 +363,6 @@ try {
       agentAConfig: result.agentA,
       agentBConfig: result.agentB,
       executionMode: result.executionMode,
-      claudePermissionMode: result.claudePermissionMode,
       pipelineSettings: result.pipelineSettings,
       issueTitle: result.issue.title,
       issueBody: result.issue.body,
@@ -381,7 +376,6 @@ try {
     agentAConfig,
     agentBConfig,
     executionMode,
-    claudePermissionMode,
     pipelineSettings,
     issueTitle,
     issueBody,
@@ -428,7 +422,6 @@ try {
   console.log(m["boot.agentA"](modelDisplayName(agentAConfig)));
   console.log(m["boot.agentB"](modelDisplayName(agentBConfig)));
   console.log(m["boot.mode"](executionMode));
-  console.log(m["boot.permission"](claudePermissionMode));
   if (startFromStage !== undefined) {
     console.log(m["boot.resumingFromStage"](startFromStage));
   }
@@ -438,11 +431,11 @@ try {
   const inactivityTimeoutMs =
     pipelineSettings.inactivityTimeoutMinutes * 60_000;
   const agentA = trackProcesses(
-    createAdapter(agentAConfig, claudePermissionMode, inactivityTimeoutMs),
+    createAdapter(agentAConfig, inactivityTimeoutMs),
     activeStreams,
   );
   const agentB = trackProcesses(
-    createAdapter(agentBConfig, claudePermissionMode, inactivityTimeoutMs),
+    createAdapter(agentBConfig, inactivityTimeoutMs),
     activeStreams,
   );
 
@@ -521,7 +514,6 @@ try {
     stageLoopCount: 0,
     reviewRound: 0,
     executionMode,
-    claudePermissionMode,
     agentA: {
       cli: agentAConfig.cli,
       model: agentAConfig.model,

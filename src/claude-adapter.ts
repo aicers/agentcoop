@@ -197,13 +197,10 @@ export class ClaudeStreamTransformer extends JsonlLineTransformer {
 // Adapter options + args builder
 // ---------------------------------------------------------------------------
 
-export type ClaudePermissionMode = "auto" | "bypass";
-
 export type ClaudeEffortLevel = "low" | "medium" | "high" | "max";
 
 export interface ClaudeAdapterOptions {
   model?: string;
-  permissionMode?: ClaudePermissionMode;
   effortLevel?: ClaudeEffortLevel;
   contextWindow?: string;
   inactivityTimeoutMs?: number;
@@ -213,7 +210,6 @@ export function buildClaudeArgs(
   prompt: string,
   opts: {
     model?: string;
-    permissionMode: ClaudePermissionMode;
     effortLevel?: ClaudeEffortLevel;
     contextWindow?: string;
   },
@@ -230,11 +226,7 @@ export function buildClaudeArgs(
     }
     args.push("--model", modelId);
   }
-  if (opts.permissionMode === "bypass") {
-    args.push("--permission-mode", "bypassPermissions");
-  } else {
-    args.push("--permission-mode", "auto");
-  }
+  args.push("--permission-mode", "bypassPermissions");
   if (opts.effortLevel) {
     args.push("--effort", opts.effortLevel);
   }
@@ -295,7 +287,6 @@ export function createClaudeAdapter(
   opts: ClaudeAdapterOptions = {},
 ): AgentAdapter {
   const model = opts.model;
-  const permissionMode = opts.permissionMode ?? "auto";
   const effortLevel = opts.effortLevel;
   const contextWindow = opts.contextWindow;
   const inactivityTimeoutMs = opts.inactivityTimeoutMs;
@@ -308,7 +299,6 @@ export function createClaudeAdapter(
         command: "claude",
         args: buildClaudeArgs(prompt, {
           model,
-          permissionMode,
           effortLevel,
           contextWindow,
         }),
@@ -325,7 +315,7 @@ export function createClaudeAdapter(
         command: "claude",
         args: buildClaudeArgs(
           prompt,
-          { model, permissionMode, effortLevel, contextWindow },
+          { model, effortLevel, contextWindow },
           sessionId,
         ),
         cwd: options?.cwd,

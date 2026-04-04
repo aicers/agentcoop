@@ -64,7 +64,6 @@ describe("catalogs are complete", () => {
       "boot.agentA": ["sonnet"],
       "boot.agentB": ["sonnet"],
       "boot.mode": ["auto"],
-      "boot.permission": ["auto"],
       "boot.resumingFromStage": [3],
       "pipeline.userSkipped": [1, "Implement"],
       "pipeline.userDeclinedLoop": [2],

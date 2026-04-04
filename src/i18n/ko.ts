@@ -6,7 +6,7 @@ export const ko: Messages = {
   "quickStart.header": "저장된 설정 발견:",
   "quickStart.agentA": (model) => `  에이전트 A: ${model}`,
   "quickStart.agentB": (model) => `  에이전트 B: ${model}`,
-  "quickStart.mode": (exec, perm) => `  모드: ${exec} / ${perm}`,
+  "quickStart.mode": (exec) => `  모드: ${exec}`,
   "quickStart.language": (lang) => `  언어: ${lang}`,
   "quickStart.usePrevious": "이전 설정을 사용하시겠습니까?",
 
@@ -29,7 +29,6 @@ export const ko: Messages = {
     `${label} \uCEE8\uD14D\uC2A4\uD2B8 \uC708\uB3C4\uC6B0:`,
   "startup.agentEffort": (label) => `${label} \uB178\uB825 \uC218\uC900:`,
   "startup.executionMode": "\uC2E4\uD589 \uBAA8\uB4DC:",
-  "startup.claudePermission": "Claude \uAD8C\uD55C \uBAA8\uB4DC:",
   "startup.language": "\uC5B8\uC5B4:",
   "startup.languageEnglish": "English",
   "startup.languageKorean": "\uD55C\uAD6D\uC5B4",
@@ -96,7 +95,6 @@ export const ko: Messages = {
   "boot.agentA": (model) => `  \uC5D0\uC774\uC804\uD2B8 A: ${model}`,
   "boot.agentB": (model) => `  \uC5D0\uC774\uC804\uD2B8 B: ${model}`,
   "boot.mode": (mode) => `  \uBAA8\uB4DC: ${mode}`,
-  "boot.permission": (mode) => `  \uAD8C\uD55C: ${mode}`,
   "boot.resumingFromStage": (stage) =>
     `  ${stage}\uB2E8\uACC4\uBD80\uD130 \uC7AC\uAC1C`,
 

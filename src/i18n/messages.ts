@@ -10,7 +10,7 @@ export interface Messages {
   "quickStart.header": string;
   "quickStart.agentA": (model: string) => string;
   "quickStart.agentB": (model: string) => string;
-  "quickStart.mode": (exec: string, perm: string) => string;
+  "quickStart.mode": (exec: string) => string;
   "quickStart.language": (lang: string) => string;
   "quickStart.usePrevious": string;
 
@@ -28,7 +28,6 @@ export interface Messages {
   "startup.agentContext": (label: string) => string;
   "startup.agentEffort": (label: string) => string;
   "startup.executionMode": string;
-  "startup.claudePermission": string;
   "startup.language": string;
   "startup.languageEnglish": string;
   "startup.languageKorean": string;
@@ -79,7 +78,6 @@ export interface Messages {
   "boot.agentA": (model: string) => string;
   "boot.agentB": (model: string) => string;
   "boot.mode": (mode: string) => string;
-  "boot.permission": (mode: string) => string;
   "boot.resumingFromStage": (stage: number) => string;
 
   // ---- stage names -------------------------------------------------------

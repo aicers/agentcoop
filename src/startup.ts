@@ -20,7 +20,6 @@ export interface StartupResult {
   agentA: AgentConfig;
   agentB: AgentConfig;
   executionMode: "auto" | "step";
-  claudePermissionMode: "auto" | "bypass";
   language: "en" | "ko";
   pipelineSettings: PipelineSettings;
 }
@@ -158,12 +157,7 @@ export async function runStartup(
     console.log(m["quickStart.header"]);
     console.log(m["quickStart.agentA"](modelDisplayName(config.agentA)));
     console.log(m["quickStart.agentB"](modelDisplayName(config.agentB)));
-    console.log(
-      m["quickStart.mode"](
-        config.executionMode ?? "auto",
-        config.claudePermissionMode ?? "bypass",
-      ),
-    );
+    console.log(m["quickStart.mode"](config.executionMode ?? "auto"));
     console.log(
       m["quickStart.language"](
         config.language === "ko"
@@ -196,7 +190,6 @@ export async function runStartup(
         agentA: config.agentA,
         agentB: config.agentB,
         executionMode: config.executionMode ?? "auto",
-        claudePermissionMode: config.claudePermissionMode ?? "bypass",
         language: config.language,
         pipelineSettings: config.pipelineSettings,
       };
@@ -214,9 +207,6 @@ export async function runStartup(
     : CLI_DEFAULTS[defaultBCli];
   const agentB = await selectAgent(t()["agent.labelBRole"], agentBDefaults);
   const executionMode = await selectExecutionMode(config.executionMode);
-  const claudePermissionMode = await selectClaudePermissionMode(
-    config.claudePermissionMode,
-  );
 
   const { language, dirty: langDirty } = await selectLanguage(config);
   configDirty ||= langDirty;
@@ -234,10 +224,9 @@ export async function runStartup(
     throw new Error(t()["startup.issueNotConfirmed"]);
   }
 
-  // Persist agent selections, execution mode, and permission mode only
-  // when they actually changed, to avoid rewriting the config file on
-  // every run (which would drop unknown keys that loadConfig() normalizes
-  // away).
+  // Persist agent selections and execution mode only when they actually
+  // changed, to avoid rewriting the config file on every run (which
+  // would drop unknown keys that loadConfig() normalizes away).
   if (!agentConfigEqual(config.agentA, agentA)) {
     config.agentA = agentA;
     configDirty = true;
@@ -248,10 +237,6 @@ export async function runStartup(
   }
   if (config.executionMode !== executionMode) {
     config.executionMode = executionMode;
-    configDirty = true;
-  }
-  if (config.claudePermissionMode !== claudePermissionMode) {
-    config.claudePermissionMode = claudePermissionMode;
     configDirty = true;
   }
 
@@ -268,7 +253,6 @@ export async function runStartup(
     agentA,
     agentB,
     executionMode,
-    claudePermissionMode,
     language,
     pipelineSettings,
   };
@@ -402,19 +386,6 @@ async function selectExecutionMode(
       { name: "step", value: "step" as const },
     ],
     default: defaultValue ?? "auto",
-  });
-}
-
-async function selectClaudePermissionMode(
-  defaultValue?: "auto" | "bypass",
-): Promise<"auto" | "bypass"> {
-  return select({
-    message: t()["startup.claudePermission"],
-    choices: [
-      { name: "auto", value: "auto" as const },
-      { name: "bypass", value: "bypass" as const },
-    ],
-    default: defaultValue ?? "bypass",
   });
 }
 

@@ -53,7 +53,6 @@ export interface RunState {
   stageLoopCount: number;
   reviewRound: number;
   executionMode: "auto" | "step";
-  claudePermissionMode: "auto" | "bypass";
   agentA: AgentState;
   agentB: AgentState;
   issueSyncStatus: IssueSyncStatus;
@@ -125,8 +124,6 @@ function isValidRunState(
     typeof r.stageLoopCount === "number" &&
     typeof r.reviewRound === "number" &&
     (r.executionMode === "auto" || r.executionMode === "step") &&
-    (r.claudePermissionMode === "auto" ||
-      r.claudePermissionMode === "bypass") &&
     isValidAgentState(r.agentA) &&
     isValidAgentState(r.agentB) &&
     // issueSyncStatus and issueChanges are optional for backward compat
