@@ -1629,6 +1629,11 @@ describe("runStartup — quick-start", () => {
     expect(logs).toContain("Agent B: GPT-5.4 / Extra High");
     expect(logs).toContain("Mode: auto");
     expect(logs).toContain("Language: English");
+    expect(logs).toContain("Pipeline settings:");
+    expect(logs).toContain("Self-check auto iterations");
+    expect(logs).toContain("Review auto rounds");
+    expect(logs).toContain("Inactivity timeout");
+    expect(logs).toContain("Auto-resume attempts");
 
     consoleSpy.mockRestore();
   });

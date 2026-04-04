@@ -12,6 +12,7 @@ export interface Messages {
   "quickStart.agentB": (model: string) => string;
   "quickStart.mode": (exec: string) => string;
   "quickStart.language": (lang: string) => string;
+  "quickStart.pipelineSettings": string;
   "quickStart.usePrevious": string;
 
   // ---- startup / config (startup.ts) -------------------------------------

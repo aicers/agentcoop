@@ -8,6 +8,7 @@ export const ko: Messages = {
   "quickStart.agentB": (model) => `  에이전트 B: ${model}`,
   "quickStart.mode": (exec) => `  모드: ${exec}`,
   "quickStart.language": (lang) => `  언어: ${lang}`,
+  "quickStart.pipelineSettings": "  파이프라인 설정:",
   "quickStart.usePrevious": "이전 설정을 사용하시겠습니까?",
 
   // ---- startup / config --------------------------------------------------

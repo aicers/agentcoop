@@ -8,6 +8,7 @@ export const en: Messages = {
   "quickStart.agentB": (model) => `  Agent B: ${model}`,
   "quickStart.mode": (exec) => `  Mode: ${exec}`,
   "quickStart.language": (lang) => `  Language: ${lang}`,
+  "quickStart.pipelineSettings": "  Pipeline settings:",
   "quickStart.usePrevious": "Use previous settings?",
 
   // ---- startup / config --------------------------------------------------
