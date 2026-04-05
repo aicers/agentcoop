@@ -1,6 +1,8 @@
 import { Box, useInput, useStdout } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { NotificationSettings } from "../config.js";
 import { t } from "../i18n/index.js";
+import { notifyInputWaiting } from "../notify.js";
 import type {
   PipelineOptions,
   PipelineResult,
@@ -195,6 +197,8 @@ export interface AppProps {
   cliTypeA?: string;
   /** CLI identifier for Agent B (e.g. "claude" or "codex"). */
   cliTypeB?: string;
+  /** Notification settings (bell / desktop). */
+  notifications?: NotificationSettings;
   /**
    * Called when the user presses Ctrl+C so the caller can kill running
    * agent child processes before the pipeline unwinds.
@@ -211,6 +215,7 @@ export function App({
   modelNameB,
   cliTypeA,
   cliTypeB,
+  notifications,
   onCancel,
 }: AppProps) {
   const { height: terminalHeight, width: terminalWidth } =
@@ -283,10 +288,16 @@ export function App({
         : terminalWidth - 4
       : undefined;
 
+  const notificationsRef = useRef(notifications);
+  notificationsRef.current = notifications;
+
   const dispatch = useCallback((request: InputRequest): Promise<string> => {
     return new Promise<string>((resolve) => {
       resolveRef.current = resolve;
       setInputRequest(request);
+      if (notificationsRef.current) {
+        notifyInputWaiting(notificationsRef.current, request.message);
+      }
     });
   }, []);
 

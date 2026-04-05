@@ -23,11 +23,22 @@ export interface SavedAgentConfig {
   effortLevel?: string;
 }
 
+export interface NotificationSettings {
+  bell: boolean;
+  desktop: boolean;
+}
+
+export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+  bell: true,
+  desktop: false,
+};
+
 export interface Config {
   owners: string[];
   cloneBaseDir: string;
   language: "en" | "ko";
   pipelineSettings: PipelineSettings;
+  notifications: NotificationSettings;
   agentA?: SavedAgentConfig;
   agentB?: SavedAgentConfig;
   executionMode?: "auto" | "step";
@@ -38,6 +49,7 @@ const DEFAULT_CONFIG: Config = {
   cloneBaseDir: "~/projects",
   language: "en",
   pipelineSettings: { ...DEFAULT_PIPELINE_SETTINGS },
+  notifications: { ...DEFAULT_NOTIFICATION_SETTINGS },
 };
 
 export function configPath(): string {
@@ -63,6 +75,18 @@ function loadSavedAgentConfig(raw: unknown): SavedAgentConfig | undefined {
     contextWindow:
       typeof r.contextWindow === "string" ? r.contextWindow : undefined,
     effortLevel: typeof r.effortLevel === "string" ? r.effortLevel : undefined,
+  };
+}
+
+function loadNotificationSettings(raw: unknown): NotificationSettings {
+  const d = DEFAULT_NOTIFICATION_SETTINGS;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ...d };
+  }
+  const r = raw as Record<string, unknown>;
+  return {
+    bell: typeof r.bell === "boolean" ? r.bell : d.bell,
+    desktop: typeof r.desktop === "boolean" ? r.desktop : d.desktop,
   };
 }
 
@@ -96,6 +120,7 @@ export function loadConfig(): Config {
       ...DEFAULT_CONFIG,
       owners: [...DEFAULT_CONFIG.owners],
       pipelineSettings: { ...DEFAULT_CONFIG.pipelineSettings },
+      notifications: { ...DEFAULT_CONFIG.notifications },
     };
   }
   const raw = JSON.parse(readFileSync(path, "utf-8"));
@@ -104,6 +129,7 @@ export function loadConfig(): Config {
       ...DEFAULT_CONFIG,
       owners: [...DEFAULT_CONFIG.owners],
       pipelineSettings: { ...DEFAULT_CONFIG.pipelineSettings },
+      notifications: { ...DEFAULT_CONFIG.notifications },
     };
   }
   const language = VALID_LANGUAGES.has(raw.language)
@@ -121,6 +147,7 @@ export function loadConfig(): Config {
         : DEFAULT_CONFIG.cloneBaseDir,
     language,
     pipelineSettings: loadPipelineSettings(raw.pipelineSettings),
+    notifications: loadNotificationSettings(raw.notifications),
     agentA: loadSavedAgentConfig(raw.agentA),
     agentB: loadSavedAgentConfig(raw.agentB),
     executionMode:

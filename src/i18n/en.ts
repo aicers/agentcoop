@@ -9,6 +9,7 @@ export const en: Messages = {
   "quickStart.mode": (exec) => `  Mode: ${exec}`,
   "quickStart.language": (lang) => `  Language: ${lang}`,
   "quickStart.pipelineSettings": "  Pipeline settings:",
+  "quickStart.notifications": "  Notifications:",
   "quickStart.usePrevious": "Use previous settings?",
 
   // ---- startup / config --------------------------------------------------
@@ -37,6 +38,9 @@ export const en: Messages = {
   "startup.settingSuffixMin": "min",
   "startup.adjustSettings": "Adjust any settings?",
   "startup.positiveInteger": "Enter a positive integer",
+  "startup.notificationBell": "Terminal bell",
+  "startup.notificationDesktop": "Desktop notification",
+  "startup.notificationSettings": "Notification settings:",
   "startup.saveChanges": "Save changes to config?",
   "startup.issueState": (state) => `  State: ${state}`,
   "startup.issueLabels": (labels) => `  Labels: ${labels}`,
@@ -264,6 +268,12 @@ export const en: Messages = {
   "cleanup.done": "Cleanup complete.",
   "prompt.yesCleanup": "Yes",
   "prompt.noSkipCleanup": "No",
+
+  // ---- worktree errors ---------------------------------------------------
+
+  // ---- notifications -------------------------------------------------------
+
+  "notification.title": "agentcoop",
 
   // ---- worktree errors ---------------------------------------------------
 

@@ -13,6 +13,7 @@ export interface Messages {
   "quickStart.mode": (exec: string) => string;
   "quickStart.language": (lang: string) => string;
   "quickStart.pipelineSettings": string;
+  "quickStart.notifications": string;
   "quickStart.usePrevious": string;
 
   // ---- startup / config (startup.ts) -------------------------------------
@@ -40,6 +41,9 @@ export interface Messages {
   "startup.settingSuffixMin": string;
   "startup.adjustSettings": string;
   "startup.positiveInteger": string;
+  "startup.notificationBell": string;
+  "startup.notificationDesktop": string;
+  "startup.notificationSettings": string;
   "startup.saveChanges": string;
   "startup.issueState": (state: string) => string;
   "startup.issueLabels": (labels: string) => string;
@@ -252,6 +256,12 @@ export interface Messages {
   "cleanup.done": string;
   "prompt.yesCleanup": string;
   "prompt.noSkipCleanup": string;
+
+  // ---- worktree errors ---------------------------------------------------
+
+  // ---- notifications -------------------------------------------------------
+
+  "notification.title": string;
 
   // ---- worktree errors ---------------------------------------------------
 

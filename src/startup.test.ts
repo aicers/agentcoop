@@ -54,6 +54,7 @@ function defaultConfig(): Config {
       inactivityTimeoutMinutes: 15,
       autoResumeAttempts: 3,
     },
+    notifications: { bell: true, desktop: false },
   };
 }
 
@@ -82,7 +83,9 @@ function setupHappyPath() {
     .mockResolvedValueOnce("en"); // language
   mockSearch.mockResolvedValueOnce("agentcoop"); // repo
   mockInput.mockResolvedValueOnce("42"); // issue number
-  mockCheckbox.mockResolvedValueOnce([]); // no pipeline settings adjusted
+  mockCheckbox
+    .mockResolvedValueOnce([]) // no pipeline settings adjusted
+    .mockResolvedValueOnce(["bell"]); // notification settings (keep defaults)
   mockListRepositories.mockReturnValue([
     { name: "agentcoop", description: "Multi-agent CLI" },
   ]);
@@ -168,6 +171,7 @@ describe("runStartup — owner selection", () => {
         inactivityTimeoutMinutes: 15,
         autoResumeAttempts: 3,
       },
+      notifications: { bell: true, desktop: false },
     };
     mockLoadConfig.mockReturnValue(config);
     mockInput
@@ -183,7 +187,9 @@ describe("runStartup — owner selection", () => {
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("step") // execution mode
       .mockResolvedValueOnce("ko"); // language
-    mockCheckbox.mockResolvedValueOnce([]); // no pipeline settings adjusted
+    mockCheckbox
+      .mockResolvedValueOnce([]) // no pipeline settings adjusted
+      .mockResolvedValueOnce(["bell"]); // notification settings
     mockSearch.mockResolvedValueOnce("repo1");
     mockListRepositories.mockReturnValue([{ name: "repo1", description: "" }]);
     mockGetIssue.mockReturnValue(defaultIssue());
@@ -236,7 +242,7 @@ describe("runStartup — owner selection", () => {
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
       .mockResolvedValueOnce("en"); // language
-    mockCheckbox.mockResolvedValueOnce([]);
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
     mockSearch.mockResolvedValueOnce("repo1");
     mockListRepositories.mockReturnValue([{ name: "repo1", description: "" }]);
     mockGetIssue.mockReturnValue(defaultIssue());
@@ -262,7 +268,7 @@ describe("runStartup — owner selection", () => {
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
       .mockResolvedValueOnce("en"); // language
-    mockCheckbox.mockResolvedValueOnce([]);
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
     mockSearch.mockResolvedValueOnce("repo1");
     mockListRepositories.mockReturnValue([{ name: "repo1", description: "" }]);
     mockGetIssue.mockReturnValue(defaultIssue());
@@ -542,7 +548,7 @@ describe("runStartup — model selection", () => {
       .mockResolvedValueOnce("en"); // language
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
-    mockCheckbox.mockResolvedValueOnce([]);
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
     mockListRepositories.mockReturnValue([
       { name: "agentcoop", description: "" },
     ]);
@@ -674,7 +680,7 @@ describe("runStartup — language selection", () => {
       .mockResolvedValueOnce("ko"); // changed from "en" to "ko"
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
-    mockCheckbox.mockResolvedValueOnce([]);
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
     mockListRepositories.mockReturnValue([
       { name: "agentcoop", description: "" },
     ]);
@@ -705,7 +711,7 @@ describe("runStartup — language selection", () => {
       .mockResolvedValueOnce("ko"); // same as config
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
-    mockCheckbox.mockResolvedValueOnce([]);
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
     mockListRepositories.mockReturnValue([
       { name: "agentcoop", description: "" },
     ]);
@@ -756,7 +762,7 @@ describe("runStartup — config dirty tracking", () => {
       .mockResolvedValueOnce("en"); // language
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
-    mockCheckbox.mockResolvedValueOnce([]);
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
     mockListRepositories.mockReturnValue([
       { name: "agentcoop", description: "" },
     ]);
@@ -790,7 +796,7 @@ describe("runStartup — config dirty tracking", () => {
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
       .mockResolvedValueOnce("en"); // same language
-    mockCheckbox.mockResolvedValueOnce([]);
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
     mockSearch.mockResolvedValueOnce("repo1");
     mockListRepositories.mockReturnValue([{ name: "repo1", description: "" }]);
     mockGetIssue.mockReturnValue(defaultIssue());
@@ -816,7 +822,7 @@ describe("runStartup — config dirty tracking", () => {
       .mockResolvedValueOnce("ko"); // changed
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
-    mockCheckbox.mockResolvedValueOnce([]);
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
     mockListRepositories.mockReturnValue([
       { name: "agentcoop", description: "" },
     ]);
@@ -1029,7 +1035,7 @@ describe("runStartup — alternate selections", () => {
       .mockResolvedValueOnce("ko"); // language
     mockSearch.mockResolvedValueOnce("my-repo");
     mockInput.mockResolvedValueOnce("99");
-    mockCheckbox.mockResolvedValueOnce([]);
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
     mockListRepositories.mockReturnValue([
       { name: "my-repo", description: "test" },
     ]);
@@ -1074,7 +1080,8 @@ describe("runStartup — pipeline settings", () => {
     setupHappyPath();
     mockCheckbox
       .mockReset()
-      .mockResolvedValueOnce(["selfCheckAutoIterations", "reviewAutoRounds"]);
+      .mockResolvedValueOnce(["selfCheckAutoIterations", "reviewAutoRounds"])
+      .mockResolvedValueOnce(["bell"]); // notification settings
     // input for the two selected settings
     mockInput.mockReset().mockResolvedValueOnce("42"); // issue number
     mockInput.mockResolvedValueOnce("5"); // selfCheckAutoIterations
@@ -1092,7 +1099,10 @@ describe("runStartup — pipeline settings", () => {
 
   test("does not persist pipeline settings when user declines save", async () => {
     setupHappyPath();
-    mockCheckbox.mockReset().mockResolvedValueOnce(["autoResumeAttempts"]);
+    mockCheckbox
+      .mockReset()
+      .mockResolvedValueOnce(["autoResumeAttempts"])
+      .mockResolvedValueOnce(["bell"]); // notification settings
     mockInput.mockReset().mockResolvedValueOnce("42"); // issue number
     mockInput.mockResolvedValueOnce("10"); // autoResumeAttempts
     mockConfirm.mockReset().mockResolvedValueOnce(false); // decline save
@@ -1108,7 +1118,7 @@ describe("runStartup — pipeline settings", () => {
     setupHappyPath();
     await runStartup();
 
-    expect(mockCheckbox).toHaveBeenCalledOnce();
+    expect(mockCheckbox).toHaveBeenCalledTimes(2);
     const opts = mockCheckbox.mock.calls[0][0];
     expect(opts.choices).toHaveLength(4);
     const values = opts.choices.map((c: { value: string }) => c.value);
@@ -1161,7 +1171,7 @@ describe("runStartup — pipeline settings", () => {
       .mockResolvedValueOnce("en"); // language
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
-    mockCheckbox.mockResolvedValueOnce([]);
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
     mockListRepositories.mockReturnValue([
       { name: "agentcoop", description: "" },
     ]);
@@ -1181,7 +1191,10 @@ describe("runStartup — pipeline settings", () => {
 
   test("unchanged fields preserve original values after adjustment", async () => {
     setupHappyPath();
-    mockCheckbox.mockReset().mockResolvedValueOnce(["selfCheckAutoIterations"]);
+    mockCheckbox
+      .mockReset()
+      .mockResolvedValueOnce(["selfCheckAutoIterations"])
+      .mockResolvedValueOnce(["bell"]); // notification settings
     mockInput.mockReset().mockResolvedValueOnce("42"); // issue number
     mockInput.mockResolvedValueOnce("10"); // selfCheckAutoIterations only
     mockConfirm.mockReset().mockResolvedValueOnce(false); // decline save
@@ -1196,7 +1209,10 @@ describe("runStartup — pipeline settings", () => {
 
   test("validates input rejects negative, zero, decimal, and empty values", async () => {
     setupHappyPath();
-    mockCheckbox.mockReset().mockResolvedValueOnce(["reviewAutoRounds"]);
+    mockCheckbox
+      .mockReset()
+      .mockResolvedValueOnce(["reviewAutoRounds"])
+      .mockResolvedValueOnce(["bell"]); // notification settings
 
     mockInput.mockReset().mockResolvedValueOnce("42"); // issue number
     mockInput.mockImplementationOnce(
@@ -1231,7 +1247,8 @@ describe("runStartup — pipeline settings", () => {
         "reviewAutoRounds",
         "inactivityTimeoutMinutes",
         "autoResumeAttempts",
-      ]);
+      ])
+      .mockResolvedValueOnce(["bell"]); // notification settings
     mockInput.mockReset().mockResolvedValueOnce("42"); // issue number
     mockInput
       .mockResolvedValueOnce("5") // selfCheckAutoIterations
@@ -1277,7 +1294,9 @@ describe("runStartup — pipeline settings", () => {
       .mockResolvedValueOnce("en"); // language
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
-    mockCheckbox.mockResolvedValueOnce(["selfCheckAutoIterations"]);
+    mockCheckbox
+      .mockResolvedValueOnce(["selfCheckAutoIterations"])
+      .mockResolvedValueOnce(["bell"]); // notification settings
     mockInput.mockResolvedValueOnce("99");
     mockConfirm
       .mockResolvedValueOnce(false) // decline save
@@ -1313,7 +1332,9 @@ describe("runStartup — pipeline settings", () => {
       .mockResolvedValueOnce("en"); // language
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
-    mockCheckbox.mockResolvedValueOnce(["autoResumeAttempts"]);
+    mockCheckbox
+      .mockResolvedValueOnce(["autoResumeAttempts"])
+      .mockResolvedValueOnce(["bell"]); // notification settings
     mockInput.mockImplementationOnce(
       async (opts: { message: string; default: string }) => {
         expect(opts.default).toBe("7");
@@ -1419,7 +1440,7 @@ describe("runStartup with target parameter", () => {
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
       .mockResolvedValueOnce("en"); // language
-    mockCheckbox.mockResolvedValueOnce([]); // no settings adjusted
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]); // no settings adjusted
     mockConfirm.mockResolvedValueOnce(true); // confirm issue
     mockGetIssue.mockReturnValue(defaultIssue());
 
@@ -1507,7 +1528,7 @@ describe("runStartup — quick-start", () => {
       .mockResolvedValueOnce("en"); // language
     mockSearch.mockResolvedValueOnce("agentcoop"); // repo
     mockInput.mockResolvedValueOnce("42"); // issue number
-    mockCheckbox.mockResolvedValueOnce([]); // no pipeline settings adjusted
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]); // no pipeline settings adjusted
     mockListRepositories.mockReturnValue([
       { name: "agentcoop", description: "" },
     ]);
@@ -1556,7 +1577,7 @@ describe("runStartup — quick-start", () => {
       .mockResolvedValueOnce("en"); // language
     mockSearch.mockResolvedValueOnce("agentcoop");
     mockInput.mockResolvedValueOnce("42");
-    mockCheckbox.mockResolvedValueOnce([]);
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
     mockListRepositories.mockReturnValue([
       { name: "agentcoop", description: "" },
     ]);
@@ -1634,6 +1655,9 @@ describe("runStartup — quick-start", () => {
     expect(logs).toContain("Review auto rounds");
     expect(logs).toContain("Inactivity timeout");
     expect(logs).toContain("Auto-resume attempts");
+    expect(logs).toContain("Notifications:");
+    expect(logs).toContain("Terminal bell");
+    expect(logs).toContain("Desktop notification");
 
     consoleSpy.mockRestore();
   });

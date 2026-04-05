@@ -9,7 +9,9 @@ export const ko: Messages = {
   "quickStart.mode": (exec) => `  모드: ${exec}`,
   "quickStart.language": (lang) => `  언어: ${lang}`,
   "quickStart.pipelineSettings": "  파이프라인 설정:",
-  "quickStart.usePrevious": "이전 설정을 사용하시겠습니까?",
+  "quickStart.notifications": "  \uC54C\uB9BC:",
+  "quickStart.usePrevious":
+    "\uC774\uC804 \uC124\uC815\uC744 \uC0AC\uC6A9\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?",
 
   // ---- startup / config --------------------------------------------------
 
@@ -48,6 +50,9 @@ export const ko: Messages = {
     "\uC124\uC815\uC744 \uC870\uC815\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?",
   "startup.positiveInteger":
     "\uC591\uC758 \uC815\uC218\uB97C \uC785\uB825\uD558\uC138\uC694",
+  "startup.notificationBell": "\uD130\uBBF8\uB110 \uBCA8",
+  "startup.notificationDesktop": "\uB370\uC2A4\uD06C\uD1B1 \uC54C\uB9BC",
+  "startup.notificationSettings": "\uC54C\uB9BC \uC124\uC815:",
   "startup.saveChanges":
     "\uBCC0\uACBD \uC0AC\uD56D\uC744 \uC800\uC7A5\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?",
   "startup.issueState": (state) => `  \uC0C1\uD0DC: ${state}`,
@@ -304,6 +309,12 @@ export const ko: Messages = {
   "cleanup.done": "\uC815\uB9AC \uC644\uB8CC.",
   "prompt.yesCleanup": "\uC608",
   "prompt.noSkipCleanup": "\uC544\uB2C8\uC624",
+
+  // ---- worktree errors ---------------------------------------------------
+
+  // ---- notifications -------------------------------------------------------
+
+  "notification.title": "agentcoop",
 
   // ---- worktree errors ---------------------------------------------------
 
