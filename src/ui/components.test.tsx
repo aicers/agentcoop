@@ -917,12 +917,12 @@ describe("StatusBar", () => {
     await new Promise((r) => setTimeout(r, 50));
 
     const frame = lastFrame();
-    expect(frame).toContain("Stage 3: Self-check (round 2, done)");
+    expect(frame).toContain("Stage 3: Self-check (round 2)");
     expect(frame).toContain("Last: not approved");
     expect(frame).toContain("Completed: self-check \u00d71, review \u00d70");
   });
 
-  test("shows in-progress then done on successive events", async () => {
+  test("shows round without in-progress/done labels", async () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(
       <Box width={200}>
@@ -941,11 +941,13 @@ describe("StatusBar", () => {
       iteration: 0,
     });
     await new Promise((r) => setTimeout(r, 50));
-    expect(lastFrame()).toContain("Stage 3: Self-check (round 1, in progress)");
+    expect(lastFrame()).toContain("Stage 3: Self-check (round 1)");
+    expect(lastFrame()).not.toContain("in progress");
 
     emitter.emit("stage:exit", { stageNumber: 3, outcome: "not_approved" });
     await new Promise((r) => setTimeout(r, 50));
-    expect(lastFrame()).toContain("Stage 3: Self-check (round 1, done)");
+    expect(lastFrame()).toContain("Stage 3: Self-check (round 1)");
+    expect(lastFrame()).not.toContain("done)");
 
     emitter.emit("stage:enter", {
       stageNumber: 3,
@@ -953,7 +955,7 @@ describe("StatusBar", () => {
       iteration: 1,
     });
     await new Promise((r) => setTimeout(r, 50));
-    expect(lastFrame()).toContain("Stage 3: Self-check (round 2, in progress)");
+    expect(lastFrame()).toContain("Stage 3: Self-check (round 2)");
   });
 
   test("clears outcome on new stage:enter", async () => {

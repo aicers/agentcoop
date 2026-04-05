@@ -157,10 +157,8 @@ export const en: Messages = {
 
   "statusBar.initialising": "Initialising...",
   "statusBar.stage": (number, name) => `Stage ${number}: ${name}`,
-  "statusBar.stageRoundInProgress": (number, name, round) =>
-    `Stage ${number}: ${name} (round ${round}, in progress)`,
-  "statusBar.stageRoundDone": (number, name, round) =>
-    `Stage ${number}: ${name} (round ${round}, done)`,
+  "statusBar.stageRound": (number, name, round) =>
+    `Stage ${number}: ${name} (round ${round})`,
   "statusBar.last": (outcome) => `Last: ${outcome}`,
   "statusBar.base": (sha) => `Base: ${sha}`,
   "statusBar.completed": (selfCheckCount, reviewCount) =>

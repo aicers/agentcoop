@@ -139,7 +139,6 @@ export function StatusBar({
 }: StatusBarProps) {
   const [stage, setStage] = useState<StageEnterEvent | null>(null);
   const [lastOutcome, setLastOutcome] = useState<string | null>(null);
-  const [roundDone, setRoundDone] = useState(false);
   const [selfCheckCount, setSelfCheckCount] = useState(0);
   const [reviewCount, setReviewCount] = useState(0);
 
@@ -147,11 +146,9 @@ export function StatusBar({
     const onEnter = (ev: StageEnterEvent) => {
       setStage(ev);
       setLastOutcome(null);
-      setRoundDone(false);
     };
     const onExit = (ev: StageExitEvent) => {
       setLastOutcome(ev.outcome);
-      setRoundDone(true);
       if (ev.stageNumber === SELF_CHECK_STAGE) {
         setSelfCheckCount((c) => c + 1);
       } else if (ev.stageNumber === REVIEW_STAGE) {
@@ -177,17 +174,7 @@ export function StatusBar({
 
   const stageText = stage
     ? showRound
-      ? roundDone
-        ? m["statusBar.stageRoundDone"](
-            stage.stageNumber,
-            stage.stageName,
-            round,
-          )
-        : m["statusBar.stageRoundInProgress"](
-            stage.stageNumber,
-            stage.stageName,
-            round,
-          )
+      ? m["statusBar.stageRound"](stage.stageNumber, stage.stageName, round)
       : m["statusBar.stage"](stage.stageNumber, stage.stageName)
     : m["statusBar.initialising"];
 
