@@ -112,6 +112,7 @@ export function TokenBar({
     <Box flexDirection={layout} flexShrink={0}>
       <Box
         flexGrow={1}
+        flexBasis={0}
         borderStyle="single"
         borderColor="gray"
         paddingX={1}
@@ -122,6 +123,7 @@ export function TokenBar({
       </Box>
       <Box
         flexGrow={1}
+        flexBasis={0}
         borderStyle="single"
         borderColor="gray"
         paddingX={1}
