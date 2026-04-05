@@ -33,6 +33,13 @@ jobs:
       - run: pnpm check
       - run: pnpm typecheck
 
+  markdown:
+    name: Markdown lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DavidAnson/markdownlint-cli2-action@v20
+
   test:
     name: Test
     needs: check
