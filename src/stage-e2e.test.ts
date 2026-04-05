@@ -1756,7 +1756,14 @@ describe("Stage 8 (Squash) baseSha integration", () => {
 describe("Stage 7 (Review) through pipeline", () => {
   test("completes when Agent B approves on first round", async () => {
     const agentA: AgentAdapter = {
-      invoke: vi.fn(),
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sa-fin",
+            responseText: "PR_FINALIZED",
+          }),
+        ),
+      ),
       resume: vi.fn(),
     };
 
@@ -1789,7 +1796,7 @@ describe("Stage 7 (Review) through pipeline", () => {
 
     const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
     expect(result.success).toBe(true);
-    expect(agentA.invoke).not.toHaveBeenCalled();
+    expect(agentA.invoke).toHaveBeenCalledTimes(1);
   });
 
   test("NOT_APPROVED → fix → CI pass → loops → APPROVED: completes", async () => {
@@ -1818,11 +1825,13 @@ describe("Stage 7 (Review) through pipeline", () => {
     };
 
     const agentA: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(
+      invoke: vi.fn().mockImplementation((prompt: string) =>
         makeStream(
           makeResult({
             sessionId: "sa1",
-            responseText: "Fixed.",
+            responseText: prompt.includes("PR_FINALIZED")
+              ? "PR_FINALIZED"
+              : "Fixed.",
           }),
         ),
       ),
@@ -1931,11 +1940,13 @@ describe("Stage 7 (Review) through pipeline", () => {
     };
 
     const agentA: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(
+      invoke: vi.fn().mockImplementation((prompt: string) =>
         makeStream(
           makeResult({
             sessionId: "sa",
-            responseText: "Fixed.",
+            responseText: prompt.includes("PR_FINALIZED")
+              ? "PR_FINALIZED"
+              : "Fixed.",
           }),
         ),
       ),
@@ -2077,11 +2088,13 @@ describe("Stage 7 (Review) through pipeline", () => {
     };
 
     const agentA: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(
+      invoke: vi.fn().mockImplementation((prompt: string) =>
         makeStream(
           makeResult({
             sessionId: "sa",
-            responseText: "Fixed.",
+            responseText: prompt.includes("PR_FINALIZED")
+              ? "PR_FINALIZED"
+              : "Fixed.",
           }),
         ),
       ),
@@ -2196,7 +2209,14 @@ describe("Stages 7+8 (Review + Squash) through pipeline", () => {
     };
 
     const agentA: AgentAdapter = {
-      invoke: vi.fn(),
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sa-fin",
+            responseText: "PR_FINALIZED",
+          }),
+        ),
+      ),
       resume: vi.fn(),
     };
 
@@ -2249,7 +2269,7 @@ describe("Stages 7+8 (Review + Squash) through pipeline", () => {
     expect(result.success).toBe(true);
     expect(agentB.invoke).toHaveBeenCalledTimes(1);
     expect(squashAgent.invoke).toHaveBeenCalledTimes(1);
-    expect(agentA.invoke).not.toHaveBeenCalled();
+    expect(agentA.invoke).toHaveBeenCalledTimes(1);
   });
 
   test("squash blocked → pipeline aborts after review", async () => {
@@ -2296,8 +2316,20 @@ describe("Stages 7+8 (Review + Squash) through pipeline", () => {
       emptyRunsGracePeriodMs: 0,
     });
 
+    const reviewAgentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sa-fin",
+            responseText: "PR_FINALIZED",
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+
     const reviewStage = createReviewStageHandler({
-      agentA: { invoke: vi.fn(), resume: vi.fn() },
+      agentA: reviewAgentA,
       agentB,
       ...ISSUE_CTX,
       getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
@@ -2438,7 +2470,14 @@ describe("Pipeline event emitter integration", () => {
     const summaryResult = makeResult({ responseText: "NONE" });
 
     const agentA: AgentAdapter = {
-      invoke: vi.fn(),
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sa-fin",
+            responseText: "PR_FINALIZED",
+          }),
+        ),
+      ),
       resume: vi.fn(),
     };
     const agentB: AgentAdapter = {
