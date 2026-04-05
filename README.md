@@ -18,7 +18,7 @@ involvement.
 │  (streamed output)                         │  (streamed output)             │
 │                                            │                                │
 ├────────────────────────────────────────────┴────────────────────────────────┤
-│ A (Claude): 12.3K in / 5.1K out  │  B (Codex): 8.7K in / 3.2K out           │
+│ A (Claude): 12.3K in / 5.1K out            │ B (Codex): 8.7K in / 3.2K out  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ owner/repo#42: Issue title                                                  │
 │ Base: abc1234  │  Stage 3: Self-check (round 2)  │  Layout: horizontal      │
