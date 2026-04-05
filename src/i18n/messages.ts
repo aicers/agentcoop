@@ -150,12 +150,7 @@ export interface Messages {
 
   "statusBar.initialising": string;
   "statusBar.stage": (number: number, name: string) => string;
-  "statusBar.stageRoundInProgress": (
-    number: number,
-    name: string,
-    round: number,
-  ) => string;
-  "statusBar.stageRoundDone": (
+  "statusBar.stageRound": (
     number: number,
     name: string,
     round: number,

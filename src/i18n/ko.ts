@@ -185,10 +185,8 @@ export const ko: Messages = {
 
   "statusBar.initialising": "\uCD08\uAE30\uD654 \uC911...",
   "statusBar.stage": (number, name) => `${number}\uB2E8\uACC4: ${name}`,
-  "statusBar.stageRoundInProgress": (number, name, round) =>
-    `${number}\uB2E8\uACC4: ${name} (\uB77C\uC6B4\uB4DC ${round}, \uC9C4\uD589 \uC911)`,
-  "statusBar.stageRoundDone": (number, name, round) =>
-    `${number}\uB2E8\uACC4: ${name} (\uB77C\uC6B4\uB4DC ${round}, \uC644\uB8CC)`,
+  "statusBar.stageRound": (number, name, round) =>
+    `${number}\uB2E8\uACC4: ${name} (\uB77C\uC6B4\uB4DC ${round})`,
   "statusBar.last": (outcome) => `\uC774\uC804: ${outcome}`,
   "statusBar.base": (sha) => `\uAE30\uC900: ${sha}`,
   "statusBar.completed": (selfCheckCount, reviewCount) =>
