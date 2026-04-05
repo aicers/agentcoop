@@ -659,9 +659,9 @@ is asked whether to continue.
 ### Stage 7: Squash commits
 
 **Agent:** A\
-**Purpose:** Squash all branch commits into a single commit with
-a clear message. Skipped automatically if the branch has only one
-commit.
+**Purpose:** Squash commits that need squashing into a single
+commit with a clear message. Skipped automatically if the branch
+has only one commit.
 
 **Prompt:**
 
