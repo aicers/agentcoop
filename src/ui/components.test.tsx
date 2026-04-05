@@ -1160,7 +1160,9 @@ describe("StatusBar", () => {
 
   test("truncates long issue title with ellipsis under tight width", () => {
     const emitter = new PipelineEventEmitter();
-    // ref (19) + sep (5) + stage (15) = 39, leaving 16 cols for the title.
+    // Issue line uses the full contentWidth independently.
+    // "aicers/agentcoop#42: This is a very long issue title..." = 75 chars
+    // At contentWidth=35, the issue line is truncated with ellipsis.
     const { lastFrame } = render(
       <StatusBar
         emitter={emitter}
@@ -1168,25 +1170,25 @@ describe("StatusBar", () => {
         repo="agentcoop"
         issueNumber={42}
         issueTitle="This is a very long issue title that should be truncated"
-        contentWidth={55}
+        contentWidth={35}
       />,
     );
 
     const frame = lastFrame() ?? "";
     // The title portion should be truncated with an ellipsis.
     expect(frame).toContain("\u2026");
-    // The full title should NOT appear since 55 columns is too narrow.
+    // The full title should NOT appear since 35 columns is too narrow.
     expect(frame).not.toContain(
       "This is a very long issue title that should be truncated",
     );
-    // The issue reference must always remain fully visible (#151 review).
+    // The issue reference must always remain fully visible.
     expect(frame).toContain("aicers/agentcoop#42:");
   });
 
   test("shows truncated title suffix at boundary width", () => {
     const emitter = new PipelineEventEmitter();
-    // ref (19) + sep (5) + stage (16) = 40, so contentWidth=42 leaves
-    // only 2 columns for the title suffix — just enough for `:…`.
+    // "aicers/agentcoop#42: Bug fix" = 28 chars.
+    // At contentWidth=22, only 22 cols for the issue line → truncated.
     const { lastFrame } = render(
       <StatusBar
         emitter={emitter}
@@ -1194,7 +1196,7 @@ describe("StatusBar", () => {
         repo="agentcoop"
         issueNumber={42}
         issueTitle="Bug fix"
-        contentWidth={42}
+        contentWidth={22}
       />,
     );
 
@@ -1998,9 +2000,9 @@ describe("computeVisibilityFlags", () => {
   });
 
   test("hides token bar first when space is tight", () => {
-    // Row: paneContent = 14 - 1(input) - 4(status) - 3(token) - 4(overhead) = 2 < 3
-    // Without token: 14 - 1 - 4 - 0 - 4 = 5 >= 3
-    const flags = computeVisibilityFlags(14, 1, true, "row");
+    // Row: paneContent = 15 - 1(input) - 5(status) - 3(token) - 4(overhead) = 2 < 3
+    // Without token: 15 - 1 - 5 - 0 - 4 = 5 >= 3
+    const flags = computeVisibilityFlags(15, 1, true, "row");
     expect(flags.showTokenBar).toBe(false);
     expect(flags.showKeyHints).toBe(true);
     expect(flags.showPaneSeparator).toBe(true);
@@ -2008,18 +2010,18 @@ describe("computeVisibilityFlags", () => {
 
   test("hides key hints after token bar", () => {
     // No token data, token bar already hidden.
-    // paneContent = 11 - 1 - 4 - 0 - 4 = 2 < 3 → hide hints
-    // Without hints: 11 - 1 - 3 - 0 - 4 = 3 >= 3
-    const flags = computeVisibilityFlags(11, 1, false, "row");
+    // paneContent = 12 - 1 - 5 - 0 - 4 = 2 < 3 → hide hints
+    // Without hints: 12 - 1 - 4 - 0 - 4 = 3 >= 3
+    const flags = computeVisibilityFlags(12, 1, false, "row");
     expect(flags.showTokenBar).toBe(false);
     expect(flags.showKeyHints).toBe(false);
     expect(flags.showPaneSeparator).toBe(true);
   });
 
   test("hides separator after key hints", () => {
-    // paneContent = 10 - 1 - 3 - 0 - 4 = 2 < 3 → hide separator
-    // Without separator: 10 - 1 - 3 - 0 - 3 = 3 >= 3
-    const flags = computeVisibilityFlags(10, 1, false, "row");
+    // paneContent = 11 - 1 - 4 - 0 - 4 = 2 < 3 → hide separator
+    // Without separator: 11 - 1 - 4 - 0 - 3 = 3 >= 3
+    const flags = computeVisibilityFlags(11, 1, false, "row");
     expect(flags.showTokenBar).toBe(false);
     expect(flags.showKeyHints).toBe(false);
     expect(flags.showPaneSeparator).toBe(false);
@@ -2028,8 +2030,8 @@ describe("computeVisibilityFlags", () => {
   test("forces row layout when column panes are too small", () => {
     // Column layout can't fit MIN_PANE_CONTENT even with all hidden.
     // After forcing row, flags are recomputed for row mode.
-    // Row: paneContent = 12 - 1 - 4 - 0 - 4 = 3 >= 3 → hints and sep shown
-    const flags = computeVisibilityFlags(12, 1, false, "column");
+    // Row: paneContent = 13 - 1 - 5 - 0 - 4 = 3 >= 3 → hints and sep shown
+    const flags = computeVisibilityFlags(13, 1, false, "column");
     expect(flags.allowColumnLayout).toBe(false);
     expect(flags.showKeyHints).toBe(true);
     expect(flags.showPaneSeparator).toBe(true);
@@ -2265,6 +2267,8 @@ describe("StatusBar width adaptation", () => {
 
   test("drops layout indicator first when contentWidth is narrow", async () => {
     const emitter = new PipelineEventEmitter();
+    // Pipeline line: "Stage 2: Implement" (18) + sep (5) + "Layout: horizontal" (19) = 42.
+    // At contentWidth=30, layout (dropPriority 4) is dropped first.
     const { lastFrame } = render(
       <StatusBar
         emitter={emitter}
@@ -2272,7 +2276,7 @@ describe("StatusBar width adaptation", () => {
         repo="agentcoop"
         issueNumber={49}
         layout="row"
-        contentWidth={50}
+        contentWidth={30}
       />,
     );
 

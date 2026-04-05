@@ -93,8 +93,8 @@ function computeFlagsForLayout(
     keyHints: boolean,
     separator: boolean,
   ): number {
-    // StatusBar: border (2) + info line (1) + optional key hints (1).
-    const statusBarHeight = keyHints ? 4 : 3;
+    // StatusBar: border (2) + issue line (1) + pipeline line (1) + optional key hints (1).
+    const statusBarHeight = keyHints ? 5 : 4;
     // TokenBar is split into two boxes.  In row layout they sit side by
     // side (3 rows), in column layout they stack (6 rows).
     const tokenBarHeight = tokenBar ? (layout === "column" ? 6 : 3) : 0;
