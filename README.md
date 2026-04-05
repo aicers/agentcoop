@@ -16,18 +16,18 @@ involvement.
 
 ```text
 ┌─ Agent A (author) — Claude Opus 4.6 ● [*] ─┬─ Agent B (reviewer) — GPT-5.4 ─┐
-│                                              │                                 │
-│  (streamed output)                           │  (streamed output)              │
-│                                              │                                 │
-├──────────────────────────────────────────────┴─────────────────────────────────┤
-│ A (Claude): 12.3K in / 5.1K out                   │ B (Codex): 8.7K in / 3.2K │
-├────────────────────────────────────────────────────────────────────────────────┤
-│ owner/repo#42: Issue title                                                     │
-│ Stage 3: Self-check (round 2)  Base: abc1234                                   │
-│ Tab:Pane  ↑↓:Scroll  Ctrl+L:Layout  Ctrl+C:Quit                               │
-├────────────────────────────────────────────────────────────────────────────────┤
-│ Pipeline running...                                                            │
-└────────────────────────────────────────────────────────────────────────────────┘
+│                                            │                                │
+│  (streamed output)                         │  (streamed output)             │
+│                                            │                                │
+├────────────────────────────────────────────┴────────────────────────────────┤
+│ A (Claude): 12.3K in / 5.1K out  │  B (Codex): 8.7K in / 3.2K out           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ owner/repo#42: Issue title                                                  │
+│ Base: abc1234  │  Stage 3: Self-check (round 2)  │  Layout: horizontal      │
+│ ●:Active [*]:Focused Tab:Switch pane ↑↓:Scroll Ctrl+L:Layout Ctrl+C:Quit    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Pipeline running...                                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 - **Agent panes** — Streamed output from each agent in real time.
@@ -35,8 +35,8 @@ involvement.
   scrolling) with `[*]`.
 - **TokenBar** — Per-agent token usage (input/output, with cached
   token counts when available).
-- **StatusBar** — Issue reference, current pipeline stage with loop
-  count, base commit SHA, and layout indicator.
+- **StatusBar** — Issue reference, base commit SHA, current pipeline
+  stage with loop count, and layout indicator.
 - **InputArea** — Shows "Pipeline running..." while agents work.
   When user input is needed (BLOCKED, loop budget, step-mode), it
   presents numbered choices or a free-text field.
@@ -87,8 +87,10 @@ AgentCoop runs an 8-stage pipeline with two agents: Agent A (author
 5. **Test plan** — Agent A verifies the PR test plan
 6. **Review** — Agent B reviews; Agent A addresses feedback
    (multi-round)
-7. **Squash** — Agent A squashes commits that need squashing and
-   force-pushes (skipped if the branch has only one commit)
+7. **Squash** — When the branch has multiple commits that should be
+   consolidated, Agent A squashes them into a single commit and
+   force-pushes. Skipped if the branch already has only one commit
+   or if the existing commits are already clean.
 8. **Done** — Check for merge conflicts, optionally rebase, confirm
    merge with the user, and clean up resources
 
