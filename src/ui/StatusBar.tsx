@@ -18,6 +18,8 @@ interface StatusBarProps {
   owner: string;
   repo: string;
   issueNumber: number;
+  /** Title of the GitHub issue, shown after the issue reference. */
+  issueTitle?: string;
   /** Full SHA of the base commit; displayed abbreviated in the bar. */
   baseSha?: string;
   /** Current pane layout direction. */
@@ -129,6 +131,7 @@ export function StatusBar({
   owner,
   repo,
   issueNumber,
+  issueTitle,
   baseSha,
   layout,
   showKeyHints = true,
@@ -195,7 +198,7 @@ export function StatusBar({
     outcomeKey && outcomeKey in m ? (m[outcomeKey] as string) : lastOutcome;
   const outcomeText = outcomeLabel ? m["statusBar.last"](outcomeLabel) : "";
 
-  const issueLabel = `${owner}/${repo}#${issueNumber}`;
+  const issueRef = `${owner}/${repo}#${issueNumber}`;
   const baseText = baseSha ? m["statusBar.base"](baseSha.slice(0, 7)) : "";
   const layoutText = layout
     ? m["statusBar.layout"](
@@ -212,8 +215,16 @@ export function StatusBar({
   // Build segments in display order with drop priorities.
   // Priority 0 = required (never dropped); higher = dropped sooner.
   // Drop order: layout (4) → completed (3) → outcome (2) → base (1).
+  // The issue segment uses only the reference (owner/repo#N); the title
+  // is appended afterwards using leftover space so that truncation never
+  // clips the reference itself (see issue #151 review).
   const segments: InfoSegment[] = [
-    { text: issueLabel, bold: true, color: "cyan", dropPriority: 0 },
+    {
+      text: issueTitle ? `${issueRef}: ${issueTitle}` : issueRef,
+      bold: true,
+      color: "cyan",
+      dropPriority: 0,
+    },
   ];
   if (baseText) {
     segments.push({ text: baseText, dropPriority: 1 });
@@ -229,10 +240,34 @@ export function StatusBar({
     segments.push({ text: layoutText, dropPriority: 4 });
   }
 
-  const display =
-    contentWidth !== undefined
-      ? fitInfoSegments(segments, contentWidth)
-      : segments;
+  let display: InfoSegment[];
+  if (contentWidth !== undefined) {
+    // Fit segments using only the reference for the issue segment, so
+    // that fitInfoSegments never truncates the reference portion.
+    const refSegments = segments.map((seg, i) =>
+      i === 0 ? { ...seg, text: issueRef } : seg,
+    );
+    display = fitInfoSegments(refSegments, contentWidth);
+
+    // Append the issue title to the first segment using leftover space.
+    if (issueTitle && display.length > 0) {
+      const used = segmentsWidth(display);
+      const available = contentWidth - used;
+      if (available >= 2) {
+        const titleWithSep = `: ${issueTitle}`;
+        display = display.map((seg, i) =>
+          i === 0
+            ? {
+                ...seg,
+                text: seg.text + truncateWithEllipsis(titleWithSep, available),
+              }
+            : seg,
+        );
+      }
+    }
+  } else {
+    display = segments;
+  }
 
   return (
     <Box

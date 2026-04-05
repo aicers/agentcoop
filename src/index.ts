@@ -715,6 +715,7 @@ try {
       owner,
       repo,
       issueNumber,
+      issueTitle,
       branch: wt.branch,
       worktreePath: wt.path,
       baseSha: savedState?.baseSha ?? wt.baseSha,
