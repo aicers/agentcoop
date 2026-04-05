@@ -4,8 +4,8 @@ export const ko: Messages = {
   // ---- quick-start -------------------------------------------------------
 
   "quickStart.header": "저장된 설정 발견:",
-  "quickStart.agentA": (model) => `  에이전트 A: ${model}`,
-  "quickStart.agentB": (model) => `  에이전트 B: ${model}`,
+  "quickStart.agentA": (model) => `  에이전트 A (작성자): ${model}`,
+  "quickStart.agentB": (model) => `  에이전트 B (리뷰어): ${model}`,
   "quickStart.mode": (exec) => `  모드: ${exec}`,
   "quickStart.language": (lang) => `  언어: ${lang}`,
   "quickStart.pipelineSettings": "  파이프라인 설정:",
@@ -68,8 +68,10 @@ export const ko: Messages = {
   "resume.reviewRound": (round) =>
     `    \uB9AC\uBDF0 \uB77C\uC6B4\uB4DC: ${round}`,
   "resume.mode": (mode) => `    \uBAA8\uB4DC: ${mode}`,
-  "resume.agentA": (model) => `    \uC5D0\uC774\uC804\uD2B8 A: ${model}`,
-  "resume.agentB": (model) => `    \uC5D0\uC774\uC804\uD2B8 B: ${model}`,
+  "resume.agentA": (model) =>
+    `    \uC5D0\uC774\uC804\uD2B8 A (\uC791\uC131\uC790): ${model}`,
+  "resume.agentB": (model) =>
+    `    \uC5D0\uC774\uC804\uD2B8 B (\uB9AC\uBDF0\uC5B4): ${model}`,
   "resume.resumeOrFresh":
     "\uC7AC\uAC1C \uB610\uB294 \uC0C8\uB85C \uC2DC\uC791?",
   "resume.resume": "\uC7AC\uAC1C",
@@ -93,8 +95,10 @@ export const ko: Messages = {
     "  PR\uC774 \uC774\uBBF8 \uC874\uC7AC\uD569\uB2C8\uB2E4 \u2014 5\uB2E8\uACC4(CI \uAC80\uC0AC)\uB85C \uAC74\uB108\uB701\uB2C8\uB2E4.",
   "boot.startingPipeline": (owner, repo, issue, resuming) =>
     `${owner}/${repo}#${issue} \uD30C\uC774\uD504\uB77C\uC778 \uC2DC\uC791${resuming ? " (\uC7AC\uAC1C)" : ""}`,
-  "boot.agentA": (model) => `  \uC5D0\uC774\uC804\uD2B8 A: ${model}`,
-  "boot.agentB": (model) => `  \uC5D0\uC774\uC804\uD2B8 B: ${model}`,
+  "boot.agentA": (model) =>
+    `  \uC5D0\uC774\uC804\uD2B8 A (\uC791\uC131\uC790): ${model}`,
+  "boot.agentB": (model) =>
+    `  \uC5D0\uC774\uC804\uD2B8 B (\uB9AC\uBDF0\uC5B4): ${model}`,
   "boot.mode": (mode) => `  \uBAA8\uB4DC: ${mode}`,
   "boot.resumingFromStage": (stage) =>
     `  ${stage}\uB2E8\uACC4\uBD80\uD130 \uC7AC\uAC1C`,

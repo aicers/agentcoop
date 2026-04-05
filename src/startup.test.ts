@@ -1625,8 +1625,8 @@ describe("runStartup — quick-start", () => {
 
     const logs = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
     expect(logs).toContain("Found saved configuration:");
-    expect(logs).toContain("Agent A: Claude Opus 4.6 (1M) / High");
-    expect(logs).toContain("Agent B: GPT-5.4 / Extra High");
+    expect(logs).toContain("Agent A (author): Claude Opus 4.6 (1M) / High");
+    expect(logs).toContain("Agent B (reviewer): GPT-5.4 / Extra High");
     expect(logs).toContain("Mode: auto");
     expect(logs).toContain("Language: English");
     expect(logs).toContain("Pipeline settings:");

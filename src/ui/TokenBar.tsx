@@ -83,8 +83,8 @@ export function TokenBar({
 
   if (!visible || !hasData) return null;
 
-  const labelA = m["agent.labelA"];
-  const labelB = m["agent.labelB"];
+  const labelA = m["agent.labelARole"];
+  const labelB = m["agent.labelBRole"];
 
   const textA = m["tokenBar.agentUsage"](
     labelA,
