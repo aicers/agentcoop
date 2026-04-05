@@ -89,6 +89,8 @@ export interface StageContext {
   owner: string;
   repo: string;
   issueNumber: number;
+  /** Title of the GitHub issue (used for display in the StatusBar). */
+  issueTitle?: string;
   branch: string;
   worktreePath: string;
   /**

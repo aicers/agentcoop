@@ -401,6 +401,7 @@ export function App({
         owner={pipelineOptions.context.owner}
         repo={pipelineOptions.context.repo}
         issueNumber={pipelineOptions.context.issueNumber}
+        issueTitle={pipelineOptions.context.issueTitle}
         baseSha={pipelineOptions.context.baseSha}
         layout={effectiveLayout}
         showKeyHints={flags.showKeyHints}

@@ -1123,6 +1123,84 @@ describe("StatusBar", () => {
     expect(frame).toContain("Tab:Switch pane");
     expect(frame).toContain("Ctrl+C:Quit");
   });
+
+  test("shows issue title after issue reference when provided", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={42}
+        issueTitle="Fix the widget"
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("aicers/agentcoop#42: Fix the widget");
+  });
+
+  test("omits title separator when issueTitle is not provided", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={42}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("aicers/agentcoop#42");
+    expect(frame).not.toContain("aicers/agentcoop#42:");
+  });
+
+  test("truncates long issue title with ellipsis under tight width", () => {
+    const emitter = new PipelineEventEmitter();
+    // ref (19) + sep (5) + stage (15) = 39, leaving 16 cols for the title.
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={42}
+        issueTitle="This is a very long issue title that should be truncated"
+        contentWidth={55}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    // The title portion should be truncated with an ellipsis.
+    expect(frame).toContain("\u2026");
+    // The full title should NOT appear since 55 columns is too narrow.
+    expect(frame).not.toContain(
+      "This is a very long issue title that should be truncated",
+    );
+    // The issue reference must always remain fully visible (#151 review).
+    expect(frame).toContain("aicers/agentcoop#42:");
+  });
+
+  test("shows truncated title suffix at boundary width", () => {
+    const emitter = new PipelineEventEmitter();
+    // ref (19) + sep (5) + stage (16) = 40, so contentWidth=42 leaves
+    // only 2 columns for the title suffix — just enough for `:…`.
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={42}
+        issueTitle="Bug fix"
+        contentWidth={42}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    // Even with very little leftover space the title suffix must appear.
+    expect(frame).toContain("aicers/agentcoop#42:");
+    expect(frame).toContain("\u2026");
+  });
 });
 
 // ---- InputArea ---------------------------------------------------------------
