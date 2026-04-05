@@ -322,7 +322,13 @@ export function AgentPane({
           {contentWidth > 0 ? "\u2500".repeat(contentWidth) : ""}
         </Text>
       )}
-      <Box ref={contentRef} flexDirection="column" flexGrow={1}>
+      <Box
+        ref={contentRef}
+        flexDirection="column"
+        flexGrow={1}
+        flexShrink={1}
+        overflow="hidden"
+      >
         {placeholder !== undefined ? (
           <Text dimColor>{placeholder}</Text>
         ) : (

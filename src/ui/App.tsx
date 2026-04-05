@@ -13,7 +13,7 @@ import type {
   AgentInvokeEvent,
   PipelineEventEmitter,
 } from "../pipeline-events.js";
-import { AgentPane } from "./AgentPane.js";
+import { AgentPane, splitIntoRows } from "./AgentPane.js";
 import { InputArea, type InputRequest } from "./InputArea.js";
 import { StatusBar } from "./StatusBar.js";
 import { TokenBar } from "./TokenBar.js";
@@ -66,6 +66,11 @@ export interface VisibilityFlags {
   allowColumnLayout: boolean;
 }
 
+interface VisibilityBudgetOptions {
+  terminalWidth?: number;
+  paneHeaderTexts?: readonly string[];
+}
+
 /** Compute the height of the InputArea in terminal rows. */
 export function inputAreaHeight(request: InputRequest | null): number {
   if (!request) return 1;
@@ -82,11 +87,43 @@ function computeFlagsForLayout(
   inputHeight: number,
   hasTokenData: boolean,
   layout: "row" | "column",
+  options: VisibilityBudgetOptions = {},
 ): VisibilityFlags {
   let showTokenBar = hasTokenData;
   let showKeyHints = true;
   let showPaneSeparator = true;
   let allowColumnLayout = true;
+
+  function paneContentWidth(): number | undefined {
+    if (options.terminalWidth === undefined) {
+      return undefined;
+    }
+
+    const paneWidth =
+      layout === "row"
+        ? Math.floor(options.terminalWidth / 2)
+        : options.terminalWidth;
+
+    return Math.max(1, paneWidth - 4);
+  }
+
+  function paneHeaderRows(): number {
+    const width = paneContentWidth();
+    if (
+      width === undefined ||
+      !options.paneHeaderTexts ||
+      options.paneHeaderTexts.length === 0
+    ) {
+      return 1;
+    }
+
+    return Math.max(
+      1,
+      ...options.paneHeaderTexts.map(
+        (text) => splitIntoRows(text, width).length,
+      ),
+    );
+  }
 
   function paneContentRows(
     tokenBar: boolean,
@@ -100,8 +137,7 @@ function computeFlagsForLayout(
     const tokenBarHeight = tokenBar ? (layout === "column" ? 6 : 3) : 0;
     const bottomChrome = inputHeight + statusBarHeight + tokenBarHeight;
     const paneArea = terminalHeight - bottomChrome;
-    // AgentPane overhead: border (2) + label (1) + optional separator (1).
-    const paneOverhead = separator ? 4 : 3;
+    const paneOverhead = 2 + paneHeaderRows() + (separator ? 1 : 0);
     if (layout === "column") {
       return Math.floor(paneArea / 2) - paneOverhead;
     }
@@ -157,12 +193,14 @@ export function computeVisibilityFlags(
   inputHeight: number,
   hasTokenData: boolean,
   preferredLayout: "row" | "column",
+  options: VisibilityBudgetOptions = {},
 ): VisibilityFlags {
   const flags = computeFlagsForLayout(
     terminalHeight,
     inputHeight,
     hasTokenData,
     preferredLayout,
+    options,
   );
 
   // When column is forced to row, recompute for the effective (row) layout
@@ -173,6 +211,7 @@ export function computeVisibilityFlags(
       inputHeight,
       hasTokenData,
       "row",
+      options,
     );
     rowFlags.allowColumnLayout = false;
     return rowFlags;
@@ -220,6 +259,7 @@ export function App({
 }: AppProps) {
   const { height: terminalHeight, width: terminalWidth } =
     useTerminalDimensions();
+  const messages = t();
   const [inputRequest, setInputRequest] = useState<InputRequest | null>(null);
   const resolveRef = useRef<((value: string) => void) | null>(null);
   const [focusedPane, setFocusedPane] = useState<"a" | "b">("a");
@@ -251,6 +291,15 @@ export function App({
 
   // Compute visibility flags based on terminal dimensions.
   const inputHeight = inputAreaHeight(inputRequest);
+  const labelA = messages["agent.labelARole"];
+  const labelB = messages["agent.labelBRole"];
+  const paneHeaderTexts = useMemo(
+    () => [
+      `${modelNameA ? `${labelA} \u2014 ${modelNameA}` : labelA} \u25CF [*]`,
+      `${modelNameB ? `${labelB} \u2014 ${modelNameB}` : labelB} \u25CF [*]`,
+    ],
+    [labelA, labelB, modelNameA, modelNameB],
+  );
   const flags = useMemo<VisibilityFlags>(() => {
     if (terminalHeight === undefined) {
       return {
@@ -265,8 +314,19 @@ export function App({
       inputHeight,
       hasTokenData,
       preferredLayout,
+      {
+        terminalWidth,
+        paneHeaderTexts,
+      },
     );
-  }, [terminalHeight, inputHeight, hasTokenData, preferredLayout]);
+  }, [
+    terminalHeight,
+    inputHeight,
+    hasTokenData,
+    preferredLayout,
+    terminalWidth,
+    paneHeaderTexts,
+  ]);
 
   const effectiveLayout =
     preferredLayout === "column" && !flags.allowColumnLayout
@@ -375,7 +435,7 @@ export function App({
       {/* Agent panes: side by side (row) or stacked (column) */}
       <Box flexDirection={effectiveLayout} flexGrow={1}>
         <AgentPane
-          label={t()["agent.labelARole"]}
+          label={labelA}
           modelName={modelNameA}
           agent="a"
           emitter={emitter}
@@ -386,7 +446,7 @@ export function App({
           showSeparator={flags.showPaneSeparator}
         />
         <AgentPane
-          label={t()["agent.labelBRole"]}
+          label={labelB}
           modelName={modelNameB}
           agent="b"
           emitter={emitter}

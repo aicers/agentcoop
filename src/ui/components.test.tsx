@@ -1606,6 +1606,117 @@ describe("viewport height constraint", () => {
     // Pane B must remain at the bottom (unaffected by pane A scroll).
     expect(after).toContain("B20");
   });
+
+  test("full app layout stays within viewport with bottom chrome", async () => {
+    await initI18n("en");
+
+    const emitter = new PipelineEventEmitter();
+    const viewportWidth = 80;
+    const viewportHeight = 16;
+    const labelA = "Agent A (author)";
+    const labelB = "Agent B (reviewer)";
+    const flags = computeVisibilityFlags(viewportHeight, 1, true, "row", {
+      terminalWidth: viewportWidth,
+      paneHeaderTexts: [`${labelA} \u25CF [*]`, `${labelB} \u25CF [*]`],
+    });
+
+    expect(flags.showTokenBar).toBe(true);
+    expect(flags.showKeyHints).toBe(true);
+    expect(flags.showPaneSeparator).toBe(true);
+
+    const { lastFrame } = render(
+      <Box flexDirection="column" width={viewportWidth} height={viewportHeight}>
+        <Box flexDirection="row" flexGrow={1}>
+          <AgentPane
+            label={labelA}
+            agent="a"
+            emitter={emitter}
+            color="blue"
+            isFocused
+            showSeparator={flags.showPaneSeparator}
+          />
+          <AgentPane
+            label={labelB}
+            agent="b"
+            emitter={emitter}
+            color="green"
+            showSeparator={flags.showPaneSeparator}
+          />
+        </Box>
+        <TokenBar
+          emitter={emitter}
+          visible={flags.showTokenBar}
+          contentWidth={Math.floor(viewportWidth / 2) - 4}
+          layout="row"
+          cliTypeA="claude"
+          cliTypeB="codex"
+        />
+        <StatusBar
+          emitter={emitter}
+          owner="aicers"
+          repo="agentcoop"
+          issueNumber={160}
+          issueTitle="Fix AgentPane overflow"
+          baseSha="abcdef1234567890"
+          layout="row"
+          showKeyHints={flags.showKeyHints}
+          contentWidth={viewportWidth - 4}
+        />
+        <InputArea request={null} onSubmit={() => {}} />
+      </Box>,
+    );
+
+    emitter.emit("stage:enter", {
+      stageNumber: 2,
+      stageName: "Implement",
+      iteration: 0,
+    });
+    emitter.emit("agent:usage", {
+      agent: "a",
+      usage: { inputTokens: 12_300, outputTokens: 5_100, cachedInputTokens: 0 },
+    });
+    emitter.emit("agent:usage", {
+      agent: "b",
+      usage: { inputTokens: 8_700, outputTokens: 3_200, cachedInputTokens: 0 },
+    });
+    emitter.emit("agent:prompt", {
+      agent: "a",
+      prompt: [
+        "Investigate the overflow in the real app layout.",
+        "Keep the prompt block visible and clipped to the pane viewport.",
+      ].join("\n"),
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const promptFrame = lastFrame() ?? "";
+    expect(promptFrame).toContain("Keep the prompt block visible");
+
+    emitter.emit("agent:chunk", {
+      agent: "a",
+      chunk: [
+        "First streamed line after the prompt block stays visible.",
+        "This follow-up line is intentionally long so it wraps across multiple rows within the pane content area and exercises clipping.",
+        "Another wrapped status line arrives afterwards and should still stay inside the pane border without pushing the frame past the viewport height.",
+        "Final short line.",
+      ]
+        .join("\n")
+        .concat("\n"),
+    });
+    emitter.emit("agent:chunk", {
+      agent: "b",
+      chunk: [
+        "Reviewer output line one.",
+        "Reviewer output line two is also long enough to wrap and compete for vertical space in the split layout.",
+      ]
+        .join("\n")
+        .concat("\n"),
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Final short line.");
+    expect(frame.split("\n").length).toBeLessThanOrEqual(viewportHeight);
+  });
 });
 
 // ---- formatTokenCount -------------------------------------------------------
@@ -2077,6 +2188,20 @@ describe("computeVisibilityFlags", () => {
     const flags = computeVisibilityFlags(22, 1, true, "column");
     expect(flags.showTokenBar).toBe(false);
     expect(flags.allowColumnLayout).toBe(true);
+  });
+
+  test("budgets extra header rows when pane headers wrap", () => {
+    const flags = computeVisibilityFlags(16, 1, true, "row", {
+      terminalWidth: 40,
+      paneHeaderTexts: [
+        "Very Long Agent Label \u25CF [*]",
+        "Very Long Agent Label \u25CF [*]",
+      ],
+    });
+
+    expect(flags.showTokenBar).toBe(false);
+    expect(flags.showKeyHints).toBe(true);
+    expect(flags.showPaneSeparator).toBe(true);
   });
 });
 
