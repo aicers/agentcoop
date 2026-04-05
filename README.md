@@ -85,10 +85,10 @@ AgentCoop runs an 8-stage pipeline with two agents: Agent A (author
 5. **Test plan** — Agent A verifies the PR test plan
 6. **Review** — Agent B reviews; Agent A addresses feedback
    (multi-round)
-7. **Squash** — When the branch has multiple commits that should be
-   consolidated, Agent A squashes them into a single commit and
-   force-pushes. Skipped if the branch already has only one commit
-   or if the existing commits are already clean.
+7. **Squash** — Agent A consolidates branch commits into one or a
+   few meaningful commits and force-pushes. Skipped if the branch
+   already has only one commit or if the existing commits are
+   already clean.
 8. **Done** — Check for merge conflicts, optionally rebase, confirm
    merge with the user, and clean up resources
 

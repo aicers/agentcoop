@@ -106,7 +106,7 @@ describe("buildSquashPrompt", () => {
 
   test("includes squash and force-push instructions", () => {
     const prompt = buildSquashPrompt(BASE_CTX, makeOpts());
-    expect(prompt).toContain("Squash all commits");
+    expect(prompt).toContain("consolidate them into one");
     expect(prompt).toContain("Force-push the branch");
   });
 
@@ -137,7 +137,7 @@ describe("buildSquashPrompt", () => {
 
   test("falls back to generic squash when baseSha is absent", () => {
     const prompt = buildSquashPrompt(BASE_CTX, makeOpts());
-    expect(prompt).toContain("Squash all commits on this branch");
+    expect(prompt).toContain("Review all commits on this branch");
     expect(prompt).not.toContain("git reset --soft");
   });
 });

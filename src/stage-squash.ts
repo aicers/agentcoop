@@ -81,18 +81,20 @@ export function buildSquashPrompt(
     `1. ${buildPrSyncInstructions(ctx.issueNumber)}`,
     ...(ctx.baseSha
       ? [
-          `2. Squash all commits after the base commit \`${ctx.baseSha}\` into`,
-          `   a single commit.  Only commits introduced on this branch should`,
-          `   be squashed — do not include commits from the base branch.  Use`,
+          `2. Review the commits after the base commit \`${ctx.baseSha}\` and`,
+          `   consolidate them into one or a few meaningful commits.  Only`,
+          `   commits introduced on this branch should be touched — do not`,
+          `   include commits from the base branch.  Use`,
           `   \`git reset --soft ${ctx.baseSha}\` followed by \`git commit\`, or`,
           `   an interactive rebase — whichever is simpler.`,
         ]
       : [
-          `2. Squash all commits on this branch into a single commit.  Use an`,
-          `   interactive rebase or reset-based approach — whichever is simpler.`,
+          `2. Review all commits on this branch and consolidate them into one`,
+          `   or a few meaningful commits.  Use an interactive rebase or`,
+          `   reset-based approach — whichever is simpler.`,
         ]),
-    `3. Write a clear, concise commit message that summarises all changes`,
-    `   made for this issue.  Reference the issue number`,
+    `3. Write clear, concise commit messages that summarise the changes.`,
+    `   Reference the issue number in the primary commit`,
     `   (e.g. "Implement widget rendering (#42)").`,
     `4. Force-push the branch (\`git push --force-with-lease\`).`,
   ];
