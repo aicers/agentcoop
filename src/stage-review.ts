@@ -179,6 +179,42 @@ export function buildUnresolvedSummaryPrompt(round: number): string {
   ].join("\n");
 }
 
+export function buildPrFinalizationPrompt(
+  ctx: StageContext,
+  opts: ReviewStageOptions,
+): string {
+  return [
+    `The review is complete and the PR has been approved.  Before`,
+    `merging, verify that the PR body accurately reflects the final`,
+    `state of the implementation.`,
+    ``,
+    `## Repository`,
+    `- Owner: ${ctx.owner}`,
+    `- Repo: ${ctx.repo}`,
+    `- Branch: ${ctx.branch}`,
+    `- Worktree: ${ctx.worktreePath}`,
+    ``,
+    `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
+    ``,
+    opts.issueBody,
+    ``,
+    `## Instructions`,
+    ``,
+    `1. Read the current PR body using`,
+    `   \`gh pr view --json body --jq .body\`.`,
+    `2. Compare the issue requirements above against the code on the`,
+    `   branch to determine whether every requirement has been addressed.`,
+    `3. If the PR fully resolves the issue, ensure the body contains`,
+    `   "Closes #${ctx.issueNumber}".  If it only partially addresses it,`,
+    `   ensure it says "Part of #${ctx.issueNumber}" and includes a`,
+    `   "## Not addressed" section listing which issue requirements`,
+    `   were not implemented and why.`,
+    `4. If the reference or "## Not addressed" section needs to change,`,
+    `   update the PR body using \`gh pr edit --body "..."\`.`,
+    `5. End your response with PR_FINALIZED.`,
+  ].join("\n");
+}
+
 // ---- handler -----------------------------------------------------------------
 
 export function createReviewStageHandler(
@@ -226,6 +262,35 @@ export function createReviewStageHandler(
           ctx.usageSinks?.b,
         );
         if (error) return error;
+
+        // PR finalization: Agent A verifies issue reference and
+        // "Not addressed" section before the pipeline advances.
+        const finalizePrompt = buildPrFinalizationPrompt(ctx, opts);
+        ctx.promptSinks?.a?.(finalizePrompt);
+        const finalizeResult = await invokeOrResume(
+          opts.agentA,
+          ctx.savedAgentASessionId,
+          finalizePrompt,
+          ctx.worktreePath,
+          ctx.streamSinks?.a,
+          undefined,
+          ctx.usageSinks?.a,
+        );
+
+        if (finalizeResult.sessionId) {
+          ctx.onSessionId?.("a", finalizeResult.sessionId);
+        }
+
+        if (finalizeResult.status === "error") {
+          return mapAgentError(finalizeResult, "during PR finalization");
+        }
+
+        if (!finalizeResult.responseText.includes("PR_FINALIZED")) {
+          return {
+            outcome: "needs_clarification",
+            message: finalizeResult.responseText,
+          };
+        }
 
         const m = t();
         const base = m["review.approved"](round);

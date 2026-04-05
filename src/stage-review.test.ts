@@ -5,6 +5,7 @@ import type { StageContext } from "./pipeline.js";
 import {
   buildAuthorCompletionCheckPrompt,
   buildAuthorFixPrompt,
+  buildPrFinalizationPrompt,
   buildReviewPrompt,
   buildUnresolvedSummaryPrompt,
   createReviewStageHandler,
@@ -69,7 +70,7 @@ function makeOpts(
       makeStream(
         makeResult({
           sessionId: "sess-a",
-          responseText: "Fixed the issues.",
+          responseText: "PR_FINALIZED",
         }),
       ),
     ),
@@ -182,6 +183,33 @@ describe("buildUnresolvedSummaryPrompt", () => {
     const prompt = buildUnresolvedSummaryPrompt(3);
     expect(prompt).toContain("[Reviewer Unresolved Round 3]");
     expect(prompt).toContain("NONE");
+  });
+});
+
+describe("buildPrFinalizationPrompt", () => {
+  test("includes repo and issue context", () => {
+    const prompt = buildPrFinalizationPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("Owner: org");
+    expect(prompt).toContain("Repo: repo");
+    expect(prompt).toContain("Issue #42: Fix the widget");
+  });
+
+  test("mentions Closes, Part of, and Not addressed", () => {
+    const prompt = buildPrFinalizationPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("Closes #42");
+    expect(prompt).toContain("Part of #42");
+    expect(prompt).toContain("Not addressed");
+  });
+
+  test("instructs to read and update PR body", () => {
+    const prompt = buildPrFinalizationPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("gh pr view --json body");
+    expect(prompt).toContain("gh pr edit --body");
+  });
+
+  test("ends with PR_FINALIZED keyword", () => {
+    const prompt = buildPrFinalizationPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("PR_FINALIZED");
   });
 });
 
@@ -803,6 +831,105 @@ describe("createReviewStageHandler", () => {
     expect(agentB.resume).not.toHaveBeenCalled();
   });
 
+  // -- PR finalization on approval ---------------------------------------------
+
+  test("invokes Agent A for PR finalization after approval", async () => {
+    const opts = makeOpts();
+    const stage = createReviewStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    expect(opts.agentA.invoke).toHaveBeenCalledWith(
+      expect.stringContaining("Not addressed"),
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  test("returns error when PR finalization agent call fails", async () => {
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            status: "error",
+            errorType: "execution_error",
+            stderrText: "crash",
+            responseText: "",
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+
+    const opts = makeOpts({ agentA });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("PR finalization");
+  });
+
+  test("returns needs_clarification when finalization lacks PR_FINALIZED", async () => {
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            responseText: "I could not update the PR body.",
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+
+    const opts = makeOpts({ agentA });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("needs_clarification");
+  });
+
+  test("returns needs_clarification when finalization replies APPROVED without PR_FINALIZED", async () => {
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            responseText: "APPROVED",
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+
+    const opts = makeOpts({ agentA });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("needs_clarification");
+  });
+
+  test("reports Agent A session ID after PR finalization", async () => {
+    const sessionCalls: [string, string][] = [];
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a-fin",
+            responseText: "PR_FINALIZED",
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+
+    const opts = makeOpts({ agentA });
+    const stage = createReviewStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      onSessionId: (agent, sid) => sessionCalls.push([agent, sid]),
+    };
+    await stage.handler(ctx);
+
+    expect(sessionCalls).toContainEqual(["a", "sess-a-fin"]);
+  });
+
   // -- follow-up review prompt ------------------------------------------------
 
   test("follow-up review prompt includes Author Round reference", () => {
@@ -1124,7 +1251,14 @@ describe("onSessionId", () => {
         .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
     };
     const agentA: AgentAdapter = {
-      invoke: vi.fn(),
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a-fin",
+            responseText: "PR_FINALIZED",
+          }),
+        ),
+      ),
       resume: vi.fn(),
     };
     const opts = makeOpts({ agentA, agentB });

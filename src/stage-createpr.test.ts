@@ -93,6 +93,13 @@ describe("buildCreatePrPrompt", () => {
     expect(prompt).toContain("Part of #42");
   });
 
+  test("requires Not addressed section when using Part of", () => {
+    const prompt = buildCreatePrPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("Not addressed");
+    expect(prompt).toContain("Part of #42");
+    expect(prompt).toContain("not implemented and why");
+  });
+
   test("includes user instruction when present", () => {
     const ctx = { ...BASE_CTX, userInstruction: "Use a draft PR" };
     const prompt = buildCreatePrPrompt(ctx, makeOpts());
