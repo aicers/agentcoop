@@ -7,19 +7,80 @@ import type {
   StageEnterEvent,
 } from "../pipeline-events.js";
 import {
+  type LineEntry,
   PROMPT_LINE_PREFIX,
   PROMPT_SEPARATOR_CHAR,
+  type PromptBlock,
   useAgentLines,
 } from "./useEventEmitter.js";
 
 /** Stage number at which Agent B becomes active. */
 const REVIEW_STAGE = 7;
 
+/** Maximum number of wrapped content rows in a rendered prompt block. */
+const MAX_PROMPT_ROWS = 12;
+
 /** Split a logical line into terminal rows of the given width. */
 export function splitIntoRows(line: string, width: number): string[] {
   if (width < 1) return [line];
   const wrapped = wrapAnsi(line, width, { hard: true, trim: false });
   return wrapped.split("\n");
+}
+
+/**
+ * Render a structured prompt block into terminal rows at the given
+ * width.  Separator length is derived from the width, and content
+ * lines are truncated by wrapped row count rather than source line
+ * count.
+ */
+export function renderPromptRows(block: PromptBlock, width: number): string[] {
+  if (width < 1) return [];
+
+  const label = block.stageName ? ` Prompt (${block.stageName}) ` : " Prompt ";
+
+  // Header: separator chars + label + separator chars, total ≤ width.
+  const availSep = Math.max(0, width - label.length);
+  const leftSep = Math.floor(availSep / 2);
+  const rightSep = availSep - leftSep;
+  const header =
+    PROMPT_SEPARATOR_CHAR.repeat(leftSep) +
+    label +
+    PROMPT_SEPARATOR_CHAR.repeat(rightSep);
+
+  const result: string[] = [];
+
+  // Header — normally one row, but wrap if the label exceeds the width.
+  for (const row of splitIntoRows(header, width)) {
+    result.push(row);
+  }
+
+  // Content lines with wrapped row budget.
+  const rawLines = block.prompt.split("\n");
+  let rowsUsed = 0;
+  let linesShown = 0;
+
+  for (const line of rawLines) {
+    const prefixed = `${PROMPT_LINE_PREFIX}${line}`;
+    const wrapped = splitIntoRows(prefixed, width);
+    if (rowsUsed + wrapped.length > MAX_PROMPT_ROWS) {
+      break;
+    }
+    result.push(...wrapped);
+    rowsUsed += wrapped.length;
+    linesShown++;
+  }
+
+  if (linesShown < rawLines.length) {
+    const notice = `${PROMPT_LINE_PREFIX}\u2026 (${rawLines.length - linesShown} more lines)`;
+    for (const row of splitIntoRows(notice, width)) {
+      result.push(row);
+    }
+  }
+
+  // Footer: separator chars filling the pane width.
+  result.push(PROMPT_SEPARATOR_CHAR.repeat(width));
+
+  return result;
 }
 
 /** A single terminal row tagged with display metadata. */
@@ -58,9 +119,9 @@ export function AgentPane({
   showSeparator = true,
 }: AgentPaneProps) {
   const { lines, pendingLine } = useAgentLines(emitter, agent);
-  const containerRef = useRef<DOMElement>(null);
-  const [visibleRows, setVisibleRows] = useState(20);
-  const [contentWidth, setContentWidth] = useState(80);
+  const contentRef = useRef<DOMElement>(null);
+  const [visibleRows, setVisibleRows] = useState(0);
+  const [contentWidth, setContentWidth] = useState(0);
   const [currentStage, setCurrentStage] = useState<number | null>(null);
   const [scrollOffset, setScrollOffset] = useState(0);
   const prevTotalRowsRef = useRef(0);
@@ -76,32 +137,37 @@ export function AgentPane({
     };
   }, [emitter]);
 
-  // Measure the content area after each render so we know
-  // exactly how many lines fit without relying on heuristics.
+  // Measure the inner content box after each render so visibleRows
+  // and contentWidth reflect the real scrollable area regardless of
+  // how many rows the header consumes.
   useEffect(() => {
-    if (containerRef.current) {
-      const { height, width } = measureElement(containerRef.current);
-      // Reserve rows: border (2) + label (1) + optional separator (1).
-      const overhead = showSeparator ? 4 : 3;
-      setVisibleRows(height > overhead ? height - overhead : 0);
-      // Subtract 4 for borderStyle="single" (2) + paddingX={1} (2).
-      setContentWidth(width > 4 ? width - 4 : 1);
+    if (contentRef.current) {
+      const { height, width } = measureElement(contentRef.current);
+      setVisibleRows(height);
+      setContentWidth(width);
     }
   });
 
-  const allLines = pendingLine ? [...lines, pendingLine] : lines;
+  const allLines: LineEntry[] = pendingLine ? [...lines, pendingLine] : lines;
 
-  // Build a flat array of terminal rows from logical lines so that
-  // scrolling operates at the row level, correctly handling wrapped
-  // lines that span multiple terminal rows.
+  // Build a flat array of terminal rows from logical lines and prompt
+  // blocks so that scrolling operates at the row level, correctly
+  // handling wrapped lines that span multiple terminal rows.
   const allRows: RowEntry[] = [];
   for (let i = 0; i < allLines.length; i++) {
-    const line = allLines[i];
-    const isPrompt =
-      line.startsWith(PROMPT_LINE_PREFIX) ||
-      line.startsWith(PROMPT_SEPARATOR_CHAR);
-    for (const row of splitIntoRows(line, contentWidth)) {
-      allRows.push({ text: row, isPrompt, lineIdx: i });
+    const entry = allLines[i];
+    if (typeof entry === "string") {
+      const isPrompt =
+        entry.startsWith(PROMPT_LINE_PREFIX) ||
+        entry.startsWith(PROMPT_SEPARATOR_CHAR);
+      for (const row of splitIntoRows(entry, contentWidth)) {
+        allRows.push({ text: row, isPrompt, lineIdx: i });
+      }
+    } else {
+      // PromptBlock: render size-aware with current content width.
+      for (const row of renderPromptRows(entry, contentWidth)) {
+        allRows.push({ text: row, isPrompt: true, lineIdx: i });
+      }
     }
   }
 
@@ -238,7 +304,6 @@ export function AgentPane({
 
   return (
     <Box
-      ref={containerRef}
       flexDirection="column"
       flexGrow={1}
       flexBasis={0}
@@ -252,21 +317,27 @@ export function AgentPane({
         {isActive ? " \u25CF" : ""}
         {isFocused ? " [*]" : ""}
       </Text>
-      {showSeparator && <Text dimColor>{"\u2500".repeat(contentWidth)}</Text>}
-      {placeholder !== undefined ? (
-        <Text dimColor>{placeholder}</Text>
-      ) : (
-        <>
-          {topIndicator && <Text dimColor>{topIndicator}</Text>}
-          {visibleRowEntries.map((row, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: rows are derived without stable IDs
-            <Text key={i} dimColor={row.isPrompt}>
-              {row.text}
-            </Text>
-          ))}
-          {bottomIndicator && <Text dimColor>{bottomIndicator}</Text>}
-        </>
+      {showSeparator && (
+        <Text dimColor>
+          {contentWidth > 0 ? "\u2500".repeat(contentWidth) : ""}
+        </Text>
       )}
+      <Box ref={contentRef} flexDirection="column" flexGrow={1}>
+        {placeholder !== undefined ? (
+          <Text dimColor>{placeholder}</Text>
+        ) : (
+          <>
+            {topIndicator && <Text dimColor>{topIndicator}</Text>}
+            {visibleRowEntries.map((row, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: rows are derived without stable IDs
+              <Text key={i} dimColor={row.isPrompt}>
+                {row.text}
+              </Text>
+            ))}
+            {bottomIndicator && <Text dimColor>{bottomIndicator}</Text>}
+          </>
+        )}
+      </Box>
     </Box>
   );
 }

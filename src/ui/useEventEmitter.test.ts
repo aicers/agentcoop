@@ -6,17 +6,14 @@
  */
 import { describe, expect, test } from "vitest";
 import { PipelineEventEmitter } from "../pipeline-events.js";
-import {
-  formatPromptForDisplay,
-  PROMPT_LINE_PREFIX,
-  PROMPT_SEPARATOR_CHAR,
-} from "./useEventEmitter.js";
+import type { LineEntry, PromptBlock } from "./useEventEmitter.js";
 
 // ---- line accumulation logic (mirrors useAgentLines) -------------------------
 
 /**
  * Simplified version of the hook's accumulation logic, extracted for
- * testability without React.
+ * testability without React.  Handles both chunk and prompt events,
+ * storing prompt events as structured PromptBlock objects.
  */
 function createLineAccumulator(
   emitter: PipelineEventEmitter,
@@ -24,24 +21,49 @@ function createLineAccumulator(
   maxLines = 500,
 ) {
   let buffer = "";
-  let lines: string[] = [];
+  let lines: LineEntry[] = [];
+  let stageName: string | undefined;
 
-  const handler = (ev: { agent: "a" | "b"; chunk: string }) => {
+  const chunkHandler = (ev: { agent: "a" | "b"; chunk: string }) => {
     if (ev.agent !== agent) return;
     buffer += ev.chunk;
     const parts = buffer.split("\n");
     buffer = parts.pop() ?? "";
     if (parts.length === 0) return;
-    const next = [...lines, ...parts];
+    const next: LineEntry[] = [...lines, ...parts];
     lines = next.length > maxLines ? next.slice(-maxLines) : next;
   };
 
-  emitter.on("agent:chunk", handler);
+  const promptHandler = (ev: { agent: "a" | "b"; prompt: string }) => {
+    if (ev.agent !== agent) return;
+    const block: PromptBlock = { kind: "prompt", prompt: ev.prompt, stageName };
+    if (buffer) {
+      const pending = buffer;
+      buffer = "";
+      const next: LineEntry[] = [...lines, pending, block];
+      lines = next.length > maxLines ? next.slice(-maxLines) : next;
+    } else {
+      const next: LineEntry[] = [...lines, block];
+      lines = next.length > maxLines ? next.slice(-maxLines) : next;
+    }
+  };
+
+  const stageHandler = (ev: { stageName: string }) => {
+    stageName = ev.stageName;
+  };
+
+  emitter.on("agent:chunk", chunkHandler);
+  emitter.on("agent:prompt", promptHandler);
+  emitter.on("stage:enter", stageHandler);
 
   return {
     getLines: () => lines,
     getBuffer: () => buffer,
-    cleanup: () => emitter.off("agent:chunk", handler),
+    cleanup: () => {
+      emitter.off("agent:chunk", chunkHandler);
+      emitter.off("agent:prompt", promptHandler);
+      emitter.off("stage:enter", stageHandler);
+    },
   };
 }
 
@@ -167,104 +189,74 @@ describe("line accumulation (useAgentLines logic)", () => {
   });
 });
 
-describe("formatPromptForDisplay", () => {
-  test("formats a short prompt with separator and prefix", () => {
-    const lines = formatPromptForDisplay("Hello\nWorld");
-
-    // First line is separator with "Prompt" label
-    expect(lines[0]).toContain("Prompt");
-    expect(lines[0]).toContain(PROMPT_SEPARATOR_CHAR);
-    // Content lines are prefixed
-    expect(lines[1]).toBe(`${PROMPT_LINE_PREFIX}Hello`);
-    expect(lines[2]).toBe(`${PROMPT_LINE_PREFIX}World`);
-    // Last line is closing separator
-    expect(lines[lines.length - 1]).toContain(PROMPT_SEPARATOR_CHAR);
-  });
-
-  test("footer length matches header length", () => {
-    const lines = formatPromptForDisplay("Hello");
-    const header = lines[0];
-    const footer = lines[lines.length - 1];
-
-    expect(footer).toBeDefined();
-    expect(footer).toHaveLength(header.length);
-    // Footer should be all separator chars
-    expect(footer).toBe(PROMPT_SEPARATOR_CHAR.repeat(header.length));
-  });
-
-  test("footer length matches header length with stage name", () => {
-    const lines = formatPromptForDisplay("Hello", "Create PR");
-    const header = lines[0];
-    const footer = lines[lines.length - 1];
-
-    expect(footer).toBeDefined();
-    expect(footer).toHaveLength(header.length);
-    expect(footer).toBe(PROMPT_SEPARATOR_CHAR.repeat(header.length));
-  });
-
-  test("includes stage name in header when provided", () => {
-    const lines = formatPromptForDisplay("Hello", "Self-check");
-
-    expect(lines[0]).toContain("Prompt (Self-check)");
-  });
-
-  test("omits stage name from header when not provided", () => {
-    const lines = formatPromptForDisplay("Hello");
-
-    expect(lines[0]).toContain(" Prompt ");
-    expect(lines[0]).not.toContain("(");
-  });
-
-  test("truncates long prompts to 8 lines with remainder count", () => {
-    const prompt = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
-    const lines = formatPromptForDisplay(prompt);
-
-    // 1 header + 8 content + 1 truncation notice + 1 footer = 11
-    expect(lines).toHaveLength(11);
-    // First content line
-    expect(lines[1]).toBe(`${PROMPT_LINE_PREFIX}line 0`);
-    // Last content line shown
-    expect(lines[8]).toBe(`${PROMPT_LINE_PREFIX}line 7`);
-    // Truncation indicator
-    expect(lines[9]).toContain("12 more lines");
-  });
-
-  test("does not truncate prompt with exactly 8 lines", () => {
-    const prompt = Array.from({ length: 8 }, (_, i) => `line ${i}`).join("\n");
-    const lines = formatPromptForDisplay(prompt);
-
-    // 1 header + 8 content + 1 footer = 10, no truncation line
-    expect(lines).toHaveLength(10);
-    expect(lines.join("\n")).not.toContain("more lines");
-  });
-
-  test("handles single-line prompt", () => {
-    const lines = formatPromptForDisplay("Do the thing");
-
-    expect(lines[1]).toBe(`${PROMPT_LINE_PREFIX}Do the thing`);
-    expect(lines).toHaveLength(3); // header + 1 line + footer
-  });
-});
-
 describe("agent:prompt integration with line accumulator", () => {
-  test("prompt lines are injected into the accumulator", () => {
+  test("prompt events are stored as structured PromptBlock objects", () => {
     const emitter = new PipelineEventEmitter();
     const acc = createLineAccumulator(emitter, "a");
 
-    // Simulate agent:prompt by manually injecting formatted lines
-    // (mirrors what the hook does).
     emitter.emit("agent:chunk", { agent: "a", chunk: "output\n" });
-
-    const formatted = formatPromptForDisplay("hello");
-    // Inject formatted lines as if the hook did it.
-    for (const line of formatted) {
-      emitter.emit("agent:chunk", { agent: "a", chunk: `${line}\n` });
-    }
+    emitter.emit("stage:enter", {
+      stageNumber: 1,
+      stageName: "Implement",
+      iteration: 0,
+    });
+    emitter.emit("agent:prompt", { agent: "a", prompt: "hello" });
 
     const lines = acc.getLines();
     expect(lines[0]).toBe("output");
-    expect(lines[1]).toContain("Prompt");
-    expect(lines[2]).toBe(`${PROMPT_LINE_PREFIX}hello`);
+    expect(lines[1]).toEqual({
+      kind: "prompt",
+      prompt: "hello",
+      stageName: "Implement",
+    });
+
+    acc.cleanup();
+  });
+
+  test("prompt block flushes pending buffer first", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "a");
+
+    emitter.emit("agent:chunk", { agent: "a", chunk: "partial" });
+    expect(acc.getBuffer()).toBe("partial");
+
+    emitter.emit("agent:prompt", { agent: "a", prompt: "question" });
+
+    const lines = acc.getLines();
+    expect(lines[0]).toBe("partial");
+    expect(lines[1]).toEqual({
+      kind: "prompt",
+      prompt: "question",
+      stageName: undefined,
+    });
+    expect(acc.getBuffer()).toBe("");
+
+    acc.cleanup();
+  });
+
+  test("prompt block without prior stage has undefined stageName", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "a");
+
+    emitter.emit("agent:prompt", { agent: "a", prompt: "hi" });
+
+    const lines = acc.getLines();
+    expect(lines[0]).toEqual({
+      kind: "prompt",
+      prompt: "hi",
+      stageName: undefined,
+    });
+
+    acc.cleanup();
+  });
+
+  test("prompt events for other agents are ignored", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "a");
+
+    emitter.emit("agent:prompt", { agent: "b", prompt: "not mine" });
+
+    expect(acc.getLines()).toEqual([]);
 
     acc.cleanup();
   });
