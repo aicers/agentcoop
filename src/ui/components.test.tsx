@@ -1576,10 +1576,10 @@ describe("TokenBar", () => {
     await new Promise((r) => setTimeout(r, 50));
 
     const frame = lastFrame() ?? "";
-    expect(frame).toContain("Agent A");
+    expect(frame).toContain("Agent A (author)");
     expect(frame).toContain("12.3K in");
     expect(frame).toContain("5.1K out");
-    expect(frame).toContain("Agent B");
+    expect(frame).toContain("Agent B (reviewer)");
     expect(frame).toContain("8.7K in");
     expect(frame).toContain("3.2K out");
   });
@@ -1638,7 +1638,7 @@ describe("TokenBar", () => {
     await new Promise((r) => setTimeout(r, 50));
 
     const frame = lastFrame() ?? "";
-    expect(frame).toContain("Agent A");
+    expect(frame).toContain("Agent A (author)");
     expect(frame).toContain("5.0K in");
   });
 });
@@ -1665,8 +1665,9 @@ describe("TokenBar width adaptation", () => {
     // Each box independently truncates its agent's text.
     expect(frame).toContain("\u2026");
     // Both agents appear since each has its own box.
-    expect(frame).toContain("Agent A");
-    expect(frame).toContain("Agent B");
+    // Role suffixes are truncated at this width, but the prefix survives.
+    expect(frame).toContain("Agent A (");
+    expect(frame).toContain("Agent B (");
   });
 
   test("truncates Korean (wide-char) content correctly", async () => {
@@ -1754,8 +1755,8 @@ describe("TokenBar layout prop", () => {
     const frame = lastFrame() ?? "";
     // Both agents should appear on the same line in row layout.
     const lines = frame.split("\n");
-    const agentALine = lines.find((l) => l.includes("Agent A"));
-    const agentBLine = lines.find((l) => l.includes("Agent B"));
+    const agentALine = lines.find((l) => l.includes("Agent A (author)"));
+    const agentBLine = lines.find((l) => l.includes("Agent B (reviewer)"));
     expect(agentALine).toBeDefined();
     expect(agentBLine).toBeDefined();
     // In row layout they share a line.
@@ -1781,8 +1782,8 @@ describe("TokenBar layout prop", () => {
     const frame = lastFrame() ?? "";
     // In column layout, each agent's text appears on a different line.
     const lines = frame.split("\n");
-    const agentAIdx = lines.findIndex((l) => l.includes("Agent A"));
-    const agentBIdx = lines.findIndex((l) => l.includes("Agent B"));
+    const agentAIdx = lines.findIndex((l) => l.includes("Agent A (author)"));
+    const agentBIdx = lines.findIndex((l) => l.includes("Agent B (reviewer)"));
     expect(agentAIdx).toBeGreaterThanOrEqual(0);
     expect(agentBIdx).toBeGreaterThanOrEqual(0);
     expect(agentAIdx).not.toBe(agentBIdx);

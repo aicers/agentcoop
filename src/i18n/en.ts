@@ -4,8 +4,8 @@ export const en: Messages = {
   // ---- quick-start -------------------------------------------------------
 
   "quickStart.header": "Found saved configuration:",
-  "quickStart.agentA": (model) => `  Agent A: ${model}`,
-  "quickStart.agentB": (model) => `  Agent B: ${model}`,
+  "quickStart.agentA": (model) => `  Agent A (author): ${model}`,
+  "quickStart.agentB": (model) => `  Agent B (reviewer): ${model}`,
   "quickStart.mode": (exec) => `  Mode: ${exec}`,
   "quickStart.language": (lang) => `  Language: ${lang}`,
   "quickStart.pipelineSettings": "  Pipeline settings:",
@@ -52,8 +52,8 @@ export const en: Messages = {
   "resume.pr": (prNumber) => `    PR: #${prNumber}`,
   "resume.reviewRound": (round) => `    Review round: ${round}`,
   "resume.mode": (mode) => `    Mode: ${mode}`,
-  "resume.agentA": (model) => `    Agent A: ${model}`,
-  "resume.agentB": (model) => `    Agent B: ${model}`,
+  "resume.agentA": (model) => `    Agent A (author): ${model}`,
+  "resume.agentB": (model) => `    Agent B (reviewer): ${model}`,
   "resume.resumeOrFresh": "Resume or start fresh?",
   "resume.resume": "Resume",
   "resume.startFresh": "Start fresh",
@@ -75,8 +75,8 @@ export const en: Messages = {
     "  PR already exists \u2014 skipping to stage 5 (CI check).",
   "boot.startingPipeline": (owner, repo, issue, resuming) =>
     `Starting pipeline for ${owner}/${repo}#${issue}${resuming ? " (resuming)" : ""}`,
-  "boot.agentA": (model) => `  Agent A: ${model}`,
-  "boot.agentB": (model) => `  Agent B: ${model}`,
+  "boot.agentA": (model) => `  Agent A (author): ${model}`,
+  "boot.agentB": (model) => `  Agent B (reviewer): ${model}`,
   "boot.mode": (mode) => `  Mode: ${mode}`,
   "boot.resumingFromStage": (stage) => `  Resuming from stage: ${stage}`,
 
