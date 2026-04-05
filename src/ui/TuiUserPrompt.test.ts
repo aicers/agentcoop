@@ -188,16 +188,26 @@ describe("TuiUserPrompt", () => {
   });
 
   describe("confirmMerge", () => {
-    test("returns true for yes", async () => {
-      const dispatch = makeDispatch("yes");
+    test("returns merged for merged choice", async () => {
+      const dispatch = makeDispatch("merged");
       const prompt = createTuiUserPrompt(dispatch);
-      expect(await prompt.confirmMerge("Has the PR been merged?")).toBe(true);
+      expect(await prompt.confirmMerge("Has the PR been merged?")).toBe(
+        "merged",
+      );
     });
 
-    test("returns false for no", async () => {
-      const dispatch = makeDispatch("no");
+    test("returns check_conflicts for check conflicts choice", async () => {
+      const dispatch = makeDispatch("check_conflicts");
       const prompt = createTuiUserPrompt(dispatch);
-      expect(await prompt.confirmMerge("Has the PR been merged?")).toBe(false);
+      expect(await prompt.confirmMerge("Has the PR been merged?")).toBe(
+        "check_conflicts",
+      );
+    });
+
+    test("returns exit for exit choice", async () => {
+      const dispatch = makeDispatch("exit");
+      const prompt = createTuiUserPrompt(dispatch);
+      expect(await prompt.confirmMerge("Has the PR been merged?")).toBe("exit");
     });
   });
 

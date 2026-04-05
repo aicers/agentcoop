@@ -111,10 +111,9 @@ export interface Messages {
   "pipeline.worktreePreserved": string;
   "pipeline.conflictsDetected": string;
   "pipeline.unknownMergeable": string;
-  "pipeline.rebaseSuccess": string;
+  "pipeline.noConflicts": string;
   "pipeline.rebaseFailed": string;
-  "pipeline.stillConflicting": string;
-  "pipeline.ciPassedAfterRebase": string;
+  "pipeline.rebaseAlreadyAttempted": string;
 
   // ---- TUI user prompts (TuiUserPrompt.ts) -------------------------------
 
@@ -135,7 +134,8 @@ export interface Messages {
   "prompt.ambiguous": (message: string) => string;
   "prompt.proceed": string;
   "prompt.yesMerged": string;
-  "prompt.noKeepWorktree": string;
+  "prompt.checkConflictsRebase": string;
+  "prompt.noExit": string;
   "prompt.agentRebase": string;
   "prompt.manualResolve": string;
   "prompt.recheck": string;

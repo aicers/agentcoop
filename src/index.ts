@@ -554,7 +554,7 @@ try {
     prompt: {
       confirmMerge: async (msg) => {
         if (tuiPrompt) return tuiPrompt.confirmMerge(msg);
-        return true;
+        return "merged";
       },
       handleConflict: async (msg) => {
         if (tuiPrompt) return tuiPrompt.handleConflict(msg);
@@ -588,6 +588,11 @@ try {
         `   - Run the full test suite to ensure nothing is broken.`,
         `5. Only if the build and all tests pass, force-push the branch:`,
         `   \`git push --force-with-lease\``,
+        `6. After a successful force-push, post a brief PR comment noting`,
+        `   which main commit the branch was rebased onto and a short`,
+        `   summary of resolved conflicts. Use:`,
+        `   \`gh pr comment --body "<your summary>"\``,
+        `   If no PR exists or the comment fails, continue without failing.`,
         ``,
         `IMPORTANT: If you cannot resolve conflicts cleanly or if the`,
         `build/tests fail after resolution, do NOT push. Instead, abort`,
