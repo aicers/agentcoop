@@ -43,6 +43,7 @@ describe("loadConfig", () => {
         inactivityTimeoutMinutes: 20,
         autoResumeAttempts: 3,
       },
+      notifications: { bell: true, desktop: false },
     });
     expect(existsSync(configPath())).toBe(true);
   });
@@ -60,6 +61,7 @@ describe("loadConfig", () => {
         inactivityTimeoutMinutes: 20,
         autoResumeAttempts: 3,
       },
+      notifications: { bell: true, desktop: false },
     });
   });
 
@@ -448,6 +450,83 @@ describe("loadConfig", () => {
       autoResumeAttempts: 3,
     });
   });
+
+  // ---- notifications -------------------------------------------------------
+
+  test("default config includes notification defaults", () => {
+    const config = loadConfig();
+    expect(config.notifications).toEqual({ bell: true, desktop: false });
+  });
+
+  test("reads saved notification settings", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        notifications: { bell: false, desktop: true },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.notifications).toEqual({ bell: false, desktop: true });
+  });
+
+  test("fills missing notification fields with defaults", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ owners: [], notifications: { desktop: true } }),
+    );
+    const config = loadConfig();
+    expect(config.notifications).toEqual({ bell: true, desktop: true });
+  });
+
+  test("falls back to defaults for non-boolean notification values", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        notifications: { bell: "yes", desktop: 1 },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.notifications).toEqual({ bell: true, desktop: false });
+  });
+
+  test("falls back to defaults when notifications is not an object", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ owners: [], notifications: "on" }),
+    );
+    const config = loadConfig();
+    expect(config.notifications).toEqual({ bell: true, desktop: false });
+  });
+
+  test("notifications null falls back to defaults", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ owners: [], notifications: null }),
+    );
+    const config = loadConfig();
+    expect(config.notifications).toEqual({ bell: true, desktop: false });
+  });
+
+  test("notifications array falls back to defaults", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ owners: [], notifications: [true, false] }),
+    );
+    const config = loadConfig();
+    expect(config.notifications).toEqual({ bell: true, desktop: false });
+  });
+
+  test("notification defaults are isolated from mutations", () => {
+    const config1 = loadConfig();
+    (config1.notifications as Record<string, unknown>).bell = false;
+
+    rmSync(configPath());
+
+    const config2 = loadConfig();
+    expect(config2.notifications.bell).toBe(true);
+  });
 });
 
 describe("saveConfig", () => {
@@ -462,12 +541,15 @@ describe("saveConfig", () => {
     autoResumeAttempts: 3,
   };
 
+  const defaultNotif = { bell: true, desktop: false };
+
   test("creates directories and writes config", () => {
     const config = {
       owners: ["org1"],
       cloneBaseDir: "~/code",
       language: "ko" as const,
       pipelineSettings: { ...defaultPS },
+      notifications: { ...defaultNotif },
     };
     saveConfig(config);
     const raw = JSON.parse(readFileSync(configPath(), "utf-8"));
@@ -480,6 +562,7 @@ describe("saveConfig", () => {
       cloneBaseDir: "~/x",
       language: "en",
       pipelineSettings: { ...defaultPS },
+      notifications: { ...defaultNotif },
     });
     const content = readFileSync(configPath(), "utf-8");
     expect(content.endsWith("\n")).toBe(true);
@@ -491,18 +574,21 @@ describe("saveConfig", () => {
       cloneBaseDir: "~/x",
       language: "en",
       pipelineSettings: { ...defaultPS },
+      notifications: { ...defaultNotif },
     });
     saveConfig({
       owners: ["b"],
       cloneBaseDir: "~/y",
       language: "ko",
       pipelineSettings: { ...defaultPS, reviewAutoRounds: 5 },
+      notifications: { bell: false, desktop: true },
     });
     const raw = JSON.parse(readFileSync(configPath(), "utf-8"));
     expect(raw.owners).toEqual(["b"]);
     expect(raw.cloneBaseDir).toBe("~/y");
     expect(raw.language).toBe("ko");
     expect(raw.pipelineSettings.reviewAutoRounds).toBe(5);
+    expect(raw.notifications).toEqual({ bell: false, desktop: true });
   });
 
   test("roundtrips correctly with loadConfig", () => {
@@ -511,6 +597,7 @@ describe("saveConfig", () => {
       cloneBaseDir: "~/dev",
       language: "ko" as const,
       pipelineSettings: { ...defaultPS, inactivityTimeoutMinutes: 30 },
+      notifications: { bell: false, desktop: true },
     };
     saveConfig(original);
     const loaded = loadConfig();

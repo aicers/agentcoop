@@ -1,5 +1,9 @@
 import { checkbox, confirm, input, search, select } from "@inquirer/prompts";
-import type { Config, PipelineSettings } from "./config.js";
+import type {
+  Config,
+  NotificationSettings,
+  PipelineSettings,
+} from "./config.js";
 import { loadConfig, saveConfig } from "./config.js";
 import type { Issue } from "./github.js";
 import { getIssue, listRepositories } from "./github.js";
@@ -172,6 +176,14 @@ export async function runStartup(
       const label = labels[key].padEnd(30);
       console.log(`    ${label} ${formatSettingValue(key, ps[key])}`);
     }
+    const notif = config.notifications;
+    console.log(m["quickStart.notifications"]);
+    console.log(
+      `    ${m["startup.notificationBell"].padEnd(30)} ${notif.bell ? "on" : "off"}`,
+    );
+    console.log(
+      `    ${m["startup.notificationDesktop"].padEnd(30)} ${notif.desktop ? "on" : "off"}`,
+    );
     console.log();
 
     const reuse = await confirm({
@@ -224,6 +236,14 @@ export async function runStartup(
     config.pipelineSettings = pipelineSettings;
   }
   configDirty ||= settingsDirty;
+
+  const { notifications, dirty: notifDirty } = await adjustNotificationSettings(
+    config.notifications,
+  );
+  if (notifDirty) {
+    config.notifications = notifications;
+  }
+  configDirty ||= notifDirty;
 
   const issue = getIssue(owner, repo, issueNumber);
   const confirmed = await confirmIssue(owner, repo, issue);
@@ -496,6 +516,36 @@ async function adjustPipelineSettings(
   });
 
   return { pipelineSettings: updated, dirty: save };
+}
+
+async function adjustNotificationSettings(
+  current: NotificationSettings,
+): Promise<{ notifications: NotificationSettings; dirty: boolean }> {
+  const m = t();
+  const selected = await checkbox<"bell" | "desktop">({
+    message: m["startup.notificationSettings"],
+    choices: [
+      {
+        name: m["startup.notificationBell"],
+        value: "bell" as const,
+        checked: current.bell,
+      },
+      {
+        name: m["startup.notificationDesktop"],
+        value: "desktop" as const,
+        checked: current.desktop,
+      },
+    ],
+  });
+
+  const updated: NotificationSettings = {
+    bell: selected.includes("bell"),
+    desktop: selected.includes("desktop"),
+  };
+
+  const dirty =
+    updated.bell !== current.bell || updated.desktop !== current.desktop;
+  return { notifications: updated, dirty };
 }
 
 async function confirmIssue(

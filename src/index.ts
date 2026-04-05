@@ -13,7 +13,7 @@ import {
   stopDockerCompose,
 } from "./cleanup.js";
 import { createCodexAdapter } from "./codex-adapter.js";
-import type { PipelineSettings } from "./config.js";
+import type { NotificationSettings, PipelineSettings } from "./config.js";
 import { loadConfig } from "./config.js";
 import { getGitHubUsername, getIssue } from "./github.js";
 import { initI18n, t } from "./i18n/index.js";
@@ -65,6 +65,7 @@ interface RunParams {
   agentBConfig: AgentConfig;
   executionMode: "auto" | "step";
   pipelineSettings: PipelineSettings;
+  notifications: NotificationSettings;
   issueTitle: string;
   issueBody: string;
   startFromStage: number | undefined;
@@ -327,6 +328,7 @@ try {
         },
         executionMode: savedState.executionMode,
         pipelineSettings: target.config.pipelineSettings,
+        notifications: target.config.notifications,
         issueTitle: issue.title,
         issueBody: issue.body,
         startFromStage: savedState.currentStage,
@@ -360,11 +362,14 @@ try {
     const result = await runStartup(target);
     // Re-initialise i18n if the user changed language during startup.
     await initI18n(result.language);
+    // Reload config to pick up any notification changes made during startup.
+    const freshConfig = loadConfig();
     return {
       agentAConfig: result.agentA,
       agentBConfig: result.agentB,
       executionMode: result.executionMode,
       pipelineSettings: result.pipelineSettings,
+      notifications: freshConfig.notifications,
       issueTitle: result.issue.title,
       issueBody: result.issue.body,
       startFromStage: undefined,
@@ -378,6 +383,7 @@ try {
     agentBConfig,
     executionMode,
     pipelineSettings,
+    notifications,
     issueTitle,
     issueBody,
     startFromStage: rawStartFromStage,
@@ -789,6 +795,7 @@ try {
       modelNameB: modelDisplayName(agentBConfig),
       cliTypeA: agentAConfig.cli,
       cliTypeB: agentBConfig.cli,
+      notifications,
     });
   });
 
