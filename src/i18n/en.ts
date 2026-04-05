@@ -114,11 +114,11 @@ export const en: Messages = {
     "Pipeline completed, but merge conflicts with main detected.",
   "pipeline.unknownMergeable":
     "Could not determine merge status after retries.",
-  "pipeline.rebaseSuccess": "Agent rebased onto main successfully.",
+  "pipeline.noConflicts": "No conflicts found — already up to date with main.",
   "pipeline.rebaseFailed":
     "Agent could not resolve conflicts. Please resolve manually.",
-  "pipeline.stillConflicting": "Still conflicting after resolution attempt.",
-  "pipeline.ciPassedAfterRebase": "CI passed after rebase.",
+  "pipeline.rebaseAlreadyAttempted":
+    "Agent rebase was already attempted. Please resolve conflicts manually.",
 
   // ---- TUI user prompts --------------------------------------------------
 
@@ -141,7 +141,8 @@ export const en: Messages = {
   "prompt.ambiguous": (message) => `Ambiguous agent response:\n${message}`,
   "prompt.proceed": "Proceed",
   "prompt.yesMerged": "Yes, merged",
-  "prompt.noKeepWorktree": "No, keep worktree",
+  "prompt.checkConflictsRebase": "No, check conflicts and rebase",
+  "prompt.noExit": "No, exit",
   "prompt.agentRebase": "Let agent rebase",
   "prompt.manualResolve": "Resolve manually",
   "prompt.recheck": "Re-check",

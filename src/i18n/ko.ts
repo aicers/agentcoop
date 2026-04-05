@@ -135,12 +135,11 @@ export const ko: Messages = {
   "pipeline.conflictsDetected":
     "파이프라인이 완료되었지만 main과 병합 충돌이 감지되었습니다.",
   "pipeline.unknownMergeable": "재시도 후에도 병합 상태를 확인할 수 없습니다.",
-  "pipeline.rebaseSuccess":
-    "에이전트가 main으로 리베이스를 성공적으로 완료했습니다.",
+  "pipeline.noConflicts": "충돌이 없습니다 — main과 이미 최신 상태입니다.",
   "pipeline.rebaseFailed":
     "에이전트가 충돌을 해결하지 못했습니다. 수동으로 해결해 주세요.",
-  "pipeline.stillConflicting": "해결 시도 후에도 여전히 충돌이 있습니다.",
-  "pipeline.ciPassedAfterRebase": "리베이스 후 CI를 통과했습니다.",
+  "pipeline.rebaseAlreadyAttempted":
+    "에이전트 리베이스가 이미 시도되었습니다. 수동으로 충돌을 해결해 주세요.",
 
   // ---- TUI user prompts --------------------------------------------------
 
@@ -165,7 +164,8 @@ export const ko: Messages = {
     `\uBAA8\uD638\uD55C \uC5D0\uC774\uC804\uD2B8 \uC751\uB2F5:\n${message}`,
   "prompt.proceed": "\uC9C4\uD589",
   "prompt.yesMerged": "예, 병합됨",
-  "prompt.noKeepWorktree": "아니오, 워크트리 유지",
+  "prompt.checkConflictsRebase": "아니오, 충돌 확인 및 리베이스",
+  "prompt.noExit": "아니오, 종료",
   "prompt.agentRebase": "에이전트 리베이스",
   "prompt.manualResolve": "수동 해결",
   "prompt.recheck": "재확인",

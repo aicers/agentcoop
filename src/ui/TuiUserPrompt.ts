@@ -112,16 +112,22 @@ export function createTuiUserPrompt(dispatch: PromptDispatch): UserPrompt {
       return { action: action as UserAction };
     },
 
-    async confirmMerge(message: string): Promise<boolean> {
+    async confirmMerge(
+      message: string,
+    ): Promise<"merged" | "check_conflicts" | "exit"> {
       const m = t();
       const response = await dispatch({
         message,
         choices: [
-          { label: m["prompt.yesMerged"], value: "yes" },
-          { label: m["prompt.noKeepWorktree"], value: "no" },
+          { label: m["prompt.yesMerged"], value: "merged" },
+          {
+            label: m["prompt.checkConflictsRebase"],
+            value: "check_conflicts",
+          },
+          { label: m["prompt.noExit"], value: "exit" },
         ],
       });
-      return response === "yes";
+      return response as "merged" | "check_conflicts" | "exit";
     },
 
     async handleConflict(message: string): Promise<"agent_rebase" | "manual"> {
