@@ -181,6 +181,12 @@ export interface Messages {
     inputTokens: string,
     outputTokens: string,
   ) => string;
+  "tokenBar.agentUsageCached": (
+    label: string,
+    inputTokens: string,
+    cachedTokens: string,
+    outputTokens: string,
+  ) => string;
   "tokenBar.noUsage": string;
 
   // ---- input area (InputArea.tsx) ----------------------------------------
@@ -196,6 +202,8 @@ export interface Messages {
   "agentPane.linesBelow": (count: number) => string;
   "agent.labelA": string;
   "agent.labelB": string;
+  "agent.labelShortA": string;
+  "agent.labelShortB": string;
   "agent.labelARole": string;
   "agent.labelBRole": string;
 

@@ -25,6 +25,18 @@ export function formatTokenCount(n: number): string {
   return `${m.toFixed(1)}M`;
 }
 
+/** Map a CLI identifier to a title-case display name. */
+export function cliDisplayName(cli: string): string {
+  switch (cli) {
+    case "claude":
+      return "Claude";
+    case "codex":
+      return "Codex";
+    default:
+      return cli;
+  }
+}
+
 interface TokenBarProps {
   emitter: PipelineEventEmitter;
   /** When false, the bar stays mounted (accumulating data) but renders nothing. */
@@ -39,6 +51,10 @@ interface TokenBarProps {
   contentWidth?: number;
   /** Layout direction – must match the agent pane layout. */
   layout?: "row" | "column";
+  /** CLI identifier for Agent A (e.g. "claude" or "codex"). */
+  cliTypeA?: string;
+  /** CLI identifier for Agent B (e.g. "claude" or "codex"). */
+  cliTypeB?: string;
 }
 
 export function TokenBar({
@@ -46,6 +62,8 @@ export function TokenBar({
   visible = true,
   contentWidth,
   layout = "row",
+  cliTypeA,
+  cliTypeB,
 }: TokenBarProps) {
   const [usageA, setUsageA] = useState<TokenUsage>({
     inputTokens: 0,
@@ -78,24 +96,38 @@ export function TokenBar({
   const hasData =
     usageA.inputTokens > 0 ||
     usageA.outputTokens > 0 ||
+    usageA.cachedInputTokens > 0 ||
     usageB.inputTokens > 0 ||
-    usageB.outputTokens > 0;
+    usageB.outputTokens > 0 ||
+    usageB.cachedInputTokens > 0;
 
   if (!visible || !hasData) return null;
 
-  const labelA = m["agent.labelARole"];
-  const labelB = m["agent.labelBRole"];
+  const labelA = cliTypeA
+    ? `${m["agent.labelShortA"]} (${cliDisplayName(cliTypeA)})`
+    : m["agent.labelARole"];
+  const labelB = cliTypeB
+    ? `${m["agent.labelShortB"]} (${cliDisplayName(cliTypeB)})`
+    : m["agent.labelBRole"];
 
-  const textA = m["tokenBar.agentUsage"](
-    labelA,
-    formatTokenCount(usageA.inputTokens),
-    formatTokenCount(usageA.outputTokens),
-  );
-  const textB = m["tokenBar.agentUsage"](
-    labelB,
-    formatTokenCount(usageB.inputTokens),
-    formatTokenCount(usageB.outputTokens),
-  );
+  function formatUsage(label: string, usage: TokenUsage): string {
+    if (usage.cachedInputTokens > 0) {
+      return m["tokenBar.agentUsageCached"](
+        label,
+        formatTokenCount(usage.inputTokens),
+        formatTokenCount(usage.cachedInputTokens),
+        formatTokenCount(usage.outputTokens),
+      );
+    }
+    return m["tokenBar.agentUsage"](
+      label,
+      formatTokenCount(usage.inputTokens),
+      formatTokenCount(usage.outputTokens),
+    );
+  }
+
+  const textA = formatUsage(labelA, usageA);
+  const textB = formatUsage(labelB, usageB);
 
   const displayA =
     contentWidth !== undefined

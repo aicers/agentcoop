@@ -786,6 +786,8 @@ try {
       },
       modelNameA: modelDisplayName(agentAConfig),
       modelNameB: modelDisplayName(agentBConfig),
+      cliTypeA: agentAConfig.cli,
+      cliTypeB: agentBConfig.cli,
     });
   });
 
