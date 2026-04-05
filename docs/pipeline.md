@@ -659,9 +659,9 @@ is asked whether to continue.
 ### Stage 7: Squash commits
 
 **Agent:** A\
-**Purpose:** Squash all branch commits into a single commit with
-a clear message. Skipped automatically if the branch has only one
-commit.
+**Purpose:** Consolidate branch commits into one or a few
+meaningful commits. Skipped automatically if the branch has only
+one commit.
 
 **Prompt:**
 
@@ -687,13 +687,14 @@ You are squashing commits for the following GitHub issue.
    If the description is outdated or inaccurate, update it using
    `gh pr edit --body "..."`.  Keep the issue reference
    (Closes #{number} or Part of #{number}) in the body.
-2. Squash all commits after the base commit `{baseSha}` into a single
-   commit.  Only commits introduced on this branch should be squashed —
-   do not include commits from the base branch.  Use
+2. Review the commits after the base commit `{baseSha}` and
+   consolidate them into one or a few meaningful commits.  Only
+   commits introduced on this branch should be touched — do not
+   include commits from the base branch.  Use
    `git reset --soft {baseSha}` followed by `git commit`, or an
    interactive rebase — whichever is simpler.
-3. Write a clear, concise commit message that summarises all changes
-   made for this issue.  Reference the issue number
+3. Write clear, concise commit messages that summarise the changes.
+   Reference the issue number in the primary commit
    (e.g. "Implement widget rendering (#42)").
 4. Force-push the branch (`git push --force-with-lease`).
 ```

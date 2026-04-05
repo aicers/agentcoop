@@ -1746,7 +1746,7 @@ describe("Stage 8 (Squash) baseSha integration", () => {
 
     await runPipeline(makePipelineOpts({ stages: [stage] }));
 
-    expect(capturedPrompt).toContain("Squash all commits on this branch");
+    expect(capturedPrompt).toContain("Review all commits on this branch");
     expect(capturedPrompt).not.toContain("git reset --soft");
   });
 });

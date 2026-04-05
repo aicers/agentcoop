@@ -1,31 +1,31 @@
 # AgentCoop
 
-A multi-agent pipeline that takes a GitHub issue and autonomously
-implements, reviews, and prepares it for merge using two AI agents.
+An AI pipeline that takes a GitHub issue and autonomously implements,
+reviews, and prepares it for merge. The current implementation uses
+two agents — one author and one reviewer. A future version will
+expand to three agents (one author and two reviewers).
 
 Break your project down into well-written issues, each scoped to a
 single PR. AgentCoop works through them — implementing, reviewing,
 and merging — so the software gets built with minimal human
 involvement.
 
-<!-- TODO: add TUI screenshot or asciinema demo -->
-
 ## Terminal UI
 
 ```text
-┌─ Agent A — opus ● [*] ─┬─ Agent B — o3 ──────┐
-│                         │                      │
-│  (streamed output)      │  (streamed output)   │
-│                         │                      │
-├─────────────────────────┴──────────────────────┤
-│ A (Claude): 12.3K in / 5.1K out │ B (Codex)   │
-├────────────────────────────────────────────────┤
-│ owner/repo#42: Issue title                     │
-│ Stage 3: Self-check (round 2)  Base: abc1234   │
-│ Tab:Pane  ↑↓:Scroll  Ctrl+L:Layout  Ctrl+C:Q  │
-├────────────────────────────────────────────────┤
-│ Pipeline running...                            │
-└────────────────────────────────────────────────┘
+┌─ Agent A (author) — Claude Opus 4.6 ● [*] ─┬─ Agent B (reviewer) — GPT-5.4 ─┐
+│                                            │                                │
+│  (streamed output)                         │  (streamed output)             │
+│                                            │                                │
+├────────────────────────────────────────────┴────────────────────────────────┤
+│ A (Claude): 12.3K in / 5.1K out            │ B (Codex): 8.7K in / 3.2K out  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ owner/repo#42: Issue title                                                  │
+│ Base: abc1234  │  Stage 3: Self-check (round 2)  │  Layout: horizontal      │
+│ ●:Active [*]:Focused Tab:Switch pane ↑↓:Scroll Ctrl+L:Layout Ctrl+C:Quit    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Pipeline running...                                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 - **Agent panes** — Streamed output from each agent in real time.
@@ -33,8 +33,8 @@ involvement.
   scrolling) with `[*]`.
 - **TokenBar** — Per-agent token usage (input/output, with cached
   token counts when available).
-- **StatusBar** — Issue reference, current pipeline stage with loop
-  count, base commit SHA, and layout indicator.
+- **StatusBar** — Issue reference, base commit SHA, current pipeline
+  stage with loop count, and layout indicator.
 - **InputArea** — Shows "Pipeline running..." while agents work.
   When user input is needed (BLOCKED, loop budget, step-mode), it
   presents numbered choices or a free-text field.
@@ -58,9 +58,10 @@ to horizontal.
 ### Execution modes
 
 - **auto** — Stages advance automatically. Loops run up to the
-  configured iteration budget (default 5). When the budget is
-  exhausted, the user is asked whether to continue. Approval grants
-  another batch.
+  configured iteration budget (default varies by stage — 5 for
+  self-check and review, 3 for CI fix and test plan). When the
+  budget is exhausted, the user is asked whether to continue.
+  Approval grants another batch.
 - **step** — The user confirms before entering each pipeline stage.
   Loops within a stage still run automatically up to the budget,
   same as auto mode.
@@ -84,7 +85,10 @@ AgentCoop runs an 8-stage pipeline with two agents: Agent A (author
 5. **Test plan** — Agent A verifies the PR test plan
 6. **Review** — Agent B reviews; Agent A addresses feedback
    (multi-round)
-7. **Squash** — Agent A squashes commits and force-pushes
+7. **Squash** — Agent A consolidates branch commits into one or a
+   few meaningful commits and force-pushes. Skipped if the branch
+   already has only one commit or if the existing commits are
+   already clean.
 8. **Done** — Check for merge conflicts, optionally rebase, confirm
    merge with the user, and clean up resources
 
@@ -209,6 +213,8 @@ to reuse it, clean up and recreate, or halt.
 - pnpm
 - `claude` and/or `codex` CLI installed and authenticated
 - `gh` CLI authenticated
+- Any external services the agents use (e.g., Figma Desktop MCP)
+  must be running and authenticated
 
 ## Installation & quick start
 
