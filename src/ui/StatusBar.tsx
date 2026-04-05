@@ -199,62 +199,35 @@ export function StatusBar({
       ? m["statusBar.completed"](selfCheckCount, reviewCount)
       : "";
 
-  // Build segments in display order with drop priorities.
+  // Line 1: Issue reference + title (independent of other segments).
+  const issueLineText = issueTitle ? `${issueRef}: ${issueTitle}` : issueRef;
+  const issueLine =
+    contentWidth !== undefined
+      ? truncateWithEllipsis(issueLineText, contentWidth)
+      : issueLineText;
+
+  // Line 2: Pipeline status segments with drop priorities.
   // Priority 0 = required (never dropped); higher = dropped sooner.
   // Drop order: layout (4) → completed (3) → outcome (2) → base (1).
-  // The issue segment uses only the reference (owner/repo#N); the title
-  // is appended afterwards using leftover space so that truncation never
-  // clips the reference itself (see issue #151 review).
-  const segments: InfoSegment[] = [
-    {
-      text: issueTitle ? `${issueRef}: ${issueTitle}` : issueRef,
-      bold: true,
-      color: "cyan",
-      dropPriority: 0,
-    },
-  ];
+  const pipelineSegments: InfoSegment[] = [];
   if (baseText) {
-    segments.push({ text: baseText, dropPriority: 1 });
+    pipelineSegments.push({ text: baseText, dropPriority: 1 });
   }
-  segments.push({ text: stageText, bold: true, dropPriority: 0 });
+  pipelineSegments.push({ text: stageText, bold: true, dropPriority: 0 });
   if (outcomeText) {
-    segments.push({ text: outcomeText, dropPriority: 2 });
+    pipelineSegments.push({ text: outcomeText, dropPriority: 2 });
   }
   if (completedText) {
-    segments.push({ text: completedText, dropPriority: 3 });
+    pipelineSegments.push({ text: completedText, dropPriority: 3 });
   }
   if (layoutText) {
-    segments.push({ text: layoutText, dropPriority: 4 });
+    pipelineSegments.push({ text: layoutText, dropPriority: 4 });
   }
 
-  let display: InfoSegment[];
-  if (contentWidth !== undefined) {
-    // Fit segments using only the reference for the issue segment, so
-    // that fitInfoSegments never truncates the reference portion.
-    const refSegments = segments.map((seg, i) =>
-      i === 0 ? { ...seg, text: issueRef } : seg,
-    );
-    display = fitInfoSegments(refSegments, contentWidth);
-
-    // Append the issue title to the first segment using leftover space.
-    if (issueTitle && display.length > 0) {
-      const used = segmentsWidth(display);
-      const available = contentWidth - used;
-      if (available >= 2) {
-        const titleWithSep = `: ${issueTitle}`;
-        display = display.map((seg, i) =>
-          i === 0
-            ? {
-                ...seg,
-                text: seg.text + truncateWithEllipsis(titleWithSep, available),
-              }
-            : seg,
-        );
-      }
-    }
-  } else {
-    display = segments;
-  }
+  const pipelineDisplay =
+    contentWidth !== undefined
+      ? fitInfoSegments(pipelineSegments, contentWidth)
+      : pipelineSegments;
 
   return (
     <Box
@@ -263,11 +236,14 @@ export function StatusBar({
       paddingX={1}
       flexDirection="column"
       flexShrink={0}
-      height={contentWidth !== undefined ? (showKeyHints ? 4 : 3) : undefined}
+      height={contentWidth !== undefined ? (showKeyHints ? 5 : 4) : undefined}
       overflow="hidden"
     >
+      <Text bold color="cyan">
+        {issueLine}
+      </Text>
       <Box>
-        {display.map((seg, i) => (
+        {pipelineDisplay.map((seg, i) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: stable render-local array
           <Text key={i} bold={seg.bold} color={seg.color}>
             {i > 0 ? SEP : ""}
