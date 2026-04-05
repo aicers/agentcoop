@@ -312,15 +312,19 @@ export function AgentPane({
       paddingX={1}
       overflow="hidden"
     >
-      <Text bold color={borderCol}>
-        {modelName ? `${label} \u2014 ${modelName}` : label}
-        {isActive ? " \u25CF" : ""}
-        {isFocused ? " [*]" : ""}
-      </Text>
-      {showSeparator && (
-        <Text dimColor>
-          {contentWidth > 0 ? "\u2500".repeat(contentWidth) : ""}
+      <Box flexShrink={0}>
+        <Text bold color={borderCol}>
+          {modelName ? `${label} \u2014 ${modelName}` : label}
+          {isActive ? " \u25CF" : ""}
+          {isFocused ? " [*]" : ""}
         </Text>
+      </Box>
+      {showSeparator && (
+        <Box flexShrink={0}>
+          <Text dimColor>
+            {contentWidth > 0 ? "\u2500".repeat(contentWidth) : ""}
+          </Text>
+        </Box>
       )}
       <Box
         ref={contentRef}

@@ -1717,6 +1717,102 @@ describe("viewport height constraint", () => {
     expect(frame).toContain("Final short line.");
     expect(frame.split("\n").length).toBeLessThanOrEqual(viewportHeight);
   });
+
+  test("header and separator remain visible when content overflows pane", async () => {
+    await initI18n("en");
+
+    const emitter = new PipelineEventEmitter();
+    const viewportWidth = 80;
+    const viewportHeight = 16;
+    const labelA = "Agent A (author)";
+    const labelB = "Agent B (reviewer)";
+    const modelA = "GPT-5.4 / Extra High";
+    const flags = computeVisibilityFlags(viewportHeight, 1, true, "row", {
+      terminalWidth: viewportWidth,
+      paneHeaderTexts: [
+        `${labelA} \u2014 ${modelA} \u25CF [*]`,
+        `${labelB} \u25CF [*]`,
+      ],
+    });
+
+    const { lastFrame } = render(
+      <Box flexDirection="column" width={viewportWidth} height={viewportHeight}>
+        <Box flexDirection="row" flexGrow={1}>
+          <AgentPane
+            label={labelA}
+            modelName={modelA}
+            agent="a"
+            emitter={emitter}
+            color="blue"
+            isFocused
+            isActive
+            showSeparator={flags.showPaneSeparator}
+          />
+          <AgentPane
+            label={labelB}
+            agent="b"
+            emitter={emitter}
+            color="green"
+            showSeparator={flags.showPaneSeparator}
+          />
+        </Box>
+        <TokenBar
+          emitter={emitter}
+          visible={flags.showTokenBar}
+          contentWidth={Math.floor(viewportWidth / 2) - 4}
+          layout="row"
+          cliTypeA="claude"
+          cliTypeB="codex"
+        />
+        <StatusBar
+          emitter={emitter}
+          owner="aicers"
+          repo="agentcoop"
+          issueNumber={163}
+          issueTitle="AgentPane header disappears when content overflows"
+          baseSha="abcdef1234567890"
+          layout="row"
+          showKeyHints={flags.showKeyHints}
+          contentWidth={viewportWidth - 4}
+        />
+        <InputArea request={null} onSubmit={() => {}} />
+      </Box>,
+    );
+
+    emitter.emit("stage:enter", {
+      stageNumber: 2,
+      stageName: "Implement",
+      iteration: 0,
+    });
+
+    // Emit enough lines to overflow the pane content area.
+    const overflowLines = Array.from(
+      { length: 30 },
+      (_, i) => `Output line ${i + 1}`,
+    );
+    emitter.emit("agent:chunk", {
+      agent: "a",
+      chunk: overflowLines.join("\n").concat("\n"),
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    const lines = frame.split("\n");
+
+    // Header must still be visible despite content overflow.
+    // The label and model name may wrap across lines in narrow panes,
+    // so check for key fragments rather than the full combined string.
+    expect(frame).toContain(labelA);
+    expect(frame).toContain("GPT-5.4");
+
+    // Separator must be present when enabled.
+    if (flags.showPaneSeparator) {
+      expect(frame).toContain("\u2500");
+    }
+
+    // Frame must not exceed viewport height.
+    expect(lines.length).toBeLessThanOrEqual(viewportHeight);
+  });
 });
 
 // ---- formatTokenCount -------------------------------------------------------
