@@ -14,7 +14,7 @@ import {
   type AgentInvokeEvent,
   PipelineEventEmitter,
 } from "../pipeline-events.js";
-import { AgentPane, splitIntoRows } from "./AgentPane.js";
+import { AgentPane, renderPromptRows, splitIntoRows } from "./AgentPane.js";
 import {
   computeVisibilityFlags,
   inputAreaHeight,
@@ -23,6 +23,10 @@ import {
 import { InputArea, type InputRequest } from "./InputArea.js";
 import { fitInfoSegments, StatusBar } from "./StatusBar.js";
 import { cliDisplayName, formatTokenCount, TokenBar } from "./TokenBar.js";
+import {
+  PROMPT_LINE_PREFIX,
+  PROMPT_SEPARATOR_CHAR,
+} from "./useEventEmitter.js";
 
 afterEach(() => {
   cleanup();
@@ -246,7 +250,10 @@ describe("AgentPane", () => {
     expect(frame).toContain("LATEST_TOKEN");
   });
 
-  test("shows 'pane too small' instead of log lines in a tiny pane", async () => {
+  test("no content leaks in a tiny pane", async () => {
+    // height=3 → border(2) + 1 inner row.  The label fills the inner
+    // row, so the content box has 0 measured height.  No log lines
+    // should leak through.
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(
       <Box height={3}>
@@ -262,9 +269,8 @@ describe("AgentPane", () => {
     expect(frame).not.toContain("line1");
     expect(frame).not.toContain("line2");
     expect(frame).not.toContain("line3");
-    // Must not show the waiting placeholder — output exists.
+    // No waiting placeholder either.
     expect(frame).not.toContain("waiting for output");
-    expect(frame).toContain("pane too small");
   });
 
   test("Page Up reveals earlier lines and shows scroll indicator", async () => {
@@ -2322,11 +2328,15 @@ describe("AgentPane showSeparator", () => {
     expect(separatorLines).toHaveLength(0);
   });
 
-  test("shows separator by default", () => {
+  test("shows separator by default", async () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(
       <AgentPane label="Agent A" agent="a" emitter={emitter} color="blue" />,
     );
+
+    // Wait for the measurement effect to set contentWidth > 0 so the
+    // separator characters actually render.
+    await new Promise((r) => setTimeout(r, 50));
 
     const frame = lastFrame() ?? "";
     // Separator line has \u2500 inside the box (no corner chars).
@@ -2336,5 +2346,179 @@ describe("AgentPane showSeparator", () => {
         l.includes("\u2500") && !l.includes("\u250C") && !l.includes("\u2514"),
     );
     expect(separatorLines.length).toBeGreaterThan(0);
+  });
+});
+
+// ---- renderPromptRows --------------------------------------------------------
+
+describe("renderPromptRows", () => {
+  test("header and footer fit the given width", () => {
+    const rows = renderPromptRows({ kind: "prompt", prompt: "hello" }, 40);
+    const header = rows[0];
+    const footer = rows[rows.length - 1];
+
+    // Header contains label with separator padding.
+    expect(header).toContain("Prompt");
+    expect(header).toContain(PROMPT_SEPARATOR_CHAR);
+    expect(header).toHaveLength(40);
+
+    // Footer is all separator chars, exactly the width.
+    expect(footer).toBe(PROMPT_SEPARATOR_CHAR.repeat(40));
+  });
+
+  test("includes stage name in header", () => {
+    const rows = renderPromptRows(
+      { kind: "prompt", prompt: "do it", stageName: "Review" },
+      50,
+    );
+    expect(rows[0]).toContain("Prompt (Review)");
+  });
+
+  test("prefixes content lines", () => {
+    const rows = renderPromptRows(
+      { kind: "prompt", prompt: "line1\nline2" },
+      80,
+    );
+    expect(rows[1]).toBe(`${PROMPT_LINE_PREFIX}line1`);
+    expect(rows[2]).toBe(`${PROMPT_LINE_PREFIX}line2`);
+  });
+
+  test("truncates by wrapped row count, not source line count", () => {
+    // 10 lines of 50 chars each.  At width 20, each "▶ " + 50 chars
+    // wraps to ~3 rows, so 10 lines = ~30 content rows, well above
+    // the MAX_PROMPT_ROWS budget of 12.
+    const longLine = "x".repeat(50);
+    const prompt = Array.from({ length: 10 }, () => longLine).join("\n");
+    const rows = renderPromptRows({ kind: "prompt", prompt }, 20);
+
+    // The truncation notice ("… (N more lines)") may wrap across
+    // rows at narrow widths, so search the joined output.
+    const allText = rows.join("\n");
+    expect(allText).toContain("more lines");
+    // Not all 10 lines should have been rendered.
+    const prefixedRows = rows.filter((r) => r.startsWith(PROMPT_LINE_PREFIX));
+    expect(prefixedRows.length).toBeLessThan(10 * 3);
+  });
+
+  test("returns empty array for zero width", () => {
+    const rows = renderPromptRows({ kind: "prompt", prompt: "hello" }, 0);
+    expect(rows).toEqual([]);
+  });
+
+  test("narrow width produces single-row header", () => {
+    // Label " Prompt " is 9 chars.  At width 9, no separator chars fit
+    // but the header should still be one row.
+    const rows = renderPromptRows({ kind: "prompt", prompt: "hi" }, 9);
+    // Header should not wrap since label ≤ width.
+    expect(rows[0]).toContain("Prompt");
+    // Only 1 header + 1 content + 1 footer = 3 rows.
+    expect(rows).toHaveLength(3);
+  });
+});
+
+// ---- AgentPane size-aware rendering (regression) ----------------------------
+
+describe("AgentPane size-aware rendering", () => {
+  test("no overflow when label wraps in a narrow pane", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box width={20} height={10}>
+        <AgentPane
+          label="Very Long Agent Label That Wraps"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+        />
+      </Box>,
+    );
+
+    emitter.emit("agent:chunk", {
+      agent: "a",
+      chunk: "a\nb\nc\nd\ne\nf\ng\nh\n",
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    const frameRows = frame.split("\n");
+    // Frame must fit within the container height.
+    expect(frameRows.length).toBeLessThanOrEqual(10);
+    // The label text must still be visible.
+    expect(frame).toContain("Very Long");
+  });
+
+  test("prompt block renders size-aware in narrow pane", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box width={30} height={12}>
+        <AgentPane label="Agent A" agent="a" emitter={emitter} color="blue" />
+      </Box>,
+    );
+
+    emitter.emit("agent:prompt", { agent: "a", prompt: "Do the task" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    // Prompt header must be visible.
+    expect(frame).toContain("Prompt");
+    // Prompt content must be visible.
+    expect(frame).toContain("Do the task");
+    // Frame must not exceed container height.
+    expect(frame.split("\n").length).toBeLessThanOrEqual(12);
+  });
+
+  test("prompt separator fits pane width instead of fixed 80 chars", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box width={25} height={10}>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          showSeparator={false}
+        />
+      </Box>,
+    );
+
+    emitter.emit("agent:prompt", { agent: "a", prompt: "hi" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    // The prompt separator should not wrap — it should fit in one row.
+    // Count separator-char rows (excluding border lines).
+    const rows = frame.split("\n");
+    const sepRows = rows.filter(
+      (r) =>
+        r.includes(PROMPT_SEPARATOR_CHAR) &&
+        !r.includes("\u250C") &&
+        !r.includes("\u2514"),
+    );
+    // Header + footer = at most 2 separator-containing rows.
+    expect(sepRows.length).toBeLessThanOrEqual(2);
+  });
+
+  test("visibleRows starts at 0 preventing first-render overflow", async () => {
+    // Render a pane with content already in the emitter before mount.
+    // The pane should not render speculative rows on the first frame.
+    const emitter = new PipelineEventEmitter();
+
+    // Emit many lines before rendering.
+    const chunk = Array.from({ length: 50 }, (_, i) => `pre${i}`)
+      .join("\n")
+      .concat("\n");
+    emitter.emit("agent:chunk", { agent: "a", chunk });
+
+    const { lastFrame } = render(
+      <Box height={8}>
+        <AgentPane label="Agent A" agent="a" emitter={emitter} color="blue" />
+      </Box>,
+    );
+
+    // Allow effects to settle.
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    // The frame must fit within 8 rows.
+    expect(frame.split("\n").length).toBeLessThanOrEqual(8);
   });
 });
