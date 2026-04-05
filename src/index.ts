@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 
 import { confirm, select } from "@inquirer/prompts";
-import { render } from "ink";
-import React from "react";
 
 import type { AgentAdapter, AgentStream } from "./agent.js";
 import { pollCiAndFix } from "./ci-poll.js";
@@ -50,7 +48,7 @@ import { drainToSink } from "./stage-util.js";
 import type { AgentConfig } from "./startup.js";
 import { modelDisplayName, runStartup, selectTarget } from "./startup.js";
 import { parseStepStatus } from "./step-parser.js";
-import { App } from "./ui/App.js";
+import { renderApp } from "./ui/render-app.js";
 import {
   bootstrapRepo,
   createWorktree,
@@ -762,30 +760,28 @@ try {
   const emitter = new PipelineEventEmitter();
 
   const pipelineResult = await new Promise<PipelineResult>((resolve) => {
-    const { unmount } = render(
-      React.createElement(App, {
-        emitter,
-        pipelineOptions: pipelineOpts,
-        onExit: (result: PipelineResult) => {
-          unmount();
-          resolve(result);
-        },
-        onPromptReady: (prompt) => {
-          tuiPrompt = prompt;
-        },
-        onCancel: () => {
-          // Kill all tracked agent child processes so the pipeline
-          // can unwind quickly.  We read `.child` at kill-time so
-          // that fallback streams (withXhighFallback) target the
-          // currently active child, not the original one.
-          for (const stream of activeStreams) {
-            stream.child.kill();
-          }
-        },
-        modelNameA: modelDisplayName(agentAConfig),
-        modelNameB: modelDisplayName(agentBConfig),
-      }),
-    );
+    const { unmount } = renderApp({
+      emitter,
+      pipelineOptions: pipelineOpts,
+      onExit: (result: PipelineResult) => {
+        unmount();
+        resolve(result);
+      },
+      onPromptReady: (prompt) => {
+        tuiPrompt = prompt;
+      },
+      onCancel: () => {
+        // Kill all tracked agent child processes so the pipeline
+        // can unwind quickly.  We read `.child` at kill-time so
+        // that fallback streams (withXhighFallback) target the
+        // currently active child, not the original one.
+        for (const stream of activeStreams) {
+          stream.child.kill();
+        }
+      },
+      modelNameA: modelDisplayName(agentAConfig),
+      modelNameB: modelDisplayName(agentBConfig),
+    });
   });
 
   // Remove the SIGINT suppressor so the default handler takes over
