@@ -10,8 +10,6 @@ single PR. AgentCoop works through them — implementing, reviewing,
 and merging — so the software gets built with minimal human
 involvement.
 
-![Terminal UI screenshot](docs/tui-screenshot.png)
-
 ## Terminal UI
 
 ```text
