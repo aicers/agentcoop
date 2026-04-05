@@ -1704,6 +1704,39 @@ describe("TokenBar width adaptation", () => {
 });
 
 describe("TokenBar layout prop", () => {
+  test("uses equal-width boxes in row layout regardless of content length", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box width={50}>
+        <TokenBar emitter={emitter} layout="row" />
+      </Box>,
+    );
+
+    emitter.emit("agent:usage", {
+      agent: "a",
+      usage: {
+        inputTokens: 999_999,
+        outputTokens: 999_999,
+        cachedInputTokens: 0,
+      },
+    });
+    emitter.emit("agent:usage", {
+      agent: "b",
+      usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    const topBorder = frame.split("\n").find((line) => line.startsWith("┌"));
+    expect(topBorder).toBeDefined();
+
+    const match = topBorder?.match(/^┌([^┐]*)┐┌([^┐]*)┐$/u);
+    expect(match).not.toBeNull();
+
+    const [, leftBox, rightBox] = match ?? [];
+    expect(stringWidth(leftBox)).toBe(stringWidth(rightBox));
+  });
+
   test("renders two boxes side by side in row layout", async () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(<TokenBar emitter={emitter} layout="row" />);
