@@ -206,6 +206,13 @@ export const ko: Messages = {
 
   "tokenBar.agentUsage": (label, inputTokens, outputTokens) =>
     `${label}: ${inputTokens} \uC785\uB825 / ${outputTokens} \uCD9C\uB825`,
+  "tokenBar.agentUsageCached": (
+    label,
+    inputTokens,
+    cachedTokens,
+    outputTokens,
+  ) =>
+    `${label}: ${inputTokens} \uC785\uB825 (${cachedTokens} \uCE90\uC2DC) / ${outputTokens} \uCD9C\uB825`,
   "tokenBar.noUsage": "\uD1A0\uD070 \uB370\uC774\uD130 \uC5C6\uC74C",
 
   // ---- input area --------------------------------------------------------
@@ -226,6 +233,8 @@ export const ko: Messages = {
     `\u2193 ${count}\uC904 \uB354 \uC788\uC74C`,
   "agent.labelA": "에이전트 A",
   "agent.labelB": "에이전트 B",
+  "agent.labelShortA": "A",
+  "agent.labelShortB": "B",
   "agent.labelARole": "에이전트 A (작성자)",
   "agent.labelBRole": "에이전트 B (리뷰어)",
 

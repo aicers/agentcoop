@@ -22,7 +22,7 @@ import {
 } from "./App.js";
 import { InputArea, type InputRequest } from "./InputArea.js";
 import { fitInfoSegments, StatusBar } from "./StatusBar.js";
-import { formatTokenCount, TokenBar } from "./TokenBar.js";
+import { cliDisplayName, formatTokenCount, TokenBar } from "./TokenBar.js";
 
 afterEach(() => {
   cleanup();
@@ -1787,6 +1787,122 @@ describe("TokenBar layout prop", () => {
     expect(agentAIdx).toBeGreaterThanOrEqual(0);
     expect(agentBIdx).toBeGreaterThanOrEqual(0);
     expect(agentAIdx).not.toBe(agentBIdx);
+  });
+});
+
+// ---- cliDisplayName ----------------------------------------------------------
+
+describe("cliDisplayName", () => {
+  test("maps claude to title case", () => {
+    expect(cliDisplayName("claude")).toBe("Claude");
+  });
+
+  test("maps codex to title case", () => {
+    expect(cliDisplayName("codex")).toBe("Codex");
+  });
+
+  test("returns unknown CLI names unchanged", () => {
+    expect(cliDisplayName("other")).toBe("other");
+  });
+});
+
+// ---- TokenBar CLI labels and cached tokens -----------------------------------
+
+describe("TokenBar CLI labels", () => {
+  test("uses CLI name labels when cliType props are provided", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <TokenBar emitter={emitter} cliTypeA="claude" cliTypeB="codex" />,
+    );
+
+    emitter.emit("agent:usage", {
+      agent: "a",
+      usage: { inputTokens: 1000, outputTokens: 500, cachedInputTokens: 0 },
+    });
+    emitter.emit("agent:usage", {
+      agent: "b",
+      usage: { inputTokens: 2000, outputTokens: 800, cachedInputTokens: 0 },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("A (Claude)");
+    expect(frame).toContain("B (Codex)");
+    expect(frame).not.toContain("Agent A");
+    expect(frame).not.toContain("Agent B");
+    expect(frame).not.toContain("(author)");
+    expect(frame).not.toContain("(reviewer)");
+  });
+
+  test("falls back to role labels when cliType props are not provided", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(<TokenBar emitter={emitter} />);
+
+    emitter.emit("agent:usage", {
+      agent: "a",
+      usage: { inputTokens: 1000, outputTokens: 500, cachedInputTokens: 0 },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Agent A (author)");
+  });
+});
+
+describe("TokenBar cached tokens", () => {
+  test("shows cached count when cachedInputTokens > 0", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <TokenBar emitter={emitter} cliTypeA="claude" cliTypeB="codex" />,
+    );
+
+    emitter.emit("agent:usage", {
+      agent: "a",
+      usage: {
+        inputTokens: 4100,
+        outputTokens: 6200,
+        cachedInputTokens: 40000,
+      },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("4.1K in");
+    expect(frame).toContain("40.0K cached");
+    expect(frame).toContain("6.2K out");
+  });
+
+  test("hides cached count when cachedInputTokens is 0", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <TokenBar emitter={emitter} cliTypeA="claude" cliTypeB="codex" />,
+    );
+
+    emitter.emit("agent:usage", {
+      agent: "a",
+      usage: { inputTokens: 1000, outputTokens: 500, cachedInputTokens: 0 },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).not.toContain("cached");
+  });
+
+  test("renders when only cachedInputTokens is non-zero (cached-only edge case)", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <TokenBar emitter={emitter} cliTypeA="claude" cliTypeB="codex" />,
+    );
+
+    emitter.emit("agent:usage", {
+      agent: "a",
+      usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 5000 },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("A (Claude)");
+    expect(frame).toContain("5.0K cached");
   });
 });
 

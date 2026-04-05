@@ -191,6 +191,10 @@ export interface AppProps {
   modelNameA?: string;
   /** Short model identifier for Agent B (e.g., "gpt-5.4"). */
   modelNameB?: string;
+  /** CLI identifier for Agent A (e.g. "claude" or "codex"). */
+  cliTypeA?: string;
+  /** CLI identifier for Agent B (e.g. "claude" or "codex"). */
+  cliTypeB?: string;
   /**
    * Called when the user presses Ctrl+C so the caller can kill running
    * agent child processes before the pipeline unwinds.
@@ -205,6 +209,8 @@ export function App({
   onPromptReady,
   modelNameA,
   modelNameB,
+  cliTypeA,
+  cliTypeB,
   onCancel,
 }: AppProps) {
   const { height: terminalHeight, width: terminalWidth } =
@@ -387,6 +393,8 @@ export function App({
         visible={flags.showTokenBar}
         contentWidth={tokenBarContentWidth}
         layout={effectiveLayout}
+        cliTypeA={cliTypeA}
+        cliTypeB={cliTypeB}
       />
       <StatusBar
         emitter={emitter}

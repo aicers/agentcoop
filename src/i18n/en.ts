@@ -178,6 +178,13 @@ export const en: Messages = {
 
   "tokenBar.agentUsage": (label, inputTokens, outputTokens) =>
     `${label}: ${inputTokens} in / ${outputTokens} out`,
+  "tokenBar.agentUsageCached": (
+    label,
+    inputTokens,
+    cachedTokens,
+    outputTokens,
+  ) =>
+    `${label}: ${inputTokens} in (${cachedTokens} cached) / ${outputTokens} out`,
   "tokenBar.noUsage": "No token data yet",
 
   // ---- input area --------------------------------------------------------
@@ -193,6 +200,8 @@ export const en: Messages = {
   "agentPane.linesBelow": (count) => `\u2193 ${count} more lines`,
   "agent.labelA": "Agent A",
   "agent.labelB": "Agent B",
+  "agent.labelShortA": "A",
+  "agent.labelShortB": "B",
   "agent.labelARole": "Agent A (author)",
   "agent.labelBRole": "Agent B (reviewer)",
 
