@@ -15,6 +15,8 @@ the [README](../README.md).
   - [Service-aware instructions](#service-aware-instructions)
   - [PR body as living documentation](#pr-body-as-living-documentation)
   - [Issue-implementation reconciliation](#issue-implementation-reconciliation)
+  - [Additional feedback injection](#additional-feedback-injection)
+  - [Ambiguous response clarification](#ambiguous-response-clarification)
 - [Stage reference](#stage-reference)
   - [Stage 1: Implement](#stage-1-implement)
   - [Stage 2: Self-check loop](#stage-2-self-check-loop)
@@ -112,6 +114,58 @@ changes). This keeps the issue in sync with what was actually
 built, so the issue remains a reliable reference after the PR is
 merged.
 
+### Additional feedback injection
+
+Several stage prompts can include a `## Additional feedback`
+section appended to the base prompt. This section is populated
+through three specific orchestrator paths — it is not injected
+at arbitrary times.
+
+1. **`not_approved` outcome** — When a loop stage (e.g., review)
+   returns `NOT_APPROVED`, the handler's message becomes the next
+   iteration's feedback. This is agent-originated: for example,
+   Agent B's review comments are forwarded to Agent A as
+   `## Additional feedback` in the next author-fix prompt. The
+   user is not involved.
+
+2. **`blocked` → user selects Instruct** — When a stage returns
+   `BLOCKED`, the orchestrator presents the user with three
+   options: Proceed, Instruct, or Halt. If the user chooses
+   **Instruct** and types a message, that text is injected as
+   `## Additional feedback` on the next iteration.
+
+3. **`needs_clarification` outcome** — When the orchestrator
+   cannot parse a clear keyword from the agent's response, it
+   first auto-retries with a
+   [clarification prompt](#ambiguous-response-clarification).
+   If the second attempt also fails, the user is asked via the
+   same Instruct mechanism as path 2 above.
+
+### Ambiguous response clarification
+
+When an agent's response does not end with a recognized status
+keyword, the orchestrator sends a fixed clarification prompt
+rather than re-running the stage (which could be side-effectful).
+The same template is used in two contexts:
+
+- **Within-stage session resume** (Create PR, Squash) — the
+  orchestrator resumes the existing agent session with the
+  clarification prompt.
+- **Pipeline loop injection** — the prompt is set as
+  `userInstruction` and appears as `## Additional feedback`
+  on the next iteration.
+
+The clarification prompt:
+
+```text
+Your previous response did not end with a clear status keyword.
+Please reply with exactly one of the following keywords to indicate
+the current status: COMPLETED, FIXED, DONE, APPROVED, NOT_APPROVED,
+or BLOCKED.
+
+Do not include any other commentary — just the keyword.
+```
+
 ## Stage reference
 
 ### Stage 1: Implement
@@ -149,8 +203,10 @@ the full test suite against them.  If a port conflict occurs, change
 the port rather than skipping the service.
 ```
 
-When the user provides additional instructions via the Instruct
-flow, they are appended as a `## Additional feedback` section.
+A `## Additional feedback` section may be appended to this
+prompt through any of the
+[injection paths](#additional-feedback-injection) described
+above.
 
 **Completion check:**
 
@@ -200,12 +256,14 @@ Review the current implementation against all 7 items below.  For each
 item, briefly note whether it passes or needs attention.
 
 1. **Correctness** — Does the implementation fully address the issue?
-2. **Tests** — Are there sufficient tests?  Actually run the full test
-   suite and verify all tests pass.  If tests require services
-   (databases, message brokers, dev servers, etc.), start them using
-   whatever tools the project provides (Docker Compose, `pnpm dev`,
-   setup scripts, etc.).  If a port conflict occurs, change the port
-   rather than skipping the service.
+2. **Tests** — Are there sufficient tests, including E2E tests where
+   applicable?  If test coverage is insufficient, write the missing
+   tests.  Then run the full test suite and verify all tests pass.
+   If tests require services (databases, message brokers, dev
+   servers, etc.), start them using whatever tools the project
+   provides (Docker Compose, `pnpm dev`, setup scripts, etc.).
+   If a port conflict occurs, change the port rather than skipping
+   the service.
 3. **Error handling** — Are errors handled gracefully?
 4. **External services** — Are API calls, network requests, or external
    service integrations correct and resilient?  Start all required
@@ -358,9 +416,9 @@ subsequent stages depend on the PR.
 **Purpose:** Wait for CI to pass. If CI fails, collect failure
 logs and send them to Agent A for a fix.
 
-The orchestrator polls CI status at 30-second intervals
-(configurable). While CI is pending, the handler waits internally
-without consuming the loop budget. When CI passes, the stage
+The orchestrator polls CI status at 30-second intervals. While
+CI is pending, the handler waits internally without consuming
+the loop budget. When CI passes, the stage
 completes immediately.
 
 **CI fix prompt** (sent only when CI fails):
@@ -694,8 +752,9 @@ You are squashing commits for the following GitHub issue.
    `git reset --soft {baseSha}` followed by `git commit`, or an
    interactive rebase — whichever is simpler.
 3. Write clear, concise commit messages that summarise the changes.
-   Reference the issue number in the primary commit
-   (e.g. "Implement widget rendering (#42)").
+   Do not include issue or PR numbers in the commit title.
+   Instead, reference the issue in the commit body using
+   `Closes #N` or `Part of #N`.
 4. Force-push the branch (`git push --force-with-lease`).
 ```
 
@@ -734,32 +793,50 @@ confirm merge with the user.
 **Flow:**
 
 ```text
-              +------------------+
-              | Check mergeable  |<-----------------------------+
-              +--------+---------+                              |
-        +--------------|---------------+                        |
-        v              v               v                        |
-   MERGEABLE       CONFLICTING      UNKNOWN                     |
-        |              |               |                        |
-        v              v               v                        |
-  Merge confirm   User choice     User choice                   |
-   +---+---+      +----+----+     +----+-----+                  |
-   v   v   v      v         v     v          v                  |
-Merged | Exit   Agent    Manual  Recheck    Exit                |
-   |   |   |   rebase      |       |         |                  |
-   v   |   v      |         v      +---------|------------------+
-Cleanup|  Not   Rebase   Wait for            |
-   |   | merged   |      user resolve        |
-   v   |   |      v         |                |
-  Done |   v   CI poll  ----+                |
-       |  Not     |                          |
-       | merged   v                          |
-       |   |   Re-check                      |
-       |   v   mergeable                     |
-       |  Not     |                          |
-       | merged   +--------------------------+
-       |
-       +---> Check conflicts --> Check mergeable (inner loop)
+             +------------------+
+             | Check mergeable  |<-------------------------------+
+             +--------+---------+                                |
+       +--------------|---------------+                          |
+       v              v               v                          |
+  MERGEABLE       CONFLICTING      UNKNOWN                       |
+       |              |               |                          |
+       v              v               v                          |
+       |         User choice     User choice                     |
+       |         +----+----+     +----+-----+                    |
+       |         v         v     v          v                    |
+       |       Agent    Manual  Recheck    Exit                  |
+       |       rebase      |       |         |                   |
+       |          |        v       |         v                   |
+       |          |    Wait for    |       Cleanup               |
+       |          |    user resolve|                              |
+       |          |        |       +-----------------------------+
+       |          v        v
+       |     +----+--------+----+
+       |     | Re-check mergeable |
+       |     +----+------+------+-+
+       |          |      |      |
+       |     MERGEABLE CONFL. UNKNOWN--Exit---> Cleanup
+       |          |      |
+       |          v      +----------------------------> (top)
+       |       CI poll
+       |       +--+--+
+       |       |     |
+       |    passed  failed
+       |       |     |
+       |       v     v
+       |       |   Cleanup
+       v       v
+  Merge confirm  <--+
+   +---+---+        |
+   v   v   v        |
+Merged | Check      |
+   |   | conflicts--+
+   |   |
+   |   v
+   |  Exit
+   |   |
+   v   v
+Cleanup
 ```
 
 1. **Check mergeable status** using the GitHub API. GitHub may
@@ -777,9 +854,8 @@ Cleanup|  Not   Rebase   Wait for            |
        latest default branch. Only one rebase attempt is allowed
        per pipeline run. After the attempt:
        - If **successful**: the orchestrator polls CI. If CI
-         fails, Agent A is invoked to fix CI failures (up to 3
-         internal attempts). Once CI passes (or fix attempts are
-         exhausted), the mergeable status is re-checked.
+         passes, proceed to merge confirmation. If CI fix
+         attempts are exhausted, offer cleanup and exit.
        - If **failed** (`BLOCKED`): the user is notified and
          prompted to resolve conflicts manually. After manual
          resolution, the mergeable status is re-checked.

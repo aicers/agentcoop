@@ -94,8 +94,9 @@ export function buildSquashPrompt(
           `   reset-based approach — whichever is simpler.`,
         ]),
     `3. Write clear, concise commit messages that summarise the changes.`,
-    `   Reference the issue number in the primary commit`,
-    `   (e.g. "Implement widget rendering (#42)").`,
+    `   Do not include issue or PR numbers in the commit title.`,
+    `   Instead, reference the issue in the commit body using`,
+    `   \`Closes #N\` or \`Part of #N\`.`,
     `4. Force-push the branch (\`git push --force-with-lease\`).`,
   ];
 

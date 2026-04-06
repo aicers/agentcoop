@@ -256,6 +256,33 @@ Settings are stored in `~/.agentcoop/config.json`:
 Agent presets (CLI, model, context window, effort level) are also
 saved per agent slot.
 
+## Notifications
+
+When the pipeline pauses for user input — a BLOCKED agent, an
+exhausted loop budget, step-mode confirmation, merge confirmation,
+or any other prompt — AgentCoop can alert the user via terminal
+bell and/or desktop notification. This is useful when runs take
+minutes or longer and the user has switched to another window.
+
+### Trigger
+
+Notifications fire every time the TUI enters input-wait state.
+The notification message matches the prompt text shown in the
+InputArea (e.g., "Agent is blocked: push rejected").
+
+### Channels
+
+| Channel | Setting | Default | Behavior |
+| ------- | ------- | ------- | -------- |
+| Terminal bell | `notifications.bell` | `true` | Emits `BEL` (`\x07`) to stdout. Most terminals flash the tab or play a sound. |
+| Desktop | `notifications.desktop` | `false` | macOS: `osascript display notification`. Linux: `notify-send`. Silently ignored if the command is unavailable or no GUI session exists. |
+
+Both channels can be toggled independently in
+`~/.agentcoop/config.json` or through the startup wizard
+("Optionally adjust pipeline settings and notifications").
+Notification errors are always swallowed — they never block or
+break the prompt flow.
+
 ## Documentation
 
 - [Pipeline stages and prompt design](docs/pipeline.md) — detailed
