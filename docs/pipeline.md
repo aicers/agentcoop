@@ -256,9 +256,10 @@ Review the current implementation against all 7 items below.  For each
 item, briefly note whether it passes or needs attention.
 
 1. **Correctness** — Does the implementation fully address the issue?
-2. **Tests** — Are there sufficient tests, including E2E tests where
-   applicable?  If test coverage is insufficient, write the missing
-   tests.  Then run the full test suite and verify all tests pass.
+2. **Tests** — Are there thorough tests covering happy paths,
+   edge cases, and error scenarios, including E2E tests where
+   applicable?  If any meaningful scenario is untested, write
+   the missing tests.  Then run the full test suite and verify all tests pass.
    If tests require services (databases, message brokers, dev
    servers, etc.), start them using whatever tools the project
    provides (Docker Compose, `pnpm dev`, setup scripts, etc.).

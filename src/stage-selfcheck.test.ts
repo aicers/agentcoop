@@ -79,7 +79,7 @@ describe("buildSelfCheckPrompt", () => {
   test("tests item instructs to write missing tests, run suite, and start infrastructure", () => {
     const prompt = buildSelfCheckPrompt(BASE_CTX, makeOpts());
     expect(prompt).toContain("including E2E tests");
-    expect(prompt).toContain("write the missing");
+    expect(prompt).toContain("the missing tests");
     expect(prompt).toContain("run the full test suite");
     expect(prompt).toContain("Docker Compose");
     expect(prompt).toContain("port conflict");
