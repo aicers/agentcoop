@@ -7,8 +7,8 @@ expand to three agents (one author and two reviewers).
 
 Break your project down into well-written issues, each scoped to a
 single PR. AgentCoop works through them — implementing, reviewing,
-and merging — so the software gets built with minimal human
-involvement.
+and preparing merge-ready PRs — so the software gets built with
+minimal human involvement.
 
 ## Terminal UI
 
