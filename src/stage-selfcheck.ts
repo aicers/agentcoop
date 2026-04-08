@@ -2,7 +2,7 @@
  * Stage 3 — Self-check loop.
  *
  * Two-step flow per iteration:
- *   1. Send a self-check prompt to Agent A covering 7 review items.
+ *   1. Send a self-check prompt to Agent A covering 8 review items.
  *   2. Resume the session with a fix-or-done prompt.
  *
  * The agent responds with FIXED (loop again) or DONE (proceed).  The
@@ -62,7 +62,7 @@ export function buildSelfCheckPrompt(
     ``,
     `## Self-check`,
     ``,
-    `Review the current implementation against all 7 items below.  For each`,
+    `Review the current implementation against all 8 items below.  For each`,
     `item, briefly note whether it passes or needs attention.`,
     ``,
     `1. **Correctness** — Does the implementation fully address the issue?`,
@@ -88,6 +88,10 @@ export function buildSelfCheckPrompt(
     `6. **Security** — Are there any security concerns (injection, auth,`,
     `   secrets exposure)?`,
     `7. **Performance** — Are there obvious performance issues or regressions?`,
+    `8. **Code quality** — Is the new or modified code clean and`,
+    `   maintainable?  If you spot opportunities to simplify, improve,`,
+    `   or refactor the code *within the scope of this change*, apply`,
+    `   them.  Do not refactor unrelated existing code.`,
   ];
 
   if (ctx.userInstruction) {

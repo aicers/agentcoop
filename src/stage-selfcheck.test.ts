@@ -65,7 +65,7 @@ function makeOpts(
 // ---- buildSelfCheckPrompt --------------------------------------------------
 
 describe("buildSelfCheckPrompt", () => {
-  test("includes all 7 review items", () => {
+  test("includes all 8 review items", () => {
     const prompt = buildSelfCheckPrompt(BASE_CTX, makeOpts());
     expect(prompt).toContain("1. **Correctness**");
     expect(prompt).toContain("2. **Tests**");
@@ -74,6 +74,7 @@ describe("buildSelfCheckPrompt", () => {
     expect(prompt).toContain("5. **Documentation consistency**");
     expect(prompt).toContain("6. **Security**");
     expect(prompt).toContain("7. **Performance**");
+    expect(prompt).toContain("8. **Code quality**");
   });
 
   test("tests item instructs to write missing tests, run suite, and start infrastructure", () => {

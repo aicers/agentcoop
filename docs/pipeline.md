@@ -252,7 +252,7 @@ You are reviewing the implementation for the following GitHub issue.
 
 ## Self-check
 
-Review the current implementation against all 7 items below.  For each
+Review the current implementation against all 8 items below.  For each
 item, briefly note whether it passes or needs attention.
 
 1. **Correctness** — Does the implementation fully address the issue?
@@ -278,6 +278,10 @@ item, briefly note whether it passes or needs attention.
 6. **Security** — Are there any security concerns (injection, auth,
    secrets exposure)?
 7. **Performance** — Are there obvious performance issues or regressions?
+8. **Code quality** — Is the new or modified code clean and
+   maintainable?  If you spot opportunities to simplify, improve,
+   or refactor the code *within the scope of this change*, apply
+   them.  Do not refactor unrelated existing code.
 ```
 
 **Fix-or-done prompt:**
