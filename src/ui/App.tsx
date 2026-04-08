@@ -243,6 +243,8 @@ export interface AppProps {
    * agent child processes before the pipeline unwinds.
    */
   onCancel?: () => void;
+  /** Timestamp (ms) when agentcoop started, for wall-clock elapsed time. */
+  startedAt?: number;
 }
 
 export function App({
@@ -256,6 +258,7 @@ export function App({
   cliTypeB,
   notifications,
   onCancel,
+  startedAt,
 }: AppProps) {
   const { height: terminalHeight, width: terminalWidth } =
     useTerminalDimensions();
@@ -477,6 +480,8 @@ export function App({
         layout={effectiveLayout}
         showKeyHints={flags.showKeyHints}
         contentWidth={borderedContentWidth}
+        paused={inputRequest !== null}
+        startedAt={startedAt}
       />
       <InputArea request={inputRequest} onSubmit={handleSubmit} />
     </Box>
