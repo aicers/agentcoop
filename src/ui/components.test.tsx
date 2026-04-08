@@ -6,9 +6,9 @@
  */
 import { Box, Text, useInput, useStdout } from "ink";
 import { cleanup, render } from "ink-testing-library";
-import { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import stringWidth from "string-width";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { initI18n } from "../i18n/index.js";
 import {
   type AgentInvokeEvent,
@@ -21,7 +21,7 @@ import {
   useTerminalHeight,
 } from "./App.js";
 import { InputArea, type InputRequest } from "./InputArea.js";
-import { fitInfoSegments, StatusBar } from "./StatusBar.js";
+import { fitInfoSegments, formatElapsed, StatusBar } from "./StatusBar.js";
 import { cliDisplayName, formatTokenCount, TokenBar } from "./TokenBar.js";
 import {
   PROMPT_LINE_PREFIX,
@@ -2519,6 +2519,200 @@ describe("StatusBar width adaptation", () => {
     expect(frame).toContain("Stage 2: Implement");
     // Layout indicator should be dropped due to narrow width.
     expect(frame).not.toContain("Layout:");
+  });
+});
+
+// ---- formatElapsed -----------------------------------------------------------
+
+describe("formatElapsed", () => {
+  test("formats seconds only", () => {
+    expect(formatElapsed(0)).toBe("0s");
+    expect(formatElapsed(45)).toBe("45s");
+    expect(formatElapsed(59)).toBe("59s");
+  });
+
+  test("formats minutes and seconds", () => {
+    expect(formatElapsed(60)).toBe("1m 0s");
+    expect(formatElapsed(90)).toBe("1m 30s");
+    expect(formatElapsed(3599)).toBe("59m 59s");
+  });
+
+  test("formats hours, minutes, and seconds", () => {
+    expect(formatElapsed(3600)).toBe("1h 0m 0s");
+    expect(formatElapsed(3661)).toBe("1h 1m 1s");
+    expect(formatElapsed(7530)).toBe("2h 5m 30s");
+  });
+
+  test("floors fractional seconds", () => {
+    expect(formatElapsed(4.7)).toBe("4s");
+    expect(formatElapsed(90.9)).toBe("1m 30s");
+  });
+});
+
+// ---- StatusBar elapsed time --------------------------------------------------
+
+describe("StatusBar elapsed time", () => {
+  test("shows elapsed time when startedAt is provided", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box width={80}>
+        <StatusBar
+          emitter={emitter}
+          owner="aicers"
+          repo="agentcoop"
+          issueNumber={42}
+          issueTitle="Fix the widget"
+          contentWidth={76}
+          startedAt={Date.now() - 5000}
+        />
+      </Box>,
+    );
+
+    const frame = lastFrame() ?? "";
+    // Should show the issue ref and some elapsed time indicator.
+    expect(frame).toContain("aicers/agentcoop#42");
+    // Wall-clock time should appear in parentheses.
+    expect(frame).toMatch(/\(\d+s\)/);
+  });
+
+  test("hides elapsed time when startedAt is not provided", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={42}
+        issueTitle="Fix the widget"
+        contentWidth={76}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("aicers/agentcoop#42: Fix the widget");
+    // No elapsed time should appear.
+    expect(frame).not.toMatch(/\d+s/);
+  });
+
+  test("drops wall-clock time first when space is tight", () => {
+    const emitter = new PipelineEventEmitter();
+    // At t=0: activeText="0s" (2), wallText="(0s)" (4), fullElapsed="0s (0s)" (7).
+    // Full needs: minTitle(2) + gap(2) + 7 = 11.
+    // Active only needs: minTitle(2) + gap(2) + 2 = 6.
+    // contentWidth=9: 9 < 11 → full dropped, 9 >= 6 → active shown.
+    // issueBudget = 9 - 2 - 2 = 5.
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="o"
+        repo="r"
+        issueNumber={1}
+        issueTitle="Fix"
+        contentWidth={9}
+        startedAt={Date.now()}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    // Active time should be visible.
+    expect(frame).toMatch(/\d+s/);
+    // Wall-clock (in parentheses) should be dropped.
+    expect(frame).not.toMatch(/\(\d+s\)/);
+  });
+
+  test("drops all elapsed time when space is extremely tight", () => {
+    const emitter = new PipelineEventEmitter();
+    // At t=0: activeOnly "0s" (2) needs minTitle(2)+gap(2)+2=6.
+    // contentWidth=5: 5 < 6 → all elapsed dropped.
+    // issueBudget = 5 → "o/r#…".
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="o"
+        repo="r"
+        issueNumber={1}
+        issueTitle="Fix"
+        contentWidth={5}
+        startedAt={Date.now()}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("o/r#");
+    // Title should be truncated.
+    expect(frame).toContain("\u2026");
+    // No elapsed time should appear.
+    expect(frame).not.toMatch(/\d+s/);
+  });
+
+  test("pausing mid-second does not lose partial interval", async () => {
+    vi.useFakeTimers();
+    try {
+      const start = Date.now();
+      const emitter = new PipelineEventEmitter();
+      const props = {
+        emitter,
+        owner: "aicers",
+        repo: "agentcoop",
+        issueNumber: 42,
+        issueTitle: "Fix the widget",
+        contentWidth: 76,
+        startedAt: start,
+      };
+
+      const { lastFrame, rerender } = render(
+        <Box width={80}>
+          <StatusBar {...props} paused={false} />
+        </Box>,
+      );
+
+      // Two pause/resume cycles, each losing 600ms without the fix.
+      // Cycle 1: 1600ms active → tick at 1000ms + 600ms partial.
+      await React.act(() => vi.advanceTimersByTimeAsync(1600));
+      await React.act(() => {
+        rerender(
+          <Box width={80}>
+            <StatusBar {...props} paused={true} />
+          </Box>,
+        );
+      });
+      await React.act(() => vi.advanceTimersByTimeAsync(400));
+
+      // Cycle 2: resume → 1600ms active → tick at 1000ms + 600ms partial.
+      await React.act(() => {
+        rerender(
+          <Box width={80}>
+            <StatusBar {...props} paused={false} />
+          </Box>,
+        );
+      });
+      await React.act(() => vi.advanceTimersByTimeAsync(1600));
+      await React.act(() => {
+        rerender(
+          <Box width={80}>
+            <StatusBar {...props} paused={true} />
+          </Box>,
+        );
+      });
+      await React.act(() => vi.advanceTimersByTimeAsync(400));
+
+      // Final resume + 1s to trigger a render with updated active time.
+      await React.act(() => {
+        rerender(
+          <Box width={80}>
+            <StatusBar {...props} paused={false} />
+          </Box>,
+        );
+      });
+      await React.act(() => vi.advanceTimersByTimeAsync(1000));
+
+      const frame = lastFrame() ?? "";
+      // With fix: 1.0+0.6+1.0+0.6+1.0 = 4.2s → "4s", wall = 5.0s → "(5s)".
+      // Without fix: 1.0+0+1.0+0+1.0 = 3.0s → "3s" — regression detected.
+      expect(frame).toMatch(/4s\s+\(5s\)/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

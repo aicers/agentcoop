@@ -771,6 +771,7 @@ try {
 
   const emitter = new PipelineEventEmitter();
 
+  const startedAt = Date.now();
   const pipelineResult = await new Promise<PipelineResult>((resolve) => {
     const { unmount } = renderApp({
       emitter,
@@ -782,6 +783,7 @@ try {
       onPromptReady: (prompt) => {
         tuiPrompt = prompt;
       },
+      startedAt,
       onCancel: () => {
         // Kill all tracked agent child processes so the pipeline
         // can unwind quickly.  We read `.child` at kill-time so

@@ -1,5 +1,5 @@
 import { Box, Text } from "ink";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import stringWidth from "string-width";
 import { t } from "../i18n/index.js";
 import type {
@@ -28,6 +28,62 @@ interface StatusBarProps {
   showKeyHints?: boolean;
   /** Content width budget for the info line (terminal width minus border and padding). */
   contentWidth?: number;
+  /** Whether the active timer is paused (e.g. waiting for user input). */
+  paused?: boolean;
+  /** Timestamp (ms) when agentcoop started, for wall-clock elapsed time. */
+  startedAt?: number;
+}
+
+// ---- Elapsed time helpers ----------------------------------------------------
+
+/**
+ * Format a duration in seconds as a human-readable string.
+ * Examples: "0s", "45s", "1m 30s", "1h 5m 0s".
+ */
+export function formatElapsed(totalSeconds: number): string {
+  const s = Math.floor(totalSeconds);
+  if (s < 60) return `${s}s`;
+  const hours = Math.floor(s / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  const seconds = s % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  return `${minutes}m ${seconds}s`;
+}
+
+/**
+ * Hook that tracks active and wall-clock elapsed time, updating every second.
+ * Active time pauses when `paused` is true.
+ */
+function useElapsedTime(
+  paused: boolean,
+  startedAt: number | undefined,
+): { activeSeconds: number; wallSeconds: number } {
+  const [, setTick] = useState(0);
+  const activeRef = useRef(0);
+  const lastTickRef = useRef(Date.now());
+
+  useEffect(() => {
+    // When transitioning to paused, accumulate the partial interval
+    // since the last tick so sub-second active time is not lost.
+    if (paused) {
+      activeRef.current += (Date.now() - lastTickRef.current) / 1000;
+    }
+    lastTickRef.current = Date.now();
+    const id = setInterval(() => {
+      const now = Date.now();
+      if (!paused) {
+        activeRef.current += (now - lastTickRef.current) / 1000;
+      }
+      lastTickRef.current = now;
+      setTick((t) => t + 1);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [paused]);
+
+  const wallSeconds =
+    startedAt !== undefined ? (Date.now() - startedAt) / 1000 : 0;
+
+  return { activeSeconds: activeRef.current, wallSeconds };
 }
 
 // ---- Segment fitting helpers -------------------------------------------------
@@ -136,6 +192,8 @@ export function StatusBar({
   layout,
   showKeyHints = true,
   contentWidth,
+  paused = false,
+  startedAt,
 }: StatusBarProps) {
   const [stage, setStage] = useState<StageEnterEvent | null>(null);
   const [lastOutcome, setLastOutcome] = useState<string | null>(null);
@@ -199,11 +257,36 @@ export function StatusBar({
       ? m["statusBar.completed"](selfCheckCount, reviewCount)
       : "";
 
-  // Line 1: Issue reference + title (independent of other segments).
+  // Elapsed time display.
+  const { activeSeconds, wallSeconds } = useElapsedTime(paused, startedAt);
+  const activeText = formatElapsed(activeSeconds);
+  const wallText = `(${formatElapsed(wallSeconds)})`;
+
+  // Line 1: Issue reference + title, with elapsed time right-aligned.
+  // When space is tight, drop wall-clock time first, then active time.
   const issueLineText = issueTitle ? `${issueRef}: ${issueTitle}` : issueRef;
+
+  let elapsedText = "";
+  let issueBudget: number | undefined = contentWidth;
+  if (startedAt !== undefined && contentWidth !== undefined) {
+    const fullElapsed = `${activeText} ${wallText}`;
+    const activeOnly = activeText;
+    // Need at least 2 chars for truncated title + 2 for gap.
+    const minTitleWidth = 2;
+    const gap = 2; // space between title and elapsed
+    if (contentWidth >= minTitleWidth + gap + stringWidth(fullElapsed)) {
+      elapsedText = fullElapsed;
+    } else if (contentWidth >= minTitleWidth + gap + stringWidth(activeOnly)) {
+      elapsedText = activeOnly;
+    }
+    if (elapsedText) {
+      issueBudget = contentWidth - gap - stringWidth(elapsedText);
+    }
+  }
+
   const issueLine =
-    contentWidth !== undefined
-      ? truncateWithEllipsis(issueLineText, contentWidth)
+    issueBudget !== undefined
+      ? truncateWithEllipsis(issueLineText, issueBudget)
       : issueLineText;
 
   // Line 2: Pipeline status segments with drop priorities.
@@ -239,9 +322,12 @@ export function StatusBar({
       height={contentWidth !== undefined ? (showKeyHints ? 5 : 4) : undefined}
       overflow="hidden"
     >
-      <Text bold color="cyan">
-        {issueLine}
-      </Text>
+      <Box justifyContent="space-between">
+        <Text bold color="cyan">
+          {issueLine}
+        </Text>
+        {elapsedText !== "" && <Text dimColor>{elapsedText}</Text>}
+      </Box>
       <Box>
         {pipelineDisplay.map((seg, i) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: stable render-local array

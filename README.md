@@ -20,7 +20,7 @@ minimal human involvement.
 ├────────────────────────────────────────────┴────────────────────────────────┤
 │ A (Claude): 12.3K in / 5.1K out            │ B (Codex): 8.7K in / 3.2K out  │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ owner/repo#42: Issue title                                                  │
+│ owner/repo#42: Issue title                              4m 12s (7m 30s)     │
 │ Base: abc1234  │  Stage 3: Self-check (round 2)  │  Layout: horizontal      │
 │ ●:Active [*]:Focused Tab:Switch pane ↑↓:Scroll Ctrl+L:Layout Ctrl+C:Quit    │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -33,8 +33,10 @@ minimal human involvement.
   scrolling) with `[*]`.
 - **TokenBar** — Per-agent token usage (input/output, with cached
   token counts when available).
-- **StatusBar** — Issue reference, base commit SHA, current pipeline
-  stage with loop count, and layout indicator.
+- **StatusBar** — Issue reference with elapsed time (active and
+  wall-clock), base commit SHA, current pipeline stage with loop
+  count, and layout indicator. Active time pauses while waiting
+  for user input.
 - **InputArea** — Shows "Pipeline running..." while agents work.
   When user input is needed (BLOCKED, loop budget, step-mode), it
   presents numbered choices or a free-text field.
