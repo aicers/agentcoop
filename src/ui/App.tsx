@@ -74,8 +74,9 @@ interface VisibilityBudgetOptions {
 /** Compute the height of the InputArea in terminal rows. */
 export function inputAreaHeight(request: InputRequest | null): number {
   if (!request) return 1;
-  if (request.choices) return 1 + request.choices.length;
-  return 2;
+  const messageLines = request.message.split("\n").length;
+  if (request.choices) return messageLines + request.choices.length;
+  return messageLines + 1;
 }
 
 /**
