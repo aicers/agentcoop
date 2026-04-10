@@ -1244,6 +1244,49 @@ describe("InputArea", () => {
     expect(frame).toContain("Stop");
   });
 
+  test("renders multiline message as separate lines with choices", () => {
+    const request: InputRequest = {
+      message: "Pipeline completed.\n\nHas the PR been merged?",
+      choices: [
+        { label: "Yes, merged", value: "yes" },
+        { label: "No", value: "no" },
+      ],
+    };
+    const { lastFrame } = render(
+      <InputArea request={request} onSubmit={() => {}} />,
+    );
+
+    const frame = lastFrame() ?? "";
+    const lines = frame.split("\n");
+    const mergedIdx = lines.findIndex((l) =>
+      l.includes("Has the PR been merged"),
+    );
+    const choiceIdx = lines.findIndex((l) => l.includes("Yes, merged"));
+    // The message's last line and the first choice must be on different rows.
+    expect(mergedIdx).toBeGreaterThanOrEqual(0);
+    expect(choiceIdx).toBeGreaterThanOrEqual(0);
+    expect(mergedIdx).toBeLessThan(choiceIdx);
+  });
+
+  test("renders multiline message as separate lines with text input", () => {
+    const request: InputRequest = {
+      message: "Summary:\n\nEnter your instruction:",
+    };
+    const { lastFrame } = render(
+      <InputArea request={request} onSubmit={() => {}} />,
+    );
+
+    const frame = lastFrame() ?? "";
+    const lines = frame.split("\n");
+    const summaryIdx = lines.findIndex((l) => l.includes("Summary:"));
+    const instructionIdx = lines.findIndex((l) =>
+      l.includes("Enter your instruction:"),
+    );
+    expect(summaryIdx).toBeGreaterThanOrEqual(0);
+    expect(instructionIdx).toBeGreaterThanOrEqual(0);
+    expect(summaryIdx).toBeLessThan(instructionIdx);
+  });
+
   test("renders text input when request has no choices", () => {
     const request: InputRequest = {
       message: "Enter your instruction:",
@@ -2322,6 +2365,19 @@ describe("inputAreaHeight", () => {
         ],
       }),
     ).toBe(3);
+  });
+
+  test("counts newlines in message for text input", () => {
+    expect(inputAreaHeight({ message: "Line1\n\nLine3" })).toBe(4);
+  });
+
+  test("counts newlines in message for choice request", () => {
+    expect(
+      inputAreaHeight({
+        message: "Summary\n\nChoose:",
+        choices: [{ label: "A", value: "a" }],
+      }),
+    ).toBe(4);
   });
 });
 
