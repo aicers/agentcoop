@@ -270,11 +270,23 @@ item, briefly note whether it passes or needs attention.
    service integrations correct and resilient?  Start all required
    services and run integration tests against them rather than skipping
    tests that need external services.
-5. **Documentation consistency** — Are comments, READMEs, and inline
-   docs consistent with the code changes?  If documentation or the
-   PR requires screenshots, verify they were actually captured by
-   starting the application, opening a browser, and taking real
-   screenshots — do not use placeholders.
+5. **Documentation consistency** — Are all forms of project
+   documentation consistent with the code changes?
+
+   If your changes affect documentation, update it accordingly —
+   code comments, inline API docs (JSDoc/TSDoc/docstrings), README
+   files, CHANGELOG entries, and any user-facing manuals, guides,
+   or tutorials the project maintains.  If the project uses a
+   documentation site generator (MkDocs/Sphinx/Docusaurus/mdBook/
+   etc.), update the corresponding source pages — not just the
+   README.  If the project keeps a CHANGELOG (e.g. Keep a Changelog
+   format), add an appropriate entry.
+
+   If a manual or documentation site page requires a screenshot,
+   capture a real one by starting the application and opening a
+   browser — do not use placeholders.  If your code changes
+   affect the visual output shown in existing manual screenshots,
+   retake them as part of the doc update.
 6. **Security** — Are there any security concerns (injection, auth,
    secrets exposure)?
 7. **Performance** — Are there obvious performance issues or regressions?
@@ -449,6 +461,21 @@ You are fixing CI failures for the following GitHub issue.
 
 Diagnose and fix the CI failures shown above.  After making your
 changes:
+
+If your changes affect documentation, update it accordingly —
+code comments, inline API docs (JSDoc/TSDoc/docstrings), README
+files, CHANGELOG entries, and any user-facing manuals, guides,
+or tutorials the project maintains.  If the project uses a
+documentation site generator (MkDocs/Sphinx/Docusaurus/mdBook/
+etc.), update the corresponding source pages — not just the
+README.  If the project keeps a CHANGELOG (e.g. Keep a Changelog
+format), add an appropriate entry.
+
+If a manual or documentation site page requires a screenshot,
+capture a real one by starting the application and opening a
+browser — do not use placeholders.  If your code changes
+affect the visual output shown in existing manual screenshots,
+retake them as part of the doc update.
 
 Before pushing, check whether the PR description still accurately
 reflects the current code changes.  Run
@@ -628,9 +655,20 @@ You are addressing review feedback for the following GitHub issue.
 3. Fix all agreed-upon items from the review.
 4. Post a response as a PR comment prefixed with
    `**[Author Round {n}]**` summarising what you changed.
-5. If your code changes affect the visual output shown in existing
-   screenshots, retake those screenshots by starting the application,
-   opening a browser, and capturing updated images.
+5. If your changes affect documentation, update it accordingly —
+   code comments, inline API docs (JSDoc/TSDoc/docstrings), README
+   files, CHANGELOG entries, and any user-facing manuals, guides,
+   or tutorials the project maintains.  If the project uses a
+   documentation site generator (MkDocs/Sphinx/Docusaurus/mdBook/
+   etc.), update the corresponding source pages — not just the
+   README.  If the project keeps a CHANGELOG (e.g. Keep a Changelog
+   format), add an appropriate entry.
+
+   If a manual or documentation site page requires a screenshot,
+   capture a real one by starting the application and opening a
+   browser — do not use placeholders.  If your code changes
+   affect the visual output shown in existing manual screenshots,
+   retake them as part of the doc update.
 6. Before pushing, check whether the PR description still accurately
    reflects the current code changes.  Run
    `gh pr view --json body --jq .body` to read the current

@@ -30,6 +30,7 @@ import { t } from "./i18n/index.js";
 import { buildPrSyncInstructions } from "./issue-sync.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
+  buildDocConsistencyInstructions,
   drainToSink,
   invokeOrResume,
   mapAgentError,
@@ -147,9 +148,7 @@ export function buildAuthorFixPrompt(
     `3. Fix all agreed-upon items from the review.`,
     `4. Post a response as a PR comment prefixed with`,
     `   \`**[Author Round ${round}]**\` summarising what you changed.`,
-    `5. If your code changes affect the visual output shown in existing`,
-    `   screenshots, retake those screenshots by starting the application,`,
-    `   opening a browser, and capturing updated images.`,
+    `5. ${buildDocConsistencyInstructions("   ").trimStart()}`,
     `6. ${buildPrSyncInstructions(ctx.issueNumber)}`,
     `7. Commit and push your changes so a new CI run is triggered.`,
   ];

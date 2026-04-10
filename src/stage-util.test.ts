@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
 import {
+  buildDocConsistencyInstructions,
   invokeOrResume,
   mapAgentError,
   mapFixOrDoneResponse,
@@ -1072,5 +1073,70 @@ describe("mapAgentError inactivity_timeout", () => {
     expect(result.message).toBe(
       "Agent process timed out due to inactivity during implementation.",
     );
+  });
+});
+
+// ---- buildDocConsistencyInstructions ---------------------------------------
+
+describe("buildDocConsistencyInstructions", () => {
+  const text = buildDocConsistencyInstructions();
+
+  test("mentions CHANGELOG", () => {
+    expect(text).toContain("CHANGELOG");
+  });
+
+  test("mentions documentation site generators", () => {
+    expect(text).toContain("MkDocs");
+    expect(text).toContain("Sphinx");
+    expect(text).toContain("Docusaurus");
+    expect(text).toContain("mdBook");
+    expect(text).toContain("documentation site generator");
+  });
+
+  test("instructs to update source pages, not just the README", () => {
+    expect(text).toContain("not just the");
+    expect(text).toContain("README");
+  });
+
+  test("mentions Keep a Changelog format", () => {
+    expect(text).toContain("Keep a Changelog");
+  });
+
+  test("mentions manuals", () => {
+    expect(text).toContain("manual");
+  });
+
+  test("mentions screenshots and placeholders", () => {
+    expect(text).toContain("screenshot");
+    expect(text).toContain("do not use placeholders");
+    expect(text).toContain("retake");
+  });
+
+  test("screenshot paragraph comes after doc paragraph", () => {
+    const paragraphs = text.split("\n\n");
+    expect(paragraphs.length).toBe(2);
+    expect(paragraphs[0]).toContain("CHANGELOG");
+    expect(paragraphs[1]).toContain("screenshot");
+  });
+
+  test("screenshot paragraph does not mention README or CHANGELOG", () => {
+    const paragraphs = text.split("\n\n");
+    const screenshotParagraph = paragraphs[1];
+    expect(screenshotParagraph).not.toContain("README");
+    expect(screenshotParagraph).not.toContain("CHANGELOG");
+  });
+
+  test("indent parameter prefixes every non-empty line", () => {
+    const indented = buildDocConsistencyInstructions("   ");
+    const lines = indented.split("\n");
+    for (const line of lines) {
+      if (line === "") continue;
+      expect(line).toMatch(/^ {3}\S/);
+    }
+  });
+
+  test("indent parameter preserves blank line between paragraphs", () => {
+    const indented = buildDocConsistencyInstructions("   ");
+    expect(indented).toContain("\n\n");
   });
 });

@@ -337,6 +337,43 @@ export function mapResponseToResult(
 }
 
 /**
+ * Build instructions for keeping all forms of project documentation
+ * consistent with code changes.
+ *
+ * Included in prompts at any stage where the author agent may be
+ * modifying code: Stage 2 self-check, Stage 4 CI fix, and Stage 6
+ * review response.  Stage 7 post-squash CI fix reuses the Stage 4
+ * prompt and is covered transitively.
+ *
+ * The screenshot paragraph is scoped to manuals and documentation
+ * site pages only — README hero images and CHANGELOG entries do
+ * not typically embed behavior-tracking screenshots, so listing
+ * them in the screenshot clause would be noise.
+ */
+export function buildDocConsistencyInstructions(indent = ""): string {
+  const lines = [
+    `If your changes affect documentation, update it accordingly —`,
+    `code comments, inline API docs (JSDoc/TSDoc/docstrings), README`,
+    `files, CHANGELOG entries, and any user-facing manuals, guides,`,
+    `or tutorials the project maintains.  If the project uses a`,
+    `documentation site generator (MkDocs/Sphinx/Docusaurus/mdBook/`,
+    `etc.), update the corresponding source pages — not just the`,
+    `README.  If the project keeps a CHANGELOG (e.g. Keep a Changelog`,
+    `format), add an appropriate entry.`,
+    ``,
+    `If a manual or documentation site page requires a screenshot,`,
+    `capture a real one by starting the application and opening a`,
+    `browser — do not use placeholders.  If your code changes`,
+    `affect the visual output shown in existing manual screenshots,`,
+    `retake them as part of the doc update.`,
+  ];
+  if (!indent) return lines.join("\n");
+  return lines
+    .map((line) => (line === "" ? "" : `${indent}${line}`))
+    .join("\n");
+}
+
+/**
  * Map a fix-or-done / verify-or-done response to a `StageResult`.
  *
  * The step parser maps both FIXED and DONE to `"fixed"` status.  We

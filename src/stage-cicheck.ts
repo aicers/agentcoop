@@ -21,7 +21,11 @@ import {
 import { t } from "./i18n/index.js";
 import { buildPrSyncInstructions } from "./issue-sync.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
-import { invokeOrResume, mapAgentError } from "./stage-util.js";
+import {
+  buildDocConsistencyInstructions,
+  invokeOrResume,
+  mapAgentError,
+} from "./stage-util.js";
 import { getHeadSha as defaultGetHeadSha } from "./worktree.js";
 
 // ---- defaults --------------------------------------------------------------
@@ -91,6 +95,8 @@ export function buildCiFixPrompt(
     ``,
     `Diagnose and fix the CI failures shown above.  After making your`,
     `changes:`,
+    ``,
+    buildDocConsistencyInstructions(),
     ``,
     `${buildPrSyncInstructions(ctx.issueNumber)}`,
     ``,

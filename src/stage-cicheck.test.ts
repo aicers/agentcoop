@@ -112,6 +112,12 @@ describe("buildCiFixPrompt", () => {
     expect(prompt).toContain("commit and push");
   });
 
+  test("includes doc consistency instructions", () => {
+    const prompt = buildCiFixPrompt(BASE_CTX, makeOpts(), "error");
+    expect(prompt).toContain("CHANGELOG");
+    expect(prompt).toContain("MkDocs");
+  });
+
   test("includes user instruction when present", () => {
     const ctx = { ...BASE_CTX, userInstruction: "Ignore lint warnings" };
     const prompt = buildCiFixPrompt(ctx, makeOpts(), "error");
