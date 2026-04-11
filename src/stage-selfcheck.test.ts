@@ -98,6 +98,12 @@ describe("buildSelfCheckPrompt", () => {
     expect(prompt).toContain("do not use placeholders");
   });
 
+  test("documentation item includes doc consistency helper content", () => {
+    const prompt = buildSelfCheckPrompt(BASE_CTX, makeOpts());
+    expect(prompt).toContain("CHANGELOG");
+    expect(prompt).toContain("MkDocs");
+  });
+
   test("includes repo and issue context", () => {
     const prompt = buildSelfCheckPrompt(BASE_CTX, makeOpts());
     expect(prompt).toContain("Owner: org");

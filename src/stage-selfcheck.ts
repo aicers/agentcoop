@@ -21,6 +21,7 @@ import {
 } from "./issue-sync.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
+  buildDocConsistencyInstructions,
   invokeOrResume,
   mapAgentError,
   mapFixOrDoneResponse,
@@ -80,11 +81,10 @@ export function buildSelfCheckPrompt(
     `   service integrations correct and resilient?  Start all required`,
     `   services and run integration tests against them rather than skipping`,
     `   tests that need external services.`,
-    `5. **Documentation consistency** — Are comments, READMEs, and inline`,
-    `   docs consistent with the code changes?  If documentation or the`,
-    `   PR requires screenshots, verify they were actually captured by`,
-    `   starting the application, opening a browser, and taking real`,
-    `   screenshots — do not use placeholders.`,
+    `5. **Documentation consistency** — Are all forms of project`,
+    `   documentation consistent with the code changes?`,
+    ``,
+    buildDocConsistencyInstructions("   "),
     `6. **Security** — Are there any security concerns (injection, auth,`,
     `   secrets exposure)?`,
     `7. **Performance** — Are there obvious performance issues or regressions?`,
