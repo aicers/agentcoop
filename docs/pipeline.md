@@ -587,7 +587,7 @@ addressing feedback. Multi-round until approval.
 Since both agents operate under the same GitHub account, comments
 are distinguished by prefix and round number.
 
-#### Review prompt — Agent B (round N)
+#### Review prompt — Agent B (round 1)
 
 ```text
 You are reviewing a pull request for the following GitHub issue.
@@ -605,26 +605,103 @@ You are reviewing a pull request for the following GitHub issue.
 ## Instructions
 
 1. Find the pull request for this branch (use `gh pr view`).
-2. Review the code changes in the PR.  Evaluate correctness,
-   test coverage, error handling, security, and performance.
+2. Review the diff against the issue.
+   Your job is an
+   independent judgment on whether this is the right change
+   and whether it is built well — not a mechanical checklist.
+   Read the code, form an opinion, and explain it with
+   concrete references where they help anchor the point.
+
+   Common review angles include:
+   - Whether the approach actually solves the issue, and
+     whether any requirement appears to be dropped, only
+     partially implemented, or implemented in a surprising way.
+   - Correctness on edge cases and failure paths, not just the
+     happy path.
+   - Design quality: readability, appropriate abstractions,
+     avoiding over-engineering, unrelated drive-by changes,
+     dead code, or stray debug output.
+   - Test presence and meaningfulness — especially whether the
+     tests exercise the new behaviour in a way that would have
+     failed before the change. You do NOT need to run the test
+     suite or re-check CI; assume those are already handled and
+     focus on whether the tests are the right tests.
+   - Error handling, security (input validation, injection,
+     secrets, permissions), and obvious performance issues.
+   - Documentation or comments that now appear out of sync with
+     the code.
+   - PR hygiene if it appears off: issue linkage (`Closes #N`
+     vs. `Part of #N` with `## Not addressed` when partial) and
+     a `## Test plan` checklist.
+
+   The list above is guidance, not a limit. If something feels
+   off for any other reason — architectural, stylistic, product,
+   or subtle — raise it.
 3. Post your review as a PR comment prefixed with
-   `**[Reviewer Round {n}]**`.
+   `**[Reviewer Round {n}]**`. Be specific. Cite file paths and
+   line numbers when they help; for broader concerns, explain
+   the concern at the appropriate level.
 4. End your response with one of these keywords:
    - APPROVED — if the changes are ready to merge
    - NOT_APPROVED — if changes are needed
 ```
 
-For follow-up reviews (round > 1), step 2 changes to read the
-author's previous response first:
+#### Review prompt — Agent B (round 2+)
+
+For follow-up reviews (round > 1), step 2 adds follow-through
+verification and reasoned-pushback handling before the review
+step:
 
 ```text
 2. Read the author's response in the PR comment prefixed with
    `[Author Round {n-1}]` to understand what was changed.
-3. Review the updated code changes in the PR.  Evaluate
-   correctness, test coverage, error handling, security, and
-   performance.
+   For each item you raised in `[Reviewer Round {n-1}]`,
+   check the outcome:
+   - If the author says it was fixed, verify that the fix is
+     actually present in the updated diff.
+   - If the author pushed back with reasoning, evaluate that
+     reasoning honestly. If it is sound, treat the item as
+     resolved and do NOT re-raise it. If it is weak, unclear,
+     or does not address the concern, keep the item open.
+   - Only carry forward items that remain genuinely unresolved.
+3. Review the updated diff against the issue.
+   Your job is an
+   independent judgment on whether this is the right change
+   and whether it is built well — not a mechanical checklist.
+   Read the code, form an opinion, and explain it with
+   concrete references where they help anchor the point.
+
+   Common review angles include:
+   - Whether the approach actually solves the issue, and
+     whether any requirement appears to be dropped, only
+     partially implemented, or implemented in a surprising way.
+   - Correctness on edge cases and failure paths, not just the
+     happy path.
+   - Design quality: readability, appropriate abstractions,
+     avoiding over-engineering, unrelated drive-by changes,
+     dead code, or stray debug output.
+   - Test presence and meaningfulness — especially whether the
+     tests exercise the new behaviour in a way that would have
+     failed before the change. You do NOT need to run the test
+     suite or re-check CI; assume those are already handled and
+     focus on whether the tests are the right tests.
+   - Error handling, security (input validation, injection,
+     secrets, permissions), and obvious performance issues.
+   - Documentation or comments that now appear out of sync with
+     the code.
+   - PR hygiene if it appears off: issue linkage (`Closes #N`
+     vs. `Part of #N` with `## Not addressed` when partial) and
+     a `## Test plan` checklist.
+
+   The list above is guidance, not a limit. If something feels
+   off for any other reason — architectural, stylistic, product,
+   or subtle — raise it.
 4. Post your follow-up review as a PR comment prefixed with
-   `**[Reviewer Round {n}]**`.
+   `**[Reviewer Round {n}]**`. Include any still-unresolved
+   prior items and any new findings from this round. Be
+   specific. Cite file paths and line numbers when they help;
+   for broader concerns, explain the concern at the
+   appropriate level.
 5. End your response with one of these keywords:
    - APPROVED — if the changes are ready to merge
    - NOT_APPROVED — if changes are needed
