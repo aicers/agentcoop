@@ -141,6 +141,72 @@ describe("buildReviewPrompt", () => {
     const prompt = buildReviewPrompt(BASE_CTX, makeOpts(), 1);
     expect(prompt).not.toContain("Additional feedback");
   });
+
+  test("round 1 includes shared review-angles block", () => {
+    const prompt = buildReviewPrompt(BASE_CTX, makeOpts(), 1);
+    // At least one distinctive phrase per angle:
+    expect(prompt).toContain("implemented in a surprising way");
+    expect(prompt).toContain("edge cases and failure paths");
+    expect(prompt).toContain("over-engineering");
+    expect(prompt).toContain("do NOT need to run the test");
+    expect(prompt).toContain("input validation, injection");
+    expect(prompt).toContain("out of sync with");
+    expect(prompt).toContain("PR hygiene");
+    expect(prompt).toContain("guidance, not a limit");
+  });
+
+  test("round 2+ includes shared review-angles block", () => {
+    const prompt = buildReviewPrompt(
+      { ...BASE_CTX, iteration: 1 },
+      makeOpts(),
+      2,
+    );
+    expect(prompt).toContain("implemented in a surprising way");
+    expect(prompt).toContain("edge cases and failure paths");
+    expect(prompt).toContain("over-engineering");
+    expect(prompt).toContain("do NOT need to run the test");
+    expect(prompt).toContain("input validation, injection");
+    expect(prompt).toContain("out of sync with");
+    expect(prompt).toContain("PR hygiene");
+    expect(prompt).toContain("guidance, not a limit");
+  });
+
+  test("round 2+ includes follow-through and reasoned-pushback wording", () => {
+    const prompt = buildReviewPrompt(
+      { ...BASE_CTX, iteration: 1 },
+      makeOpts(),
+      2,
+    );
+    expect(prompt).toContain("verify that the fix is");
+    expect(prompt).toContain("pushed back with reasoning");
+    expect(prompt).toContain("genuinely unresolved");
+  });
+
+  test("both rounds include citation guidance", () => {
+    const round1 = buildReviewPrompt(BASE_CTX, makeOpts(), 1);
+    const round2 = buildReviewPrompt(
+      { ...BASE_CTX, iteration: 1 },
+      makeOpts(),
+      2,
+    );
+    for (const prompt of [round1, round2]) {
+      expect(prompt).toContain("when they help");
+      expect(prompt).toContain("appropriate level");
+    }
+  });
+
+  test("both rounds frame review as independent judgment", () => {
+    const round1 = buildReviewPrompt(BASE_CTX, makeOpts(), 1);
+    const round2 = buildReviewPrompt(
+      { ...BASE_CTX, iteration: 1 },
+      makeOpts(),
+      2,
+    );
+    for (const prompt of [round1, round2]) {
+      expect(prompt).toContain("independent judgment");
+      expect(prompt).toContain("not a mechanical checklist");
+    }
+  });
 });
 
 describe("buildAuthorFixPrompt", () => {
