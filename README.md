@@ -277,7 +277,7 @@ InputArea (e.g., "Agent is blocked: push rejected").
 | Channel | Setting | Default | Behavior |
 | ------- | ------- | ------- | -------- |
 | Terminal bell | `notifications.bell` | `true` | Emits `BEL` (`\x07`) to stdout. Most terminals flash the tab or play a sound. |
-| Desktop | `notifications.desktop` | `false` | macOS: `osascript display notification`. Linux: `notify-send`. Silently ignored if the command is unavailable or no GUI session exists. |
+| Desktop | `notifications.desktop` | `false` | macOS: terminal-aware dispatch (cmux CLI, iTerm2 OSC 9, tmux DCS passthrough, osascript fallback). Linux: `notify-send`. Silently ignored if the command is unavailable or no GUI session exists. |
 
 Both channels can be toggled independently in
 `~/.agentcoop/config.json` or through the startup wizard
