@@ -1349,6 +1349,61 @@ describe("InputArea", () => {
     expect(lastFrame()).toContain("Blocked. Choose:");
     expect(lastFrame()).not.toContain("Pipeline running...");
   });
+
+  test("choices do not overlap message in a height-constrained layout", () => {
+    const request: InputRequest = {
+      message: "ERROR: spawn E2BIG",
+      choices: [
+        { label: "Retry", value: "retry" },
+        { label: "Abort", value: "abort" },
+      ],
+    };
+    // The filler's height exceeds the container so Ink must shrink
+    // something.  Without flexShrink={0} on InputArea, the message
+    // Text gets collapsed to height 0 and choices overwrite it.
+    const filler = Array.from({ length: 20 }, (_, i) => `line-${i}`).join("\n");
+    const { lastFrame } = render(
+      <Box flexDirection="column" height={12}>
+        <Box flexGrow={1}>
+          <Text>{filler}</Text>
+        </Box>
+        <InputArea request={request} onSubmit={() => {}} />
+      </Box>,
+    );
+
+    const frame = lastFrame() ?? "";
+    const lines = frame.split("\n");
+    const msgIdx = lines.findIndex((l) => l.includes("ERROR: spawn E2BIG"));
+    const choiceIdx = lines.findIndex((l) => l.includes("Retry"));
+    expect(msgIdx).toBeGreaterThanOrEqual(0);
+    expect(choiceIdx).toBeGreaterThanOrEqual(0);
+    expect(msgIdx).toBeLessThan(choiceIdx);
+  });
+
+  test("text input does not overlap message in a height-constrained layout", () => {
+    const request: InputRequest = {
+      message: "Enter your instruction:",
+    };
+    const filler = Array.from({ length: 20 }, (_, i) => `line-${i}`).join("\n");
+    const { lastFrame } = render(
+      <Box flexDirection="column" height={12}>
+        <Box flexGrow={1}>
+          <Text>{filler}</Text>
+        </Box>
+        <InputArea request={request} onSubmit={() => {}} />
+      </Box>,
+    );
+
+    const frame = lastFrame() ?? "";
+    const lines = frame.split("\n");
+    const msgIdx = lines.findIndex((l) =>
+      l.includes("Enter your instruction:"),
+    );
+    const promptIdx = lines.findIndex((l) => l.includes(">"));
+    expect(msgIdx).toBeGreaterThanOrEqual(0);
+    expect(promptIdx).toBeGreaterThanOrEqual(0);
+    expect(msgIdx).toBeLessThan(promptIdx);
+  });
 });
 
 // ---- Deferred resolution (issue #105) ----------------------------------------
