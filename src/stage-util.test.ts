@@ -312,6 +312,58 @@ describe("mapParsedStepToResult", () => {
     );
     expect(result).toEqual({ outcome: "completed", message: "ok" });
   });
+
+  test("rejects out-of-scope keyword when validKeywords is provided", () => {
+    const result = mapParsedStepToResult(
+      { status: "completed", keyword: "COMPLETED" },
+      "All done. COMPLETED",
+      undefined,
+      ["FIXED", "DONE"],
+    );
+    expect(result.outcome).toBe("needs_clarification");
+    expect(result.validVerdicts).toEqual(["FIXED", "DONE"]);
+  });
+
+  test("accepts in-scope keyword when validKeywords is provided", () => {
+    const result = mapParsedStepToResult(
+      { status: "fixed", keyword: "FIXED" },
+      "Patched. FIXED",
+      undefined,
+      ["FIXED", "DONE"],
+    );
+    expect(result).toEqual({ outcome: "completed", message: "Patched. FIXED" });
+  });
+
+  test("attaches validVerdicts on ambiguous when validKeywords provided", () => {
+    const result = mapParsedStepToResult(
+      { status: "ambiguous", keyword: undefined },
+      "no keyword here",
+      undefined,
+      ["FIXED", "DONE"],
+    );
+    expect(result.outcome).toBe("needs_clarification");
+    expect(result.validVerdicts).toEqual(["FIXED", "DONE"]);
+  });
+
+  test("does not attach validVerdicts when validKeywords is not provided", () => {
+    const result = mapParsedStepToResult(
+      { status: "ambiguous", keyword: undefined },
+      "no keyword here",
+    );
+    expect(result.outcome).toBe("needs_clarification");
+    expect(result.validVerdicts).toBeUndefined();
+  });
+
+  test("keyword comparison is case-insensitive", () => {
+    const result = mapParsedStepToResult(
+      { status: "fixed", keyword: "FIXED" },
+      "FIXED",
+      undefined,
+      ["fixed", "done"],
+    );
+    // "FIXED" matches "fixed" (case-insensitive), so it should be accepted.
+    expect(result.outcome).toBe("completed");
+  });
 });
 
 // ---- mapResponseToResult ---------------------------------------------------
@@ -343,6 +395,63 @@ describe("mapResponseToResult", () => {
     const text = "Long response.\n\nCOMPLETED";
     const result = mapResponseToResult(text);
     expect(result.message).toBe(text);
+  });
+
+  test("rejects out-of-scope keyword with validKeywords", () => {
+    const result = mapResponseToResult("All done.\n\nCOMPLETED", undefined, [
+      "FIXED",
+      "DONE",
+    ]);
+    expect(result.outcome).toBe("needs_clarification");
+    expect(result.validVerdicts).toEqual(["FIXED", "DONE"]);
+  });
+
+  test("accepts in-scope keyword with validKeywords (exact response)", () => {
+    const result = mapResponseToResult("FIXED", undefined, ["FIXED", "DONE"]);
+    expect(result.outcome).toBe("completed");
+  });
+
+  test("rejects in-scope keyword with extra commentary when validKeywords is provided", () => {
+    const result = mapResponseToResult("Patched.\n\nFIXED", undefined, [
+      "FIXED",
+      "DONE",
+    ]);
+    expect(result.outcome).toBe("needs_clarification");
+  });
+
+  test("passes validKeywords through with overrides (exact response)", () => {
+    const result = mapResponseToResult("FIXED", { fixed: "not_approved" }, [
+      "FIXED",
+      "DONE",
+    ]);
+    expect(result.outcome).toBe("not_approved");
+  });
+
+  // -- strict parser regression tests ----------------------------------------
+
+  test("rejects two in-scope keywords in one response", () => {
+    const result = mapResponseToResult("COMPLETED then BLOCKED", undefined, [
+      "COMPLETED",
+      "BLOCKED",
+    ]);
+    expect(result.outcome).toBe("needs_clarification");
+  });
+
+  test("rejects extra commentary ending in valid keyword", () => {
+    const result = mapResponseToResult(
+      "Round 1 items are now APPROVED",
+      undefined,
+      ["APPROVED", "NOT_APPROVED"],
+    );
+    expect(result.outcome).toBe("needs_clarification");
+  });
+
+  test("accepts keyword with trailing punctuation", () => {
+    const result = mapResponseToResult("COMPLETED.", undefined, [
+      "COMPLETED",
+      "BLOCKED",
+    ]);
+    expect(result.outcome).toBe("completed");
   });
 });
 
@@ -394,6 +503,60 @@ describe("mapFixOrDoneResponse", () => {
     const text = "Fixed several items.\n\nFIXED";
     const result = mapFixOrDoneResponse(text);
     expect(result.message).toBe(text);
+  });
+
+  test("rejects out-of-scope keyword with validKeywords", () => {
+    const result = mapFixOrDoneResponse("Review passed.\n\nAPPROVED", [
+      "FIXED",
+      "DONE",
+    ]);
+    expect(result.outcome).toBe("needs_clarification");
+    expect(result.validVerdicts).toEqual(["FIXED", "DONE"]);
+  });
+
+  test("accepts DONE with validKeywords containing DONE (exact response)", () => {
+    const result = mapFixOrDoneResponse("DONE", ["FIXED", "DONE"]);
+    expect(result.outcome).toBe("completed");
+  });
+
+  test("accepts FIXED with validKeywords containing FIXED (exact response)", () => {
+    const result = mapFixOrDoneResponse("FIXED", ["FIXED", "DONE"]);
+    expect(result.outcome).toBe("not_approved");
+  });
+
+  test("rejects in-scope keyword with extra commentary when validKeywords is provided", () => {
+    const result = mapFixOrDoneResponse("All good.\n\nDONE", ["FIXED", "DONE"]);
+    expect(result.outcome).toBe("needs_clarification");
+  });
+
+  test("attaches validVerdicts on ambiguous with validKeywords", () => {
+    const result = mapFixOrDoneResponse("I looked at things.", [
+      "FIXED",
+      "DONE",
+    ]);
+    expect(result.outcome).toBe("needs_clarification");
+    expect(result.validVerdicts).toEqual(["FIXED", "DONE"]);
+  });
+
+  test("backward compatible without validKeywords", () => {
+    const result = mapFixOrDoneResponse("Patched.\n\nFIXED");
+    expect(result.outcome).toBe("not_approved");
+    expect(result.validVerdicts).toBeUndefined();
+  });
+
+  // -- strict parser regression tests ----------------------------------------
+
+  test("rejects FIXED and DONE in same response with validKeywords", () => {
+    const result = mapFixOrDoneResponse("FIXED and DONE", ["FIXED", "DONE"]);
+    expect(result.outcome).toBe("needs_clarification");
+  });
+
+  test("rejects DONE with extra commentary when validKeywords is provided", () => {
+    const result = mapFixOrDoneResponse("ISSUE_NO_CHANGES\n\nDONE", [
+      "FIXED",
+      "DONE",
+    ]);
+    expect(result.outcome).toBe("needs_clarification");
   });
 });
 

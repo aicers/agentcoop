@@ -11,7 +11,11 @@ import type {
 } from "./agent.js";
 import { t } from "./i18n/index.js";
 import type { StageOutcome, StageResult } from "./pipeline.js";
-import { type ParsedStep, parseStepStatus } from "./step-parser.js";
+import {
+  type ParsedStep,
+  parseStepStatus,
+  parseVerdictKeyword,
+} from "./step-parser.js";
 
 /**
  * Callback that receives streaming output chunks from an agent process.
@@ -131,12 +135,33 @@ export function buildErrorDetail(result: AgentResult): string {
  * supply `overrides` to remap specific statuses — for example the
  * self-check stage maps the FIXED keyword to `"not_approved"` so the
  * pipeline loops.
+ *
+ * When `validKeywords` is provided, a parsed keyword that is not in the
+ * set is rejected as `needs_clarification` with the valid set attached
+ * to the result for scoped clarification prompts.
  */
 export function mapParsedStepToResult(
   parsed: ParsedStep,
   responseText: string,
   overrides?: Partial<Record<ParsedStep["status"], StageOutcome>>,
+  validKeywords?: readonly string[],
 ): StageResult {
+  // Reject out-of-scope keywords when a valid set is provided.
+  if (
+    validKeywords &&
+    validKeywords.length > 0 &&
+    parsed.keyword !== undefined
+  ) {
+    const upper = validKeywords.map((k) => k.toUpperCase());
+    if (!upper.includes(parsed.keyword.toUpperCase())) {
+      return {
+        outcome: "needs_clarification",
+        message: responseText,
+        validVerdicts: validKeywords,
+      };
+    }
+  }
+
   const outcomeMap: Record<ParsedStep["status"], StageOutcome> = {
     completed: "completed",
     fixed: "completed",
@@ -147,10 +172,18 @@ export function mapParsedStepToResult(
     ...overrides,
   };
 
-  return {
+  const result: StageResult = {
     outcome: outcomeMap[parsed.status],
     message: responseText,
   };
+
+  // Attach valid keywords when the outcome is ambiguous so the pipeline
+  // engine can build a scoped clarification prompt.
+  if (result.outcome === "needs_clarification" && validKeywords) {
+    result.validVerdicts = validKeywords;
+  }
+
+  return result;
 }
 
 /**
@@ -324,15 +357,40 @@ export async function sendFollowUp(
 /**
  * Convenience: parse response text and convert to a `StageResult` in one
  * call.
+ *
+ * When `validKeywords` is provided, the strict verdict parser is used:
+ * the response must contain exactly one valid keyword with no extra
+ * commentary.  Responses with multiple valid keywords, out-of-scope
+ * keywords, or significant extra text are rejected as
+ * `needs_clarification`.
  */
 export function mapResponseToResult(
   responseText: string,
   overrides?: Partial<Record<ParsedStep["status"], StageOutcome>>,
+  validKeywords?: readonly string[],
 ): StageResult {
+  if (validKeywords && validKeywords.length > 0) {
+    const verdict = parseVerdictKeyword(responseText, validKeywords);
+    if (verdict.keyword === undefined) {
+      return {
+        outcome: "needs_clarification",
+        message: responseText,
+        validVerdicts: validKeywords,
+      };
+    }
+    // Feed the matched keyword through parseStepStatus for status mapping.
+    return mapParsedStepToResult(
+      parseStepStatus(verdict.keyword),
+      responseText,
+      overrides,
+      validKeywords,
+    );
+  }
   return mapParsedStepToResult(
     parseStepStatus(responseText),
     responseText,
     overrides,
+    validKeywords,
   );
 }
 
@@ -383,15 +441,50 @@ export function buildDocConsistencyInstructions(indent = ""): string {
  *
  * Shared by the self-check (stage 3) and test-plan verification
  * (stage 6) handlers.
+ *
+ * When `validKeywords` is provided, the strict verdict parser is used:
+ * the response must contain exactly one valid keyword with no extra
+ * commentary.
  */
-export function mapFixOrDoneResponse(responseText: string): StageResult {
-  const parsed = parseStepStatus(responseText);
-
-  if (parsed.status === "fixed" && parsed.keyword === "FIXED") {
-    return mapParsedStepToResult(parsed, responseText, {
-      fixed: "not_approved",
-    });
+export function mapFixOrDoneResponse(
+  responseText: string,
+  validKeywords?: readonly string[],
+): StageResult {
+  if (validKeywords && validKeywords.length > 0) {
+    const verdict = parseVerdictKeyword(responseText, validKeywords);
+    if (verdict.keyword === undefined) {
+      return {
+        outcome: "needs_clarification",
+        message: responseText,
+        validVerdicts: validKeywords,
+      };
+    }
+    // Feed the matched keyword through parseStepStatus for status mapping.
+    const parsed = parseStepStatus(verdict.keyword);
+    if (parsed.status === "fixed" && parsed.keyword === "FIXED") {
+      return mapParsedStepToResult(
+        parsed,
+        responseText,
+        { fixed: "not_approved" },
+        validKeywords,
+      );
+    }
+    return mapParsedStepToResult(
+      parsed,
+      responseText,
+      undefined,
+      validKeywords,
+    );
   }
 
-  return mapParsedStepToResult(parsed, responseText);
+  const parsed = parseStepStatus(responseText);
+  if (parsed.status === "fixed" && parsed.keyword === "FIXED") {
+    return mapParsedStepToResult(
+      parsed,
+      responseText,
+      { fixed: "not_approved" },
+      validKeywords,
+    );
+  }
+  return mapParsedStepToResult(parsed, responseText, undefined, validKeywords);
 }

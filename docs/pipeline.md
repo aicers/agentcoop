@@ -10,7 +10,7 @@ the [README](../README.md).
 - [Pipeline overview](#pipeline-overview)
 - [Prompt design principles](#prompt-design-principles)
   - [Self-contained context](#self-contained-context)
-  - [Explicit completion keywords](#explicit-completion-keywords)
+  - [Two-step verdict pattern](#two-step-verdict-pattern)
   - [No confirmation requests](#no-confirmation-requests)
   - [Service-aware instructions](#service-aware-instructions)
   - [PR body as living documentation](#pr-body-as-living-documentation)
@@ -52,21 +52,52 @@ never need to search for context — it is handed to them. This
 avoids wasted tokens on exploration and reduces the chance of the
 agent working against the wrong branch or issue.
 
-### Explicit completion keywords
+### Two-step verdict pattern
 
-Each stage ends with a strict keyword contract. The orchestrator
-parses the agent's final response for a specific keyword to
-determine the next action. This eliminates ambiguity — the
-orchestrator does not try to infer intent from free-form text.
+Every stage that needs to determine an outcome follows a consistent
+two-step pattern:
 
-| Step type | Keywords | Proceed | Loop/Retry |
-| --------- | -------- | ------- | ---------- |
-| Implementation | `COMPLETED` / `BLOCKED` | `COMPLETED` | `BLOCKED` -> user chooses |
-| Loops (self-check, test plan) | `FIXED` / `DONE` | `DONE` | `FIXED` -> repeat |
-| One-shot (PR, squash) | `COMPLETED` / `BLOCKED` | `COMPLETED` | `BLOCKED` -> user chooses |
-| Review approval | `APPROVED` / `NOT_APPROVED` | `APPROVED` | `NOT_APPROVED` -> repeat |
-| Issue sync | `ISSUE_NO_CHANGES` / `ISSUE_UPDATED` / `ISSUE_COMMENTED` | any | best-effort |
-| PR finalization | `PR_FINALIZED` | `PR_FINALIZED` | missing -> clarification |
+1. **Work step** — the agent performs its task and responds freely.
+   This response is **not** parsed for keywords.
+2. **Verdict follow-up** — a dedicated follow-up prompt asks for
+   **only** the verdict keyword.  The keyword is parsed from this
+   constrained response.
+
+Each verdict call site declares its valid keywords and passes them
+to a strict verdict parser (`parseVerdictKeyword`).  The parser
+requires the response to be essentially just the keyword — it
+rejects responses with extra commentary, multiple valid keywords,
+or out-of-scope keywords.  When the parser rejects a response, a
+single clarification retry is attempted listing only the valid
+keywords for that substep.
+
+The canonical verdict prompt template:
+
+```text
+<Context sentence about what just happened.>
+Respond with exactly one of the following keywords:
+
+- KEYWORD_A — <when to use>
+- KEYWORD_B — <when to use>
+
+Do not include any other commentary — just the keyword.
+```
+
+#### Keyword contracts per substep
+
+| Substep | Valid keywords | Proceed | Loop/Retry |
+| ------- | -------------- | ------- | ---------- |
+| Implementation check | `COMPLETED` / `BLOCKED` | `COMPLETED` | `BLOCKED` → user chooses |
+| Self-check verdict | `FIXED` / `DONE` | `DONE` | `FIXED` → repeat |
+| Test plan verdict | `FIXED` / `DONE` | `DONE` | `FIXED` → repeat |
+| PR creation check | `COMPLETED` / `BLOCKED` | `COMPLETED` | `BLOCKED` → user chooses |
+| Squash check | `COMPLETED` / `BLOCKED` | `COMPLETED` | `BLOCKED` → user chooses |
+| Reviewer verdict | `APPROVED` / `NOT_APPROVED` | `APPROVED` | `NOT_APPROVED` → repeat |
+| Author completion | `COMPLETED` / `BLOCKED` | `COMPLETED` | `BLOCKED` → user chooses |
+| Unresolved summary | `NONE` / `COMPLETED` | either | — |
+| PR finalization | `PR_FINALIZED` | `PR_FINALIZED` | missing → clarification → PR body consistency check → blocked |
+| Issue sync | `ISSUE_NO_CHANGES` / `ISSUE_UPDATED` / `ISSUE_COMMENTED` | any | clarification retry; best-effort |
+| Rebase verdict | `COMPLETED` / `BLOCKED` | `COMPLETED` | `BLOCKED` → manual |
 
 ### No confirmation requests
 
@@ -143,19 +174,42 @@ at arbitrary times.
 
 ### Ambiguous response clarification
 
-When an agent's response does not end with a recognized status
-keyword, the orchestrator sends a fixed clarification prompt
-rather than re-running the stage (which could be side-effectful).
-The same template is used in two contexts:
+When a verdict follow-up does not contain a recognized keyword, the
+orchestrator sends a **substep-scoped** clarification prompt listing
+only the keywords valid for that specific substep.  This is used in
+two contexts:
 
-- **Within-stage session resume** (Create PR, Squash) — the
-  orchestrator resumes the existing agent session with the
-  clarification prompt.
-- **Pipeline loop injection** — the prompt is set as
-  `userInstruction` and appears as `## Additional feedback`
-  on the next iteration.
+- **Within-stage session resume** (all stages with verdict
+  follow-ups) — the orchestrator resumes the existing agent
+  session with the scoped clarification prompt.  If the retry
+  also returns an ambiguous response, the stage uses a
+  **conservative fallback** instead of bubbling
+  `needs_clarification` to the pipeline engine (which would
+  re-run side-effectful work steps or route the clarification
+  to the wrong agent in multi-agent stages).  The fallback
+  depends on the substep's keyword contract:
+  - *FIXED / DONE* loops (self-check, test-plan): `not_approved`
+    — the pipeline loops the stage again.
+  - *COMPLETED / BLOCKED* substeps (implement, author
+    completion, create-pr, squash): `blocked` — the user is
+    asked how to proceed.
+- **Pipeline loop injection** — used only when the ambiguous
+  verdict comes from the agent that receives `userInstruction`
+  on the next iteration (e.g. the reviewer verdict in the
+  review stage).  `StageResult.validVerdicts` carries the
+  keyword set from the stage handler to the pipeline engine.
 
-The clarification prompt:
+When `validVerdicts` is provided, the clarification prompt:
+
+```text
+Your previous response did not contain a clear verdict keyword.
+Respond with exactly one of the following keywords: KEYWORD_A, KEYWORD_B
+
+Do not include any other commentary — just the keyword.
+```
+
+When no `validVerdicts` are set (legacy fallback), all six keywords
+are listed:
 
 ```text
 Your previous response did not end with a clear status keyword.
@@ -296,18 +350,28 @@ item, briefly note whether it passes or needs attention.
    them.  Do not refactor unrelated existing code.
 ```
 
-**Fix-or-done prompt:**
+**Fix-or-done work prompt:**
 
 ```text
 Based on your self-check above, decide what to do next.
 
-- If you found issues that need fixing, fix them now and end your
-  response with the keyword FIXED.
-- If everything looks good and no changes are needed, end your
-  response with the keyword DONE.
+- If you found issues that need fixing, fix them now.
+- If everything looks good and no changes are needed, you are done.
 ```
 
-**Loop behavior:** `FIXED` -> repeat self-check. `DONE` -> run
+**Fix-or-done verdict follow-up:**
+
+```text
+You have finished the self-check pass.
+Respond with exactly one of the following keywords:
+
+- FIXED — if you found and fixed issues
+- DONE — if everything looks good and no changes were needed
+
+Do not include any other commentary — just the keyword.
+```
+
+**Loop behavior:** `FIXED` → repeat self-check. `DONE` → run
 issue sync, then proceed. Default auto-budget: 5 iterations
 (configurable via `selfCheckAutoIterations`). When the budget is
 exhausted, the user is asked whether to continue.
@@ -342,23 +406,27 @@ implementation against the original issue description below.
    `gh issue comment {number} --repo {owner}/{repo} --body "..."`
    Do NOT modify the issue description for major changes.
 5. If there are no discrepancies, do nothing.
-
-## Response format
-
-End your response with one of the following:
-
-- If no changes were needed:
-  `ISSUE_NO_CHANGES`
-- If you updated the issue (minor):
-  `ISSUE_UPDATED: <brief description of what changed>`
-- If you added a comment (major):
-  `ISSUE_COMMENTED: <brief description of the discrepancy>`
-
-You may include both ISSUE_UPDATED and ISSUE_COMMENTED if there
-were both minor and major discrepancies.
 ```
 
-Issue sync is best-effort — if it fails, the pipeline continues.
+**Issue sync verdict follow-up:**
+
+```text
+Report what issue sync actions you performed.
+Respond with one or more of the following on separate lines:
+
+- ISSUE_NO_CHANGES — if no changes were needed
+- ISSUE_UPDATED: <brief description> — if you updated the issue
+- ISSUE_COMMENTED: <brief description> — if you added a comment
+
+Do not include any other commentary.
+```
+
+The verdict response is strictly parsed: every non-blank line must
+match one of the recognised keyword patterns.  If the response
+contains extra commentary, missing colons, or unrecognised lines,
+a single clarification retry is attempted.  Issue sync is
+best-effort — if the verdict is still malformed after the retry,
+or if any step fails, the pipeline continues.
 
 ---
 
@@ -410,15 +478,17 @@ result and respond with exactly one of the following keywords:
 - COMPLETED — if the pull request was created successfully
 - BLOCKED — if you could not create the PR and need user intervention
 
-If BLOCKED, add a brief reason on the next line explaining what
-went wrong (e.g. auth failure, push rejected, PR already exists).
+Do not include any other commentary — just the keyword.
 ```
 
 **Ambiguous response handling:** If the completion check response
 does not clearly match `COMPLETED` or `BLOCKED`, the orchestrator
 resumes the same session with a clarification prompt (rather than
 re-running the PR creation step, which would be side-effectful).
-If clarification also fails, the response is shown to the user.
+If clarification also fails, the handler performs a post-condition
+check using `findPrNumber` to verify whether a PR was actually
+created.  If the PR exists, the stage completes; otherwise it
+reports `BLOCKED`.
 
 **Outcome handling:** PR creation is a required step
 (`requiresArtifact: true`). If `BLOCKED`, only **Instruct** and
@@ -555,7 +625,7 @@ You are verifying the test plan for the following GitHub issue.
 6. Make sure CI is still passing after any changes.
 ```
 
-**Self-check prompt:**
+**Self-check work prompt:**
 
 ```text
 Based on your verification above, evaluate the current state.
@@ -566,14 +636,23 @@ Based on your verification above, evaluate the current state.
   recursively) when applicable.
 - Is CI still passing?
 
-If you found and fixed issues during verification, end your
-response with the keyword FIXED.
-
-If everything is verified and passing with no changes needed,
-end your response with the keyword DONE.
+If you found issues during verification, fix them now.
+If everything is verified and passing, you are done.
 ```
 
-**Loop behavior:** `FIXED` -> repeat the verification loop.
+**Test plan verdict follow-up:**
+
+```text
+You have finished the test plan verification pass.
+Respond with exactly one of the following keywords:
+
+- FIXED — if you found and fixed issues
+- DONE — if everything is verified and passing with no changes needed
+
+Do not include any other commentary — just the keyword.
+```
+
+**Loop behavior:** `FIXED` → repeat the verification loop.
 `DONE` -> proceed to review. Default auto-budget: 3 iterations.
 
 ---
@@ -641,9 +720,18 @@ You are reviewing a pull request for the following GitHub issue.
    `**[Reviewer Round {n}]**`. Be specific. Cite file paths and
    line numbers when they help; for broader concerns, explain
    the concern at the appropriate level.
-4. End your response with one of these keywords:
-   - APPROVED — if the changes are ready to merge
-   - NOT_APPROVED — if changes are needed
+```
+
+**Reviewer verdict follow-up** (sent after the review comment):
+
+```text
+You have posted your review comment.
+Respond with exactly one of the following keywords:
+
+- APPROVED — if the changes are ready to merge
+- NOT_APPROVED — if changes are needed
+
+Do not include any other commentary — just the keyword.
 ```
 
 #### Review prompt — Agent B (round 2+)
@@ -665,47 +753,17 @@ step:
      or does not address the concern, keep the item open.
    - Only carry forward items that remain genuinely unresolved.
 3. Review the updated diff against the issue.
-   Your job is an
-   independent judgment on whether this is the right change
-   and whether it is built well — not a mechanical checklist.
-   Read the code, form an opinion, and explain it with
-   concrete references where they help anchor the point.
-
-   Common review angles include:
-   - Whether the approach actually solves the issue, and
-     whether any requirement appears to be dropped, only
-     partially implemented, or implemented in a surprising way.
-   - Correctness on edge cases and failure paths, not just the
-     happy path.
-   - Design quality: readability, appropriate abstractions,
-     avoiding over-engineering, unrelated drive-by changes,
-     dead code, or stray debug output.
-   - Test presence and meaningfulness — especially whether the
-     tests exercise the new behaviour in a way that would have
-     failed before the change. You do NOT need to run the test
-     suite or re-check CI; assume those are already handled and
-     focus on whether the tests are the right tests.
-   - Error handling, security (input validation, injection,
-     secrets, permissions), and obvious performance issues.
-   - Documentation or comments that now appear out of sync with
-     the code.
-   - PR hygiene if it appears off: issue linkage (`Closes #N`
-     vs. `Part of #N` with `## Not addressed` when partial) and
-     a `## Test plan` checklist.
-
-   The list above is guidance, not a limit. If something feels
-   off for any other reason — architectural, stylistic, product,
-   or subtle — raise it.
+   [same review angles block as round 1]
 4. Post your follow-up review as a PR comment prefixed with
    `**[Reviewer Round {n}]**`. Include any still-unresolved
    prior items and any new findings from this round. Be
    specific. Cite file paths and line numbers when they help;
    for broader concerns, explain the concern at the
    appropriate level.
-5. End your response with one of these keywords:
-   - APPROVED — if the changes are ready to merge
-   - NOT_APPROVED — if changes are needed
 ```
+
+The same reviewer verdict follow-up is sent after the round 2+
+review comment.
 
 #### Author fix prompt — Agent A (round N)
 
@@ -775,16 +833,31 @@ next review round begins.
 When the review loop ends (either because B approves or the
 auto-budget is exhausted), B is asked:
 
+**Work step:**
+
 ```text
 The review loop has ended.  Please check whether there are any
 unresolved items from this review cycle.
 
 - If there are unresolved items, post a PR comment prefixed with
   `**[Reviewer Unresolved Round {n}]**` listing each unresolved item.
-  Then end your response with COMPLETED.
-- If there are no unresolved items, respond with exactly: NONE
+- If there are no unresolved items, simply confirm that there is
+  nothing left to address.
 ```
 
+**Verdict follow-up:**
+
+```text
+Respond with exactly one of the following keywords:
+
+- NONE — if there are no unresolved items
+- COMPLETED — if you posted the unresolved items comment
+
+Do not include any other commentary — just the keyword.
+```
+
+If the verdict is ambiguous or contains an out-of-scope keyword,
+the orchestrator retries once with a scoped clarification prompt.
 If B posts an unresolved summary, the orchestrator shows it to
 the user before asking whether to continue (at budget limit) or
 before reporting completion (on approval).
@@ -822,11 +895,28 @@ state of the implementation.
    were not implemented and why.
 4. If the reference or "## Not addressed" section needs to change,
    update the PR body using `gh pr edit --body "..."`.
-5. End your response with PR_FINALIZED.
+```
+
+**PR finalization verdict follow-up:**
+
+```text
+You have finished verifying the PR body.
+Respond with exactly one of the following keywords:
+
+- PR_FINALIZED — if the PR body is now accurate
+
+Do not include any other commentary — just the keyword.
 ```
 
 Agent A must respond with `PR_FINALIZED` for the stage to
-complete.
+complete. If the verdict is ambiguous after the clarification
+retry, the handler verifies the PR body directly for
+consistency: `Closes #N` must not have a contradictory
+`## Not addressed` section, and `Part of #N` must include one.
+If the body is consistent the stage proceeds as completed;
+otherwise it returns `blocked` so the user can intervene. This
+avoids relying on the squash stage to catch a bad body, since
+squash short-circuits on single-commit branches.
 
 **Loop behavior:** Default auto-budget: 5 rounds (configurable
 via `reviewAutoRounds`). When the budget is exhausted, the user
@@ -887,12 +977,14 @@ and respond with exactly one of the following keywords:
 - COMPLETED — if the commits were squashed and force-pushed
 - BLOCKED — if you could not squash and need user intervention
 
-If BLOCKED, add a brief reason on the next line explaining what
-went wrong.
+Do not include any other commentary — just the keyword.
 ```
 
 **Ambiguous response handling:** Same internal clarification
-retry pattern as stage 3 (Create PR).
+retry pattern as stage 3 (Create PR).  If clarification also fails,
+the handler re-checks the branch commit count to verify whether the
+squash actually happened.  If the count decreased, the stage
+completes; otherwise it reports `BLOCKED`.
 
 **Post-squash CI:** After a successful squash and force-push, the
 orchestrator polls CI and invokes Agent A to fix failures if
@@ -1036,10 +1128,18 @@ You are rebasing a feature branch onto the latest main.
 IMPORTANT: If you cannot resolve conflicts cleanly or if the
 build/tests fail after resolution, do NOT push. Instead, abort
 the rebase (`git rebase --abort`) and report failure.
+```
 
-When you are done, end your response with exactly one of:
-- COMPLETED — if the rebase succeeded and was force-pushed.
-- BLOCKED — if you could not resolve conflicts or tests failed.
+**Verdict follow-up:**
+
+```text
+You have finished the rebase attempt.
+Respond with exactly one of the following keywords:
+
+- COMPLETED — if the rebase succeeded and was force-pushed
+- BLOCKED — if you could not resolve conflicts or tests failed
+
+Do not include any other commentary — just the keyword.
 ```
 
 **Rebase constraints and rationale:**

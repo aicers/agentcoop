@@ -3,8 +3,10 @@ import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
 import type { StageContext } from "./pipeline.js";
 import {
   buildTestPlanSelfCheckPrompt,
+  buildTestPlanVerdictPrompt,
   buildTestPlanVerifyPrompt,
   createTestPlanStageHandler,
+  TEST_PLAN_VERDICT_KEYWORDS,
   type TestPlanStageOptions,
 } from "./stage-testplan.js";
 
@@ -13,7 +15,7 @@ import {
 function makeResult(overrides: Partial<AgentResult> = {}): AgentResult {
   return {
     sessionId: "sess-1",
-    responseText: "All items verified.\n\nDONE",
+    responseText: "All items verified.",
     status: "success",
     errorType: undefined,
     stderrText: "",
@@ -31,14 +33,22 @@ function makeStream(result: AgentResult): AgentStream {
   };
 }
 
+/**
+ * Create a mock agent that returns the given results in sequence.
+ * The first call to `invoke` returns `invokeResult`.
+ * Subsequent calls to `resume` return from `resumeResults` in order.
+ */
 function makeAgent(
-  verifyResult: AgentResult,
-  checkResult?: AgentResult,
+  invokeResult: AgentResult,
+  ...resumeResults: AgentResult[]
 ): AgentAdapter {
-  const invoke = vi.fn().mockReturnValue(makeStream(verifyResult));
-  const resume = vi
-    .fn()
-    .mockReturnValue(makeStream(checkResult ?? verifyResult));
+  const invoke = vi.fn().mockReturnValue(makeStream(invokeResult));
+  let resumeCall = 0;
+  const resume = vi.fn().mockImplementation(() => {
+    const r = resumeResults[resumeCall] ?? invokeResult;
+    resumeCall++;
+    return makeStream(r);
+  });
   return { invoke, resume };
 }
 
@@ -57,7 +67,11 @@ function makeOpts(
   overrides: Partial<TestPlanStageOptions> = {},
 ): TestPlanStageOptions {
   return {
-    agent: makeAgent(makeResult()),
+    agent: makeAgent(
+      makeResult(),
+      makeResult(),
+      makeResult({ responseText: "DONE" }),
+    ),
     issueTitle: "Fix the widget",
     issueBody: "The widget is broken.",
     ...overrides,
@@ -142,10 +156,13 @@ describe("buildTestPlanVerifyPrompt", () => {
 // ---- buildTestPlanSelfCheckPrompt ------------------------------------------
 
 describe("buildTestPlanSelfCheckPrompt", () => {
-  test("mentions FIXED and DONE keywords", () => {
+  test("mentions fix and done actions without verdict keywords", () => {
     const prompt = buildTestPlanSelfCheckPrompt();
-    expect(prompt).toContain("FIXED");
-    expect(prompt).toContain("DONE");
+    expect(prompt).toContain("fix them now");
+    expect(prompt).toContain("you are done");
+    // Should NOT contain the verdict keywords — those are in the verdict prompt
+    expect(prompt).not.toContain("FIXED");
+    expect(prompt).not.toContain("DONE");
   });
 
   test("mentions CI status check", () => {
@@ -160,6 +177,25 @@ describe("buildTestPlanSelfCheckPrompt", () => {
   });
 });
 
+// ---- buildTestPlanVerdictPrompt --------------------------------------------
+
+describe("buildTestPlanVerdictPrompt", () => {
+  test("mentions FIXED and DONE keywords", () => {
+    const prompt = buildTestPlanVerdictPrompt();
+    expect(prompt).toContain("FIXED");
+    expect(prompt).toContain("DONE");
+  });
+});
+
+// ---- TEST_PLAN_VERDICT_KEYWORDS --------------------------------------------
+
+describe("TEST_PLAN_VERDICT_KEYWORDS", () => {
+  test("contains FIXED and DONE", () => {
+    expect(TEST_PLAN_VERDICT_KEYWORDS).toContain("FIXED");
+    expect(TEST_PLAN_VERDICT_KEYWORDS).toContain("DONE");
+  });
+});
+
 // ---- createTestPlanStageHandler --------------------------------------------
 
 describe("createTestPlanStageHandler", () => {
@@ -169,15 +205,22 @@ describe("createTestPlanStageHandler", () => {
     expect(stage.name).toBe("Test plan verification");
   });
 
-  // -- two-step flow ---------------------------------------------------------
+  // -- three-step flow -------------------------------------------------------
 
-  test("invokes agent for verification then resumes for self-check", async () => {
+  test("invokes agent for verification then resumes for self-check and verdict", async () => {
     const verifyResult = makeResult({
       sessionId: "sess-verify",
       responseText: "Verified items.",
     });
-    const checkResult = makeResult({ responseText: "All good.\n\nDONE" });
-    const agent = makeAgent(verifyResult, checkResult);
+    const checkResult = makeResult({
+      sessionId: "sess-check",
+      responseText: "All good.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "DONE",
+    });
+    const agent = makeAgent(verifyResult, checkResult, verdictResult);
     const stage = createTestPlanStageHandler(makeOpts({ agent }));
 
     await stage.handler(BASE_CTX);
@@ -185,8 +228,17 @@ describe("createTestPlanStageHandler", () => {
     expect(agent.invoke).toHaveBeenCalledWith(expect.any(String), {
       cwd: "/tmp/wt",
     });
-    expect(agent.resume).toHaveBeenCalledWith(
+    // Two resume calls: self-check work + verdict
+    expect(agent.resume).toHaveBeenCalledTimes(2);
+    expect(agent.resume).toHaveBeenNthCalledWith(
+      1,
       "sess-verify",
+      expect.any(String),
+      { cwd: "/tmp/wt" },
+    );
+    expect(agent.resume).toHaveBeenNthCalledWith(
+      2,
+      "sess-check",
       expect.any(String),
       { cwd: "/tmp/wt" },
     );
@@ -202,66 +254,189 @@ describe("createTestPlanStageHandler", () => {
 
   // -- outcome mapping: DONE vs FIXED ----------------------------------------
 
-  test("returns completed when agent says DONE", async () => {
+  test("returns completed when verdict says DONE", async () => {
     const verifyResult = makeResult({ sessionId: "sess-1" });
     const checkResult = makeResult({
-      responseText: "Everything is fine.\n\nDONE",
+      sessionId: "sess-check",
+      responseText: "Everything is fine.",
     });
-    const agent = makeAgent(verifyResult, checkResult);
+    const verdictResult = makeResult({ responseText: "DONE" });
+    const agent = makeAgent(verifyResult, checkResult, verdictResult);
     const stage = createTestPlanStageHandler(makeOpts({ agent }));
     const result = await stage.handler(BASE_CTX);
     expect(result.outcome).toBe("completed");
   });
 
-  test("returns not_approved when agent says FIXED (triggers loop)", async () => {
+  test("returns not_approved when verdict says FIXED (triggers loop)", async () => {
     const verifyResult = makeResult({ sessionId: "sess-1" });
     const checkResult = makeResult({
-      responseText: "Fixed a checklist item.\n\nFIXED",
+      sessionId: "sess-check",
+      responseText: "Fixed a checklist item.",
     });
-    const agent = makeAgent(verifyResult, checkResult);
+    const verdictResult = makeResult({ responseText: "FIXED" });
+    const agent = makeAgent(verifyResult, checkResult, verdictResult);
     const stage = createTestPlanStageHandler(makeOpts({ agent }));
     const result = await stage.handler(BASE_CTX);
     expect(result.outcome).toBe("not_approved");
   });
 
-  test("returns completed when agent says COMPLETED", async () => {
+  test("out-of-scope keyword COMPLETED → clarification retry → fallback to not_approved", async () => {
     const verifyResult = makeResult({ sessionId: "sess-1" });
-    const checkResult = makeResult({ responseText: "All set.\n\nCOMPLETED" });
-    const agent = makeAgent(verifyResult, checkResult);
+    const checkResult = makeResult({
+      sessionId: "sess-check",
+      responseText: "All set.",
+    });
+    const verdictResult = makeResult({ responseText: "COMPLETED" });
+    const agent = makeAgent(verifyResult, checkResult, verdictResult);
     const stage = createTestPlanStageHandler(makeOpts({ agent }));
     const result = await stage.handler(BASE_CTX);
+    expect(result.outcome).toBe("not_approved");
+  });
+
+  test("out-of-scope keyword BLOCKED → clarification retry → fallback to not_approved", async () => {
+    const verifyResult = makeResult({ sessionId: "sess-1" });
+    const checkResult = makeResult({
+      sessionId: "sess-check",
+      responseText: "Cannot verify.",
+    });
+    const verdictResult = makeResult({ responseText: "BLOCKED" });
+    const agent = makeAgent(verifyResult, checkResult, verdictResult);
+    const stage = createTestPlanStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+    expect(result.outcome).toBe("not_approved");
+  });
+
+  test("out-of-scope keyword NOT_APPROVED → clarification retry → fallback to not_approved", async () => {
+    const verifyResult = makeResult({ sessionId: "sess-1" });
+    const checkResult = makeResult({
+      sessionId: "sess-check",
+      responseText: "Not right.",
+    });
+    const verdictResult = makeResult({ responseText: "NOT_APPROVED" });
+    const agent = makeAgent(verifyResult, checkResult, verdictResult);
+    const stage = createTestPlanStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+    expect(result.outcome).toBe("not_approved");
+  });
+
+  test("ambiguous verdict response → clarification retry → fallback to not_approved", async () => {
+    const verifyResult = makeResult({ sessionId: "sess-1" });
+    const checkResult = makeResult({
+      sessionId: "sess-check",
+      responseText: "I looked at things.",
+    });
+    const verdictResult = makeResult({ responseText: "I looked at things." });
+    const agent = makeAgent(verifyResult, checkResult, verdictResult);
+    const stage = createTestPlanStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+    expect(result.outcome).toBe("not_approved");
+  });
+
+  // -- internal clarification retry ------------------------------------------
+
+  test("ambiguous verdict → internal clarification → DONE", async () => {
+    const verifyResult = makeResult({ sessionId: "sess-1" });
+    const checkResult = makeResult({
+      sessionId: "sess-check",
+      responseText: "Verified.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "I think it looks good",
+    });
+    const clarifiedResult = makeResult({ responseText: "DONE" });
+    const agent = makeAgent(
+      verifyResult,
+      checkResult,
+      verdictResult,
+      clarifiedResult,
+    );
+    const stage = createTestPlanStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+
     expect(result.outcome).toBe("completed");
+    // (self-check + verdict + clarification)
+    expect(agent.resume).toHaveBeenCalledTimes(3);
   });
 
-  test("returns blocked when agent says BLOCKED", async () => {
+  test("out-of-scope COMPLETED → internal clarification → FIXED", async () => {
     const verifyResult = makeResult({ sessionId: "sess-1" });
     const checkResult = makeResult({
-      responseText: "Cannot verify.\n\nBLOCKED",
+      sessionId: "sess-check",
+      responseText: "Fixed things.",
     });
-    const agent = makeAgent(verifyResult, checkResult);
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "COMPLETED",
+    });
+    const clarifiedResult = makeResult({ responseText: "FIXED" });
+    const agent = makeAgent(
+      verifyResult,
+      checkResult,
+      verdictResult,
+      clarifiedResult,
+    );
     const stage = createTestPlanStageHandler(makeOpts({ agent }));
     const result = await stage.handler(BASE_CTX);
-    expect(result.outcome).toBe("blocked");
-  });
 
-  test("returns not_approved on NOT_APPROVED", async () => {
-    const verifyResult = makeResult({ sessionId: "sess-1" });
-    const checkResult = makeResult({
-      responseText: "Not right.\n\nNOT_APPROVED",
-    });
-    const agent = makeAgent(verifyResult, checkResult);
-    const stage = createTestPlanStageHandler(makeOpts({ agent }));
-    const result = await stage.handler(BASE_CTX);
     expect(result.outcome).toBe("not_approved");
+    expect(agent.resume).toHaveBeenCalledTimes(3);
   });
 
-  test("returns needs_clarification on ambiguous response", async () => {
+  test("ambiguous verdict → clarification also ambiguous → fallback to not_approved", async () => {
     const verifyResult = makeResult({ sessionId: "sess-1" });
-    const checkResult = makeResult({ responseText: "I looked at things." });
-    const agent = makeAgent(verifyResult, checkResult);
+    const checkResult = makeResult({
+      sessionId: "sess-check",
+      responseText: "Verified.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "Looks fine",
+    });
+    const stillAmbiguous = makeResult({ responseText: "It is fine" });
+    const agent = makeAgent(
+      verifyResult,
+      checkResult,
+      verdictResult,
+      stillAmbiguous,
+    );
     const stage = createTestPlanStageHandler(makeOpts({ agent }));
     const result = await stage.handler(BASE_CTX);
-    expect(result.outcome).toBe("needs_clarification");
+
+    // Falls back to not_approved so the pipeline loops (or restarts
+    // from an earlier stage) rather than advancing past an uncertain
+    // verdict.
+    expect(result.outcome).toBe("not_approved");
+    expect(agent.resume).toHaveBeenCalledTimes(3);
+  });
+
+  test("clarification retry error → returns error", async () => {
+    const verifyResult = makeResult({ sessionId: "sess-1" });
+    const checkResult = makeResult({
+      sessionId: "sess-check",
+      responseText: "Verified.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "I think so",
+    });
+    const errorResult = makeResult({
+      status: "error",
+      errorType: "execution_error",
+      stderrText: "clarify crash",
+      responseText: "",
+    });
+    const agent = makeAgent(
+      verifyResult,
+      checkResult,
+      verdictResult,
+      errorResult,
+    );
+    const stage = createTestPlanStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("clarify crash");
   });
 
   // -- error handling --------------------------------------------------------
@@ -314,15 +489,39 @@ describe("createTestPlanStageHandler", () => {
     expect(result.message).toContain("test plan self-check");
   });
 
-  // -- message preservation --------------------------------------------------
-
-  test("preserves self-check response text in message", async () => {
-    const text = "Fixed several checklist items.\n\nFIXED";
+  test("returns error when verdict follow-up fails", async () => {
     const verifyResult = makeResult({ sessionId: "sess-1" });
-    const checkResult = makeResult({ responseText: text });
-    const agent = makeAgent(verifyResult, checkResult);
+    const checkResult = makeResult({
+      sessionId: "sess-check",
+      responseText: "Did some work.",
+    });
+    const verdictResult = makeResult({
+      status: "error",
+      errorType: "execution_error",
+      stderrText: "verdict crash",
+      responseText: "",
+    });
+    const agent = makeAgent(verifyResult, checkResult, verdictResult);
     const stage = createTestPlanStageHandler(makeOpts({ agent }));
     const result = await stage.handler(BASE_CTX);
-    expect(result.message).toBe(text);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("verdict crash");
+    expect(result.message).toContain("test plan verdict");
+  });
+
+  // -- message preservation --------------------------------------------------
+
+  test("preserves verdict response text in message", async () => {
+    const verifyResult = makeResult({ sessionId: "sess-1" });
+    const checkResult = makeResult({
+      sessionId: "sess-check",
+      responseText: "Fixed several checklist items.",
+    });
+    const verdictResult = makeResult({ responseText: "FIXED" });
+    const agent = makeAgent(verifyResult, checkResult, verdictResult);
+    const stage = createTestPlanStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+    expect(result.message).toBe("FIXED");
   });
 });

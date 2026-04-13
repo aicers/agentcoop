@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { buildClarificationPrompt, parseStepStatus } from "./step-parser.js";
+import {
+  buildClarificationPrompt,
+  parseStepStatus,
+  parseVerdictKeyword,
+} from "./step-parser.js";
 
 // ---------------------------------------------------------------------------
 // parseStepStatus
@@ -144,6 +148,38 @@ describe("buildClarificationPrompt", () => {
     expect(prompt).toContain("NOT_APPROVED");
     expect(prompt).toContain("BLOCKED");
   });
+
+  test("lists only the specified keywords when validKeywords is provided", () => {
+    const prompt = buildClarificationPrompt("ambiguous", ["FIXED", "DONE"]);
+    expect(prompt).toContain("FIXED");
+    expect(prompt).toContain("DONE");
+    // Should NOT contain keywords outside the valid set.
+    expect(prompt).not.toContain("COMPLETED");
+    expect(prompt).not.toContain("APPROVED");
+    expect(prompt).not.toContain("NOT_APPROVED");
+    expect(prompt).not.toContain("BLOCKED");
+  });
+
+  test("falls back to all keywords when validKeywords is undefined", () => {
+    const prompt = buildClarificationPrompt("ambiguous", undefined);
+    expect(prompt).toContain("COMPLETED");
+    expect(prompt).toContain("FIXED");
+    expect(prompt).toContain("DONE");
+    expect(prompt).toContain("APPROVED");
+    expect(prompt).toContain("NOT_APPROVED");
+    expect(prompt).toContain("BLOCKED");
+  });
+
+  test("falls back to all keywords when validKeywords is empty", () => {
+    const prompt = buildClarificationPrompt("ambiguous", []);
+    expect(prompt).toContain("COMPLETED");
+    expect(prompt).toContain("BLOCKED");
+  });
+
+  test("scoped prompt uses 'verdict keyword' phrasing", () => {
+    const prompt = buildClarificationPrompt("ambiguous", ["APPROVED"]);
+    expect(prompt).toContain("verdict keyword");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -189,5 +225,123 @@ describe("parseStepStatus — edge cases", () => {
     const r = parseStepStatus("Status: NOT_APPROVED");
     expect(r.status).toBe("not_approved");
     expect(r.keyword).toBe("NOT_APPROVED");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseVerdictKeyword — strict verdict parser
+// ---------------------------------------------------------------------------
+describe("parseVerdictKeyword", () => {
+  const reviewKw = ["APPROVED", "NOT_APPROVED"] as const;
+  const checkKw = ["COMPLETED", "BLOCKED"] as const;
+  const fixKw = ["FIXED", "DONE"] as const;
+
+  // -- exact match ----------------------------------------------------------
+  test("returns keyword on exact match", () => {
+    expect(parseVerdictKeyword("APPROVED", reviewKw)).toEqual({
+      keyword: "APPROVED",
+    });
+  });
+
+  test("exact match is case-insensitive", () => {
+    expect(parseVerdictKeyword("completed", checkKw)).toEqual({
+      keyword: "COMPLETED",
+    });
+  });
+
+  test("trims whitespace around keyword", () => {
+    expect(parseVerdictKeyword("  BLOCKED\n", checkKw)).toEqual({
+      keyword: "BLOCKED",
+    });
+  });
+
+  // -- rejection of extra commentary ----------------------------------------
+  test("rejects keyword with extra commentary before", () => {
+    expect(
+      parseVerdictKeyword("I think it worked. COMPLETED", checkKw),
+    ).toEqual({ keyword: undefined });
+  });
+
+  test("rejects keyword with extra commentary after", () => {
+    expect(
+      parseVerdictKeyword("APPROVED — earlier items are now fixed", reviewKw),
+    ).toEqual({ keyword: undefined });
+  });
+
+  test("rejects keyword ending in valid keyword with extra text", () => {
+    // Regression: response ends with valid keyword but has commentary.
+    expect(
+      parseVerdictKeyword("Round 1 items are now APPROVED", reviewKw),
+    ).toEqual({ keyword: undefined });
+  });
+
+  // -- rejection of multiple valid keywords ---------------------------------
+  test("rejects when two in-scope keywords appear", () => {
+    // Regression: "NOT_APPROVED — earlier items are now APPROVED"
+    expect(
+      parseVerdictKeyword(
+        "NOT_APPROVED — earlier items are now APPROVED",
+        reviewKw,
+      ),
+    ).toEqual({ keyword: undefined });
+  });
+
+  test("rejects FIXED and DONE in the same response", () => {
+    expect(parseVerdictKeyword("FIXED and DONE", fixKw)).toEqual({
+      keyword: undefined,
+    });
+  });
+
+  test("rejects COMPLETED and BLOCKED in the same response", () => {
+    expect(
+      parseVerdictKeyword("COMPLETED at first but then BLOCKED", checkKw),
+    ).toEqual({ keyword: undefined });
+  });
+
+  // -- no keyword -----------------------------------------------------------
+  test("returns undefined for text with no valid keyword", () => {
+    expect(parseVerdictKeyword("I looked at things.", checkKw)).toEqual({
+      keyword: undefined,
+    });
+  });
+
+  test("returns undefined for empty string", () => {
+    expect(parseVerdictKeyword("", checkKw)).toEqual({
+      keyword: undefined,
+    });
+  });
+
+  test("returns undefined for whitespace only", () => {
+    expect(parseVerdictKeyword("  \n\t  ", checkKw)).toEqual({
+      keyword: undefined,
+    });
+  });
+
+  // -- keyword not in valid set ---------------------------------------------
+  test("ignores out-of-scope keyword", () => {
+    // DONE is valid in fixKw but not in checkKw.
+    expect(parseVerdictKeyword("DONE", checkKw)).toEqual({
+      keyword: undefined,
+    });
+  });
+
+  // -- keyword with minor punctuation ---------------------------------------
+  test("accepts keyword with trailing period", () => {
+    expect(parseVerdictKeyword("COMPLETED.", checkKw)).toEqual({
+      keyword: "COMPLETED",
+    });
+  });
+
+  test("accepts keyword with trailing exclamation", () => {
+    expect(parseVerdictKeyword("BLOCKED!", checkKw)).toEqual({
+      keyword: "BLOCKED",
+    });
+  });
+
+  // -- NOT_APPROVED substring handling --------------------------------------
+  test("does not match APPROVED inside NOT_APPROVED", () => {
+    expect(parseVerdictKeyword("NOT_APPROVED", reviewKw)).toEqual({
+      keyword: "NOT_APPROVED",
+    });
   });
 });

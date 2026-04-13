@@ -259,6 +259,8 @@ export const ko: Messages = {
     `${base}\n\n미해결 항목:\n${summary}`,
   "review.fixesApplied": (round) =>
     `${round}라운드 수정 적용 완료, CI 통과. 다음 리뷰 라운드로 진행합니다.`,
+  "review.finalizationUnverified": (issueNumber) =>
+    `PR 마무리 판정이 모호하고 PR 본문에 이슈 #${issueNumber} 참조가 없습니다. 수동 확인이 필요합니다.`,
 
   // ---- stage-util errors -------------------------------------------------
 

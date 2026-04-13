@@ -225,6 +225,8 @@ export const en: Messages = {
     `${base}\n\nUnresolved items:\n${summary}`,
   "review.fixesApplied": (round) =>
     `Round ${round} fixes applied, CI passed. Proceeding to next review round.`,
+  "review.finalizationUnverified": (issueNumber) =>
+    `PR finalization verdict was ambiguous and the PR body does not reference issue #${issueNumber}. Manual verification required.`,
 
   // ---- stage-util errors -------------------------------------------------
 

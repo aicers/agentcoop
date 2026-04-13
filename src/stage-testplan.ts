@@ -1,13 +1,14 @@
 /**
  * Stage 6 — Test plan verification loop.
  *
- * Two-step flow per iteration:
+ * Three-step flow per iteration:
  *   1. Send a verification prompt to Agent A instructing it to verify
  *      PR test plan items and issue task checklist items.
- *   2. Resume the session with a self-check prompt.
+ *   2. Resume the session with a self-check work prompt — the agent
+ *      performs fixes if needed but does **not** embed a verdict keyword.
+ *   3. A dedicated verdict follow-up asks for exactly FIXED or DONE.
  *
- * The agent responds with FIXED (loop again) or DONE (proceed).  The
- * pipeline engine's built-in loop control manages the 3-automatic /
+ * The pipeline engine's built-in loop control manages the 3-automatic /
  * 4th-asks-user budget — the handler returns `"not_approved"` on FIXED
  * so the engine loops.
  */
@@ -22,6 +23,7 @@ import {
   mapFixOrDoneResponse,
   sendFollowUp,
 } from "./stage-util.js";
+import { buildClarificationPrompt } from "./step-parser.js";
 
 export interface TestPlanStageOptions {
   agent: AgentAdapter;
@@ -97,11 +99,22 @@ export function buildTestPlanSelfCheckPrompt(): string {
     `  recursively) when applicable.`,
     `- Is CI still passing?`,
     ``,
-    `If you found and fixed issues during verification, end your`,
-    `response with the keyword FIXED.`,
+    `If you found issues during verification, fix them now.`,
+    `If everything is verified and passing, you are done.`,
+  ].join("\n");
+}
+
+export const TEST_PLAN_VERDICT_KEYWORDS = ["FIXED", "DONE"] as const;
+
+export function buildTestPlanVerdictPrompt(): string {
+  return [
+    `You have finished the test plan verification pass.`,
+    `Respond with exactly one of the following keywords:`,
     ``,
-    `If everything is verified and passing with no changes needed,`,
-    `end your response with the keyword DONE.`,
+    `- FIXED — if you found and fixed issues`,
+    `- DONE — if everything is verified and passing with no changes needed`,
+    ``,
+    `Do not include any other commentary — just the keyword.`,
   ].join("\n");
 }
 
@@ -133,7 +146,7 @@ export function createTestPlanStageHandler(
         return mapAgentError(verifyResult, "during test plan verification");
       }
 
-      // Step 2: Send self-check prompt (resume the same session).
+      // Step 2: Send self-check work prompt (resume the same session).
       const selfCheckPrompt = buildTestPlanSelfCheckPrompt();
       ctx.promptSinks?.a?.(selfCheckPrompt);
       const checkResult = await sendFollowUp(
@@ -150,7 +163,67 @@ export function createTestPlanStageHandler(
         return mapAgentError(checkResult, "during test plan self-check");
       }
 
-      return mapFixOrDoneResponse(checkResult.responseText);
+      // Step 3: Verdict follow-up — ask for exactly FIXED or DONE.
+      const verdictPrompt = buildTestPlanVerdictPrompt();
+      ctx.promptSinks?.a?.(verdictPrompt);
+      const verdictResult = await sendFollowUp(
+        opts.agent,
+        checkResult.sessionId,
+        verdictPrompt,
+        ctx.worktreePath,
+        ctx.streamSinks?.a,
+        undefined,
+        ctx.usageSinks?.a,
+      );
+
+      if (verdictResult.status === "error") {
+        return mapAgentError(verdictResult, "during test plan verdict");
+      }
+
+      let result = mapFixOrDoneResponse(
+        verdictResult.responseText,
+        TEST_PLAN_VERDICT_KEYWORDS,
+      );
+
+      // Internal clarification retry (same pattern as other stages).
+      if (result.outcome === "needs_clarification") {
+        const clarifyPrompt = buildClarificationPrompt(
+          verdictResult.responseText,
+          TEST_PLAN_VERDICT_KEYWORDS,
+        );
+        ctx.promptSinks?.a?.(clarifyPrompt);
+        const retryResult = await sendFollowUp(
+          opts.agent,
+          verdictResult.sessionId ?? checkResult.sessionId,
+          clarifyPrompt,
+          ctx.worktreePath,
+          ctx.streamSinks?.a,
+          undefined,
+          ctx.usageSinks?.a,
+        );
+
+        if (retryResult.status === "error") {
+          return mapAgentError(
+            retryResult,
+            "during test plan verdict clarification",
+          );
+        }
+
+        result = mapFixOrDoneResponse(
+          retryResult.responseText,
+          TEST_PLAN_VERDICT_KEYWORDS,
+        );
+      }
+
+      // If still ambiguous after the in-session retry, fall back to
+      // not_approved so the pipeline loops (or restarts from an
+      // earlier stage).  Treating ambiguity as "completed" would
+      // advance past a verdict that may have been FIXED.
+      if (result.outcome === "needs_clarification") {
+        result = { outcome: "not_approved", message: result.message };
+      }
+
+      return result;
     },
   };
 }

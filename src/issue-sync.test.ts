@@ -1,7 +1,9 @@
 import { beforeAll, describe, expect, test } from "vitest";
 import { initI18n } from "./i18n/index.js";
 import {
+  buildIssueSyncClarificationPrompt,
   buildIssueSyncPrompt,
+  buildIssueSyncVerdictPrompt,
   buildPrSyncInstructions,
   formatIssueSyncSummary,
   parseIssueSyncResponse,
@@ -47,15 +49,11 @@ describe("buildIssueSyncPrompt", () => {
     expect(prompt).toContain("gh issue comment 42 --repo org/repo");
   });
 
-  test("mentions ISSUE_NO_CHANGES keyword", () => {
+  test("does not include response-format keywords (moved to verdict prompt)", () => {
     const prompt = buildIssueSyncPrompt(BASE_CTX, opts);
-    expect(prompt).toContain("ISSUE_NO_CHANGES");
-  });
-
-  test("mentions ISSUE_UPDATED and ISSUE_COMMENTED keywords", () => {
-    const prompt = buildIssueSyncPrompt(BASE_CTX, opts);
-    expect(prompt).toContain("ISSUE_UPDATED");
-    expect(prompt).toContain("ISSUE_COMMENTED");
+    expect(prompt).not.toContain("ISSUE_NO_CHANGES");
+    expect(prompt).not.toContain("ISSUE_UPDATED");
+    expect(prompt).not.toContain("ISSUE_COMMENTED");
   });
 
   test("distinguishes minor and major discrepancies", () => {
@@ -65,62 +63,111 @@ describe("buildIssueSyncPrompt", () => {
   });
 });
 
+// ---- buildIssueSyncVerdictPrompt -----------------------------------------
+
+describe("buildIssueSyncVerdictPrompt", () => {
+  test("mentions ISSUE_NO_CHANGES keyword", () => {
+    const prompt = buildIssueSyncVerdictPrompt();
+    expect(prompt).toContain("ISSUE_NO_CHANGES");
+  });
+
+  test("mentions ISSUE_UPDATED and ISSUE_COMMENTED keywords", () => {
+    const prompt = buildIssueSyncVerdictPrompt();
+    expect(prompt).toContain("ISSUE_UPDATED");
+    expect(prompt).toContain("ISSUE_COMMENTED");
+  });
+
+  test("asks for no other commentary", () => {
+    const prompt = buildIssueSyncVerdictPrompt();
+    expect(prompt).toContain("Do not include any other commentary");
+  });
+});
+
 // ---- parseIssueSyncResponse ----------------------------------------------
 
 describe("parseIssueSyncResponse", () => {
-  test("returns empty array for ISSUE_NO_CHANGES", () => {
-    const result = parseIssueSyncResponse(
-      "Everything matches.\n\nISSUE_NO_CHANGES",
-    );
-    expect(result).toEqual([]);
+  test("returns valid with no changes for ISSUE_NO_CHANGES", () => {
+    const result = parseIssueSyncResponse("ISSUE_NO_CHANGES");
+    expect(result).toEqual({ changes: [], valid: true });
   });
 
   test("parses a single ISSUE_UPDATED line", () => {
-    const result = parseIssueSyncResponse(
-      "Updated the description.\n\nISSUE_UPDATED: corrected file path",
-    );
-    expect(result).toEqual([
-      { type: "minor", description: "corrected file path" },
-    ]);
+    const result = parseIssueSyncResponse("ISSUE_UPDATED: corrected file path");
+    expect(result).toEqual({
+      changes: [{ type: "minor", description: "corrected file path" }],
+      valid: true,
+    });
   });
 
   test("parses a single ISSUE_COMMENTED line", () => {
     const result = parseIssueSyncResponse(
-      "Left a comment.\n\nISSUE_COMMENTED: uses WebSocket instead of polling",
+      "ISSUE_COMMENTED: uses WebSocket instead of polling",
     );
-    expect(result).toEqual([
-      { type: "major", description: "uses WebSocket instead of polling" },
-    ]);
+    expect(result).toEqual({
+      changes: [
+        { type: "major", description: "uses WebSocket instead of polling" },
+      ],
+      valid: true,
+    });
   });
 
   test("parses both ISSUE_UPDATED and ISSUE_COMMENTED", () => {
     const text = [
-      "Made some changes.",
       "ISSUE_UPDATED: fixed typo in description",
       "ISSUE_COMMENTED: scope expanded to include API changes",
     ].join("\n");
     const result = parseIssueSyncResponse(text);
-    expect(result).toEqual([
-      { type: "minor", description: "fixed typo in description" },
-      { type: "major", description: "scope expanded to include API changes" },
-    ]);
+    expect(result).toEqual({
+      changes: [
+        { type: "minor", description: "fixed typo in description" },
+        { type: "major", description: "scope expanded to include API changes" },
+      ],
+      valid: true,
+    });
   });
 
-  test("returns empty array for unrecognised response", () => {
+  test("rejects unrecognised response as invalid", () => {
     const result = parseIssueSyncResponse(
       "I looked at the issue and it seems fine.",
     );
-    expect(result).toEqual([]);
+    expect(result).toEqual({ changes: [], valid: false });
+  });
+
+  test("rejects response with extra commentary before keywords", () => {
+    const result = parseIssueSyncResponse(
+      "Everything matches.\n\nISSUE_NO_CHANGES",
+    );
+    expect(result).toEqual({ changes: [], valid: false });
+  });
+
+  test("rejects ISSUE_UPDATED without colon as invalid", () => {
+    const result = parseIssueSyncResponse("ISSUE_UPDATED fixed title");
+    expect(result).toEqual({ changes: [], valid: false });
+  });
+
+  test("rejects mixed commentary and keywords", () => {
+    const text = [
+      "Made some changes.",
+      "ISSUE_UPDATED: fixed typo in description",
+    ].join("\n");
+    const result = parseIssueSyncResponse(text);
+    expect(result).toEqual({ changes: [], valid: false });
   });
 
   test("is case-insensitive", () => {
     const result = parseIssueSyncResponse("issue_updated: fixed path");
-    expect(result).toEqual([{ type: "minor", description: "fixed path" }]);
+    expect(result).toEqual({
+      changes: [{ type: "minor", description: "fixed path" }],
+      valid: true,
+    });
   });
 
   test("trims description whitespace", () => {
     const result = parseIssueSyncResponse("ISSUE_UPDATED:   extra spaces  ");
-    expect(result).toEqual([{ type: "minor", description: "extra spaces" }]);
+    expect(result).toEqual({
+      changes: [{ type: "minor", description: "extra spaces" }],
+      valid: true,
+    });
   });
 
   test("handles multiple ISSUE_UPDATED lines", () => {
@@ -129,9 +176,64 @@ describe("parseIssueSyncResponse", () => {
       "ISSUE_UPDATED: clarified wording in step 3",
     ].join("\n");
     const result = parseIssueSyncResponse(text);
-    expect(result).toHaveLength(2);
-    expect(result[0].type).toBe("minor");
-    expect(result[1].type).toBe("minor");
+    expect(result.valid).toBe(true);
+    expect(result.changes).toHaveLength(2);
+    expect(result.changes[0].type).toBe("minor");
+    expect(result.changes[1].type).toBe("minor");
+  });
+
+  test("allows blank lines between keywords", () => {
+    const text = "ISSUE_UPDATED: fixed path\n\nISSUE_COMMENTED: scope changed";
+    const result = parseIssueSyncResponse(text);
+    expect(result.valid).toBe(true);
+    expect(result.changes).toHaveLength(2);
+  });
+
+  test("strips optional leading bullet markers", () => {
+    const text = "- ISSUE_UPDATED: fixed path";
+    const result = parseIssueSyncResponse(text);
+    expect(result).toEqual({
+      changes: [{ type: "minor", description: "fixed path" }],
+      valid: true,
+    });
+  });
+
+  test("returns invalid for empty response", () => {
+    const result = parseIssueSyncResponse("");
+    expect(result).toEqual({ changes: [], valid: false });
+  });
+
+  test("rejects ISSUE_NO_CHANGES mixed with ISSUE_UPDATED", () => {
+    const text = "ISSUE_NO_CHANGES\nISSUE_UPDATED: fixed typo";
+    const result = parseIssueSyncResponse(text);
+    expect(result).toEqual({ changes: [], valid: false });
+  });
+
+  test("rejects ISSUE_NO_CHANGES mixed with ISSUE_COMMENTED", () => {
+    const text = "ISSUE_COMMENTED: scope changed\nISSUE_NO_CHANGES";
+    const result = parseIssueSyncResponse(text);
+    expect(result).toEqual({ changes: [], valid: false });
+  });
+});
+
+// ---- buildIssueSyncClarificationPrompt ------------------------------------
+
+describe("buildIssueSyncClarificationPrompt", () => {
+  test("mentions all three keyword patterns", () => {
+    const prompt = buildIssueSyncClarificationPrompt();
+    expect(prompt).toContain("ISSUE_NO_CHANGES");
+    expect(prompt).toContain("ISSUE_UPDATED");
+    expect(prompt).toContain("ISSUE_COMMENTED");
+  });
+
+  test("asks for no other commentary", () => {
+    const prompt = buildIssueSyncClarificationPrompt();
+    expect(prompt).toContain("Do not include any other commentary");
+  });
+
+  test("mentions the previous response was malformed", () => {
+    const prompt = buildIssueSyncClarificationPrompt();
+    expect(prompt).toContain("did not follow the expected format");
   });
 });
 

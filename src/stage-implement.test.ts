@@ -172,12 +172,12 @@ describe("createImplementStageHandler", () => {
     expect(result.outcome).toBe("completed");
   });
 
-  test("returns completed on DONE", async () => {
+  test("returns blocked on DONE (not in valid keywords)", async () => {
     const checkResult = makeResult({ responseText: "DONE" });
     const agent = makeAgent(makeResult(), checkResult);
     const stage = createImplementStageHandler(makeOpts({ agent }));
     const result = await stage.handler(BASE_CTX);
-    expect(result.outcome).toBe("completed");
+    expect(result.outcome).toBe("blocked");
   });
 
   test("returns blocked on BLOCKED", async () => {
@@ -188,20 +188,140 @@ describe("createImplementStageHandler", () => {
     expect(result.outcome).toBe("blocked");
   });
 
-  test("returns not_approved on NOT_APPROVED", async () => {
+  test("returns blocked on NOT_APPROVED (not in valid keywords)", async () => {
     const checkResult = makeResult({ responseText: "NOT_APPROVED" });
     const agent = makeAgent(makeResult(), checkResult);
     const stage = createImplementStageHandler(makeOpts({ agent }));
     const result = await stage.handler(BASE_CTX);
-    expect(result.outcome).toBe("not_approved");
+    expect(result.outcome).toBe("blocked");
   });
 
-  test("returns needs_clarification on ambiguous check response", async () => {
+  test("returns blocked on ambiguous check response", async () => {
     const checkResult = makeResult({ responseText: "I think it works." });
     const agent = makeAgent(makeResult(), checkResult);
     const stage = createImplementStageHandler(makeOpts({ agent }));
     const result = await stage.handler(BASE_CTX);
-    expect(result.outcome).toBe("needs_clarification");
+    expect(result.outcome).toBe("blocked");
+  });
+
+  // -- internal clarification retry ------------------------------------------
+
+  test("ambiguous check → internal clarification → completed", async () => {
+    const implResult = makeResult({ sessionId: "sess-impl" });
+    const ambiguousCheck = makeResult({
+      sessionId: "sess-check",
+      responseText: "I think it works",
+    });
+    const clarifiedCheck = makeResult({ responseText: "COMPLETED" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(implResult)),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(ambiguousCheck))
+        .mockReturnValueOnce(makeStream(clarifiedCheck)),
+    };
+    const stage = createImplementStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    // (completion check + clarification)
+    expect(agent.resume).toHaveBeenCalledTimes(2);
+  });
+
+  test("out-of-scope DONE → internal clarification → BLOCKED", async () => {
+    const implResult = makeResult({ sessionId: "sess-impl" });
+    const outOfScope = makeResult({
+      sessionId: "sess-check",
+      responseText: "DONE",
+    });
+    const clarifiedCheck = makeResult({ responseText: "BLOCKED" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(implResult)),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(outOfScope))
+        .mockReturnValueOnce(makeStream(clarifiedCheck)),
+    };
+    const stage = createImplementStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("blocked");
+    expect(agent.resume).toHaveBeenCalledTimes(2);
+  });
+
+  test("ambiguous check → clarification also ambiguous → returns blocked", async () => {
+    const implResult = makeResult({ sessionId: "sess-impl" });
+    const ambiguousCheck = makeResult({
+      sessionId: "sess-check",
+      responseText: "Looks OK",
+    });
+    const stillAmbiguous = makeResult({ responseText: "It is OK" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(implResult)),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(ambiguousCheck))
+        .mockReturnValueOnce(makeStream(stillAmbiguous)),
+    };
+    const stage = createImplementStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("blocked");
+    expect(agent.resume).toHaveBeenCalledTimes(2);
+  });
+
+  test("clarification retry error → returns error", async () => {
+    const implResult = makeResult({ sessionId: "sess-impl" });
+    const ambiguousCheck = makeResult({
+      sessionId: "sess-check",
+      responseText: "I think so",
+    });
+    const errorResult = makeResult({
+      status: "error",
+      errorType: "execution_error",
+      stderrText: "clarify crash",
+      responseText: "",
+    });
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(implResult)),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(ambiguousCheck))
+        .mockReturnValueOnce(makeStream(errorResult)),
+    };
+    const stage = createImplementStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("clarify crash");
+  });
+
+  test("ambiguous check without sessionId retries via fallback session", async () => {
+    const implResult = makeResult({ sessionId: "sess-impl" });
+    const noSession = makeResult({
+      sessionId: undefined,
+      responseText: "I think it works",
+    });
+    let resumeCall = 0;
+    const resumeResults = [
+      // 1st resume: ambiguous completion check (no sessionId)
+      makeStream(noSession),
+      // 2nd resume: clarification retry via fallback session
+      makeStream(makeResult({ responseText: "COMPLETED" })),
+    ];
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(implResult)),
+      resume: vi.fn().mockImplementation(() => resumeResults[resumeCall++]),
+    };
+    const stage = createImplementStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+
+    // Clarification retry succeeds via fallback to "sess-impl".
+    expect(result.outcome).toBe("completed");
+    expect(agent.resume).toHaveBeenCalledTimes(2);
+    expect((agent.resume as ReturnType<typeof vi.fn>).mock.calls[1][0]).toBe(
+      "sess-impl",
+    );
   });
 
   // -- error handling --------------------------------------------------------

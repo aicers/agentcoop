@@ -2,14 +2,17 @@
  * Stage 7 — Review loop.
  *
  * Multi-agent flow per iteration:
- *   1. Agent B posts a review prefixed with `[Reviewer Round {n}]`,
- *      ending with APPROVED or NOT_APPROVED.
- *   2. If APPROVED — Agent B summarises unresolved items (or NONE),
- *      and the stage completes.
- *   3. If NOT_APPROVED:
+ *   1. Agent B posts a review prefixed with `[Reviewer Round {n}]`.
+ *   2. A dedicated verdict follow-up asks Agent B for exactly
+ *      APPROVED or NOT_APPROVED — the review text is **not** parsed
+ *      for keywords.
+ *   3. If APPROVED — Agent B summarises unresolved items (or NONE),
+ *      Agent A performs PR finalization (verdict: PR_FINALIZED), and
+ *      the stage completes.
+ *   4. If NOT_APPROVED:
  *      a. Agent A reads the review, fixes issues, and posts a response
  *         prefixed with `[Author Round {n}]`.
- *      b. Completion check on Agent A.
+ *      b. Completion check on Agent A (verdict: COMPLETED / BLOCKED).
  *      c. Internal CI poll + fix loop.
  *      d. Returns `"not_approved"` so the pipeline engine loops for
  *         the next review round.
@@ -29,6 +32,7 @@ import { pollCiAndFix } from "./ci-poll.js";
 import { t } from "./i18n/index.js";
 import { buildPrSyncInstructions } from "./issue-sync.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
+import { getPrBody as defaultGetPrBody } from "./pr.js";
 import {
   buildDocConsistencyInstructions,
   drainToSink,
@@ -40,7 +44,11 @@ import {
   sendFollowUp,
   type UsageSink,
 } from "./stage-util.js";
-import { parseStepStatus } from "./step-parser.js";
+import {
+  buildClarificationPrompt,
+  parseStepStatus,
+  parseVerdictKeyword,
+} from "./step-parser.js";
 
 // ---- public types ------------------------------------------------------------
 
@@ -62,6 +70,12 @@ export interface ReviewStageOptions {
   maxFixAttempts?: number;
   /** Injected for testability. */
   delay?: (ms: number) => Promise<void>;
+  /** Injected for testability. Defaults to `pr.getPrBody`. */
+  getPrBody?: (
+    owner: string,
+    repo: string,
+    branch: string,
+  ) => string | undefined;
 }
 
 // ---- prompt builders ---------------------------------------------------------
@@ -152,7 +166,6 @@ export function buildReviewPrompt(
       `   specific. Cite file paths and line numbers when they help;`,
       `   for broader concerns, explain the concern at the`,
       `   appropriate level.`,
-      `5. End your response with one of these keywords:`,
     );
   } else {
     lines.push(
@@ -162,20 +175,56 @@ export function buildReviewPrompt(
       `   \`**[Reviewer Round ${round}]**\`. Be specific. Cite file paths and`,
       `   line numbers when they help; for broader concerns, explain`,
       `   the concern at the appropriate level.`,
-      `4. End your response with one of these keywords:`,
     );
   }
-
-  lines.push(
-    `   - APPROVED — if the changes are ready to merge`,
-    `   - NOT_APPROVED — if changes are needed`,
-  );
 
   if (ctx.userInstruction) {
     lines.push(``, `## Additional feedback`, ``, ctx.userInstruction);
   }
 
   return lines.join("\n");
+}
+
+export const REVIEW_VERDICT_KEYWORDS = ["APPROVED", "NOT_APPROVED"] as const;
+
+export function buildReviewVerdictPrompt(): string {
+  return [
+    `You have posted your review comment.`,
+    `Respond with exactly one of the following keywords:`,
+    ``,
+    `- APPROVED — if the changes are ready to merge`,
+    `- NOT_APPROVED — if changes are needed`,
+    ``,
+    `Do not include any other commentary — just the keyword.`,
+  ].join("\n");
+}
+
+export const AUTHOR_CHECK_KEYWORDS = ["COMPLETED", "BLOCKED"] as const;
+
+export const UNRESOLVED_KEYWORDS = ["NONE", "COMPLETED"] as const;
+
+export function buildUnresolvedVerdictPrompt(): string {
+  return [
+    `Respond with exactly one of the following keywords:`,
+    ``,
+    `- NONE — if there are no unresolved items`,
+    `- COMPLETED — if you posted the unresolved items comment`,
+    ``,
+    `Do not include any other commentary — just the keyword.`,
+  ].join("\n");
+}
+
+export const PR_FINALIZATION_KEYWORDS = ["PR_FINALIZED"] as const;
+
+export function buildPrFinalizationVerdictPrompt(): string {
+  return [
+    `You have finished verifying the PR body.`,
+    `Respond with exactly one of the following keywords:`,
+    ``,
+    `- PR_FINALIZED — if the PR body is now accurate`,
+    ``,
+    `Do not include any other commentary — just the keyword.`,
+  ].join("\n");
 }
 
 export function buildAuthorFixPrompt(
@@ -219,6 +268,8 @@ export function buildAuthorCompletionCheckPrompt(): string {
     ``,
     `- COMPLETED — if all feedback was addressed and changes were pushed`,
     `- BLOCKED — if you cannot proceed and need user intervention`,
+    ``,
+    `Do not include any other commentary — just the keyword.`,
   ].join("\n");
 }
 
@@ -229,8 +280,8 @@ export function buildUnresolvedSummaryPrompt(round: number): string {
     ``,
     `- If there are unresolved items, post a PR comment prefixed with`,
     `  \`**[Reviewer Unresolved Round ${round}]**\` listing each unresolved item.`,
-    `  Then end your response with COMPLETED.`,
-    `- If there are no unresolved items, respond with exactly: NONE`,
+    `- If there are no unresolved items, simply confirm that there is`,
+    `  nothing left to address.`,
   ].join("\n");
 }
 
@@ -266,8 +317,17 @@ export function buildPrFinalizationPrompt(
     `   were not implemented and why.`,
     `4. If the reference or "## Not addressed" section needs to change,`,
     `   update the PR body using \`gh pr edit --body "..."\`.`,
-    `5. End your response with PR_FINALIZED.`,
   ].join("\n");
+}
+
+/**
+ * Check whether the response is exactly the PR_FINALIZED keyword.
+ * Uses the strict verdict parser to reject extra commentary.
+ */
+function hasFinalizationKeyword(text: string): boolean {
+  return (
+    parseVerdictKeyword(text, PR_FINALIZATION_KEYWORDS).keyword !== undefined
+  );
 }
 
 // ---- handler -----------------------------------------------------------------
@@ -302,14 +362,68 @@ export function createReviewStageHandler(
         return mapAgentError(reviewResult, "during review");
       }
 
-      // Parse review verdict.
-      const reviewParsed = parseStepStatus(reviewResult.responseText);
+      // Verdict follow-up: ask B for exactly APPROVED / NOT_APPROVED.
+      const verdictPrompt = buildReviewVerdictPrompt();
+      ctx.promptSinks?.b?.(verdictPrompt);
+      let verdictResult = await sendFollowUp(
+        opts.agentB,
+        reviewResult.sessionId,
+        verdictPrompt,
+        ctx.worktreePath,
+        ctx.streamSinks?.b,
+        undefined,
+        ctx.usageSinks?.b,
+      );
+
+      if (verdictResult.status === "error") {
+        return mapAgentError(verdictResult, "during review verdict");
+      }
+
+      let reviewVerdict = parseVerdictKeyword(
+        verdictResult.responseText,
+        REVIEW_VERDICT_KEYWORDS,
+      );
+
+      // Clarification retry if ambiguous, extra commentary, or
+      // multiple valid keywords.
+      if (reviewVerdict.keyword === undefined) {
+        const clarifyPrompt = buildClarificationPrompt(
+          verdictResult.responseText,
+          REVIEW_VERDICT_KEYWORDS,
+        );
+        ctx.promptSinks?.b?.(clarifyPrompt);
+        const retryResult = await sendFollowUp(
+          opts.agentB,
+          verdictResult.sessionId ?? reviewResult.sessionId,
+          clarifyPrompt,
+          ctx.worktreePath,
+          ctx.streamSinks?.b,
+          undefined,
+          ctx.usageSinks?.b,
+        );
+
+        if (retryResult.status === "error") {
+          return mapAgentError(
+            retryResult,
+            "during review verdict clarification",
+          );
+        }
+
+        verdictResult = retryResult;
+        reviewVerdict = parseVerdictKeyword(
+          verdictResult.responseText,
+          REVIEW_VERDICT_KEYWORDS,
+        );
+      }
 
       // Step 2: If approved — ask B for unresolved summary, then complete.
+      const reviewParsed = reviewVerdict.keyword
+        ? parseStepStatus(reviewVerdict.keyword)
+        : { status: "ambiguous" as const, keyword: undefined };
       if (reviewParsed.status === "approved") {
         const { error, summary } = await handleUnresolvedSummary(
           opts,
-          reviewResult.sessionId,
+          verdictResult.sessionId ?? reviewResult.sessionId,
           round,
           ctx.worktreePath,
           ctx.streamSinks?.b,
@@ -340,11 +454,94 @@ export function createReviewStageHandler(
           return mapAgentError(finalizeResult, "during PR finalization");
         }
 
-        if (!finalizeResult.responseText.includes("PR_FINALIZED")) {
-          return {
-            outcome: "needs_clarification",
-            message: finalizeResult.responseText,
-          };
+        // Verdict follow-up: ask A for exactly PR_FINALIZED.
+        const finalVerdictPrompt = buildPrFinalizationVerdictPrompt();
+        ctx.promptSinks?.a?.(finalVerdictPrompt);
+        let finalVerdictResult = await sendFollowUp(
+          opts.agentA,
+          finalizeResult.sessionId,
+          finalVerdictPrompt,
+          ctx.worktreePath,
+          ctx.streamSinks?.a,
+          undefined,
+          ctx.usageSinks?.a,
+        );
+
+        if (finalVerdictResult.status === "error") {
+          return mapAgentError(
+            finalVerdictResult,
+            "during PR finalization verdict",
+          );
+        }
+
+        if (!hasFinalizationKeyword(finalVerdictResult.responseText)) {
+          // Clarification retry.
+          const clarifyPrompt = buildClarificationPrompt(
+            finalVerdictResult.responseText,
+            PR_FINALIZATION_KEYWORDS,
+          );
+          ctx.promptSinks?.a?.(clarifyPrompt);
+          const retryResult = await sendFollowUp(
+            opts.agentA,
+            finalVerdictResult.sessionId ?? finalizeResult.sessionId,
+            clarifyPrompt,
+            ctx.worktreePath,
+            ctx.streamSinks?.a,
+            undefined,
+            ctx.usageSinks?.a,
+          );
+
+          if (retryResult.status === "error") {
+            return mapAgentError(
+              retryResult,
+              "during PR finalization clarification",
+            );
+          }
+
+          finalVerdictResult = retryResult;
+        }
+
+        // If the keyword is still missing after the in-session retry,
+        // verify the PR body directly.  The squash stage short-circuits
+        // on single-commit branches, so we cannot rely on a later stage
+        // to catch a missing issue reference.
+        //
+        // The finalization contract requires an accurate PR body: the
+        // correct issue reference (Closes vs Part of) AND, when partial,
+        // a "## Not addressed" section.  A bare issue reference is not
+        // sufficient — we verify that "Closes" and "Part of" each pair
+        // with the expected companion state:
+        //   - Closes #N  → no "## Not addressed" (contradictory otherwise)
+        //   - Part of #N → "## Not addressed" must be present
+        if (!hasFinalizationKeyword(finalVerdictResult.responseText)) {
+          const getPrBody = opts.getPrBody ?? defaultGetPrBody;
+          const body = getPrBody(ctx.owner, ctx.repo, ctx.branch);
+
+          const closesRef =
+            body !== undefined &&
+            new RegExp(`Closes\\s+#${ctx.issueNumber}\\b`, "i").test(body);
+          const partOfRef =
+            body !== undefined &&
+            new RegExp(`Part of\\s+#${ctx.issueNumber}\\b`, "i").test(body);
+          const hasNotAddressed =
+            body !== undefined && /^## Not addressed/im.test(body);
+
+          // The body must contain exactly one reference form.  Both
+          // present is self-contradictory (closes implies full fix,
+          // "Part of" implies partial).  Then validate the companion:
+          //   - Closes #N  → no "## Not addressed" section
+          //   - Part of #N → "## Not addressed" must be present
+          const exclusiveRef = closesRef !== partOfRef;
+          const bodyValid =
+            exclusiveRef &&
+            ((closesRef && !hasNotAddressed) || (partOfRef && hasNotAddressed));
+
+          if (!bodyValid) {
+            return {
+              outcome: "blocked",
+              message: t()["review.finalizationUnverified"](ctx.issueNumber),
+            };
+          }
         }
 
         const m = t();
@@ -358,7 +555,11 @@ export function createReviewStageHandler(
 
       // Treat anything other than not_approved as ambiguous → needs_clarification.
       if (reviewParsed.status !== "not_approved") {
-        return mapResponseToResult(reviewResult.responseText);
+        return {
+          outcome: "needs_clarification",
+          message: verdictResult.responseText,
+          validVerdicts: REVIEW_VERDICT_KEYWORDS,
+        };
       }
 
       // Step 3: NOT_APPROVED — Agent A fixes (resume if saved session).
@@ -400,17 +601,21 @@ export function createReviewStageHandler(
         return mapAgentError(checkResult, "during author completion check");
       }
 
-      let checkMapped = mapResponseToResult(checkResult.responseText);
+      let checkMapped = mapResponseToResult(
+        checkResult.responseText,
+        undefined,
+        AUTHOR_CHECK_KEYWORDS,
+      );
 
-      if (
-        checkMapped.outcome === "needs_clarification" &&
-        checkResult.sessionId
-      ) {
-        const retryPrompt = buildAuthorCompletionCheckPrompt();
+      if (checkMapped.outcome === "needs_clarification") {
+        const retryPrompt = buildClarificationPrompt(
+          checkResult.responseText,
+          AUTHOR_CHECK_KEYWORDS,
+        );
         ctx.promptSinks?.a?.(retryPrompt);
         const retryResult = await sendFollowUp(
           opts.agentA,
-          checkResult.sessionId,
+          checkResult.sessionId ?? fixResult.sessionId,
           retryPrompt,
           ctx.worktreePath,
           ctx.streamSinks?.a,
@@ -426,17 +631,27 @@ export function createReviewStageHandler(
         }
 
         checkResult = retryResult;
-        checkMapped = mapResponseToResult(retryResult.responseText);
+        checkMapped = mapResponseToResult(
+          retryResult.responseText,
+          undefined,
+          AUTHOR_CHECK_KEYWORDS,
+        );
       }
 
-      if (checkMapped.outcome === "blocked") {
+      if (
+        checkMapped.outcome === "blocked" ||
+        checkMapped.outcome === "needs_clarification"
+      ) {
+        // Surface a blocked condition so the user can decide how to
+        // proceed.  Treating an ambiguous author-completion verdict as
+        // progress would poll stale CI on an unchanged head when the
+        // agent actually meant BLOCKED.
         return {
           outcome: "blocked",
           message: `${fixResult.responseText}\n\n---\n\n${checkResult.responseText}`,
         };
       }
 
-      // If still ambiguous or unexpected, bubble up to the engine.
       if (
         checkMapped.outcome !== "completed" &&
         checkMapped.outcome !== "fixed" &&
@@ -472,7 +687,7 @@ export function createReviewStageHandler(
       if (ctx.lastAutoIteration) {
         const { error, summary } = await handleUnresolvedSummary(
           opts,
-          reviewResult.sessionId,
+          verdictResult.sessionId ?? reviewResult.sessionId,
           round,
           ctx.worktreePath,
           ctx.streamSinks?.b,
@@ -544,11 +759,106 @@ async function handleUnresolvedSummary(
     };
   }
 
-  // Check whether Agent B said NONE.
-  const upper = result.responseText.trim().toUpperCase();
-  if (upper === "NONE" || upper.endsWith("NONE")) {
+  const summaryText = result.responseText;
+
+  // Verdict follow-up: ask for exactly NONE or COMPLETED.
+  const verdictPrompt = buildUnresolvedVerdictPrompt();
+  promptSink?.(verdictPrompt);
+  let verdictResult: AgentResult;
+  const verdictSessionId = result.sessionId ?? sessionId;
+
+  if (verdictSessionId) {
+    verdictResult = await sendFollowUp(
+      opts.agentB,
+      verdictSessionId,
+      verdictPrompt,
+      cwd,
+      sink,
+      undefined,
+      usageSink,
+    );
+  } else {
+    const stream = opts.agentB.invoke(verdictPrompt, {
+      cwd,
+      onUsage: usageSink,
+    });
+    if (sink) drainToSink(stream, sink);
+    verdictResult = await stream.result;
+  }
+
+  if (verdictResult.status === "error") {
+    return {
+      error: mapAgentError(verdictResult, "during unresolved summary verdict"),
+      summary: undefined,
+    };
+  }
+
+  // Check whether Agent B said NONE or COMPLETED using the strict parser.
+  let verdict = parseVerdictKeyword(
+    verdictResult.responseText,
+    UNRESOLVED_KEYWORDS,
+  );
+
+  // Clarification retry if the verdict is ambiguous or out-of-scope.
+  if (verdict.keyword === undefined) {
+    const clarifyPrompt = buildClarificationPrompt(
+      verdictResult.responseText,
+      UNRESOLVED_KEYWORDS,
+    );
+    promptSink?.(clarifyPrompt);
+
+    const verdictSessionId2 = verdictResult.sessionId ?? sessionId;
+    let retryResult: AgentResult;
+
+    if (verdictSessionId2) {
+      retryResult = await sendFollowUp(
+        opts.agentB,
+        verdictSessionId2,
+        clarifyPrompt,
+        cwd,
+        sink,
+        undefined,
+        usageSink,
+      );
+    } else {
+      const stream = opts.agentB.invoke(clarifyPrompt, {
+        cwd,
+        onUsage: usageSink,
+      });
+      if (sink) drainToSink(stream, sink);
+      retryResult = await stream.result;
+    }
+
+    if (retryResult.status === "error") {
+      return {
+        error: mapAgentError(
+          retryResult,
+          "during unresolved summary clarification",
+        ),
+        summary: undefined,
+      };
+    }
+
+    verdictResult = retryResult;
+    verdict = parseVerdictKeyword(
+      retryResult.responseText,
+      UNRESOLVED_KEYWORDS,
+    );
+  }
+
+  if (verdict.keyword?.toUpperCase() === "NONE") {
     return { error: undefined, summary: undefined };
   }
 
-  return { error: undefined, summary: result.responseText };
+  if (verdict.keyword?.toUpperCase() === "COMPLETED") {
+    return { error: undefined, summary: summaryText };
+  }
+
+  // Still ambiguous after retry — conservatively include the summary
+  // text rather than bubbling to the pipeline engine.  The engine
+  // would inject A-side clarification into Agent B's review prompt,
+  // which cannot resolve an Agent-B unresolved-summary verdict.
+  // Including the summary is the safe default: it surfaces unresolved
+  // items to the user instead of silently dropping them.
+  return { error: undefined, summary: summaryText };
 }

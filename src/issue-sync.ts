@@ -21,6 +21,12 @@ export interface IssueChange {
   description: string;
 }
 
+export interface IssueSyncParseResult {
+  changes: IssueChange[];
+  /** True when every non-blank line matched a recognised keyword pattern. */
+  valid: boolean;
+}
+
 export type IssueSyncStatus = "completed" | "skipped" | "failed";
 
 // ---- issue sync prompt ---------------------------------------------------
@@ -55,20 +61,23 @@ export function buildIssueSyncPrompt(
     `   \`gh issue comment ${ctx.issueNumber} --repo ${ctx.owner}/${ctx.repo} --body "..."\``,
     `   Do NOT modify the issue description for major changes.`,
     `5. If there are no discrepancies, do nothing.`,
+  ].join("\n");
+}
+
+/**
+ * Verdict follow-up prompt for issue sync — asks the agent to report
+ * what actions were taken, separate from the work response.
+ */
+export function buildIssueSyncVerdictPrompt(): string {
+  return [
+    `Report what issue sync actions you performed.`,
+    `Respond with one or more of the following on separate lines:`,
     ``,
-    `## Response format`,
+    `- ISSUE_NO_CHANGES — if no changes were needed`,
+    `- ISSUE_UPDATED: <brief description> — if you updated the issue`,
+    `- ISSUE_COMMENTED: <brief description> — if you added a comment`,
     ``,
-    `End your response with one of the following:`,
-    ``,
-    `- If no changes were needed:`,
-    `  \`ISSUE_NO_CHANGES\``,
-    `- If you updated the issue (minor):`,
-    `  \`ISSUE_UPDATED: <brief description of what changed>\``,
-    `- If you added a comment (major):`,
-    `  \`ISSUE_COMMENTED: <brief description of the discrepancy>\``,
-    ``,
-    `You may include both ISSUE_UPDATED and ISSUE_COMMENTED if there`,
-    `were both minor and major discrepancies.`,
+    `Do not include any other commentary.`,
   ].join("\n");
 }
 
@@ -77,30 +86,77 @@ export function buildIssueSyncPrompt(
 /**
  * Parse the agent's issue sync response into a list of changes.
  *
- * Recognised line formats (case-insensitive):
+ * Strict parser — every non-blank line must match one of the
+ * recognised patterns (case-insensitive, optional leading bullet):
  *   ISSUE_NO_CHANGES
  *   ISSUE_UPDATED: <description>
  *   ISSUE_COMMENTED: <description>
+ *
+ * Returns `{ valid: false }` when the response contains
+ * unrecognised lines or no recognised lines at all, so the caller
+ * can trigger a clarification retry.
  */
-export function parseIssueSyncResponse(responseText: string): IssueChange[] {
+export function parseIssueSyncResponse(
+  responseText: string,
+): IssueSyncParseResult {
   const changes: IssueChange[] = [];
+  let hasRecognised = false;
+  let hasNoChanges = false;
 
   for (const line of responseText.split("\n")) {
     const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
 
-    const updatedMatch = trimmed.match(/^ISSUE_UPDATED:\s*(.+)$/i);
+    // Strip optional leading bullet marker (- or *).
+    const stripped = trimmed.replace(/^[-*]\s+/, "");
+
+    if (/^ISSUE_NO_CHANGES$/i.test(stripped)) {
+      hasRecognised = true;
+      hasNoChanges = true;
+      continue;
+    }
+
+    const updatedMatch = stripped.match(/^ISSUE_UPDATED:\s*(.+)$/i);
     if (updatedMatch) {
+      hasRecognised = true;
       changes.push({ type: "minor", description: updatedMatch[1].trim() });
       continue;
     }
 
-    const commentedMatch = trimmed.match(/^ISSUE_COMMENTED:\s*(.+)$/i);
+    const commentedMatch = stripped.match(/^ISSUE_COMMENTED:\s*(.+)$/i);
     if (commentedMatch) {
+      hasRecognised = true;
       changes.push({ type: "major", description: commentedMatch[1].trim() });
+      continue;
     }
+
+    // Unrecognised non-blank line — response is malformed.
+    return { changes: [], valid: false };
   }
 
-  return changes;
+  // ISSUE_NO_CHANGES contradicts ISSUE_UPDATED / ISSUE_COMMENTED.
+  if (hasNoChanges && changes.length > 0) {
+    return { changes: [], valid: false };
+  }
+
+  // At least one keyword must have been found.
+  return { changes, valid: hasRecognised };
+}
+
+/**
+ * Clarification prompt for a malformed issue sync verdict response.
+ */
+export function buildIssueSyncClarificationPrompt(): string {
+  return [
+    `Your previous response did not follow the expected format.`,
+    `Respond with one or more of the following on separate lines:`,
+    ``,
+    `- ISSUE_NO_CHANGES — if no changes were needed`,
+    `- ISSUE_UPDATED: <brief description> — if you updated the issue`,
+    `- ISSUE_COMMENTED: <brief description> — if you added a comment`,
+    ``,
+    `Do not include any other commentary.`,
+  ].join("\n");
 }
 
 // ---- PR description sync prompt ------------------------------------------

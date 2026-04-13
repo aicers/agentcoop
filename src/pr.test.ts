@@ -5,9 +5,8 @@ vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
 }));
 
-const { checkMergeable, findPrNumber, queryMergeableState } = await import(
-  "./pr.js"
-);
+const { checkMergeable, findPrNumber, getPrBody, queryMergeableState } =
+  await import("./pr.js");
 
 const mockExecFileSync = vi.mocked(execFileSync);
 
@@ -69,6 +68,43 @@ describe("findPrNumber", () => {
   test("returns undefined on malformed JSON output", () => {
     mockExecFileSync.mockReturnValue("not json at all");
     expect(findPrNumber("org", "repo", "issue-5")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getPrBody
+// ---------------------------------------------------------------------------
+describe("getPrBody", () => {
+  test("returns trimmed PR body text", () => {
+    mockExecFileSync.mockReturnValue("  Some PR body\n");
+    expect(getPrBody("org", "repo", "branch")).toBe("Some PR body");
+  });
+
+  test("calls gh with correct arguments", () => {
+    mockExecFileSync.mockReturnValue("body");
+    getPrBody("aicers", "agentcoop", "issue-42");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "gh",
+      [
+        "pr",
+        "view",
+        "--repo",
+        "aicers/agentcoop",
+        "issue-42",
+        "--json",
+        "body",
+        "--jq",
+        ".body",
+      ],
+      { encoding: "utf-8" },
+    );
+  });
+
+  test("returns undefined when gh command fails", () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error("gh: not authenticated");
+    });
+    expect(getPrBody("org", "repo", "branch")).toBeUndefined();
   });
 });
 

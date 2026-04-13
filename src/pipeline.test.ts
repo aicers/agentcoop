@@ -646,6 +646,33 @@ describe("runPipeline — needs_clarification handling", () => {
     expect(receivedInstruction).toBe(buildClarificationPrompt("vague"));
   });
 
+  test("auto-clarification uses validVerdicts to scope the prompt", async () => {
+    let receivedInstruction: string | undefined;
+    const scopedKeywords = ["APPROVED", "NOT_APPROVED"] as const;
+    const stages = [
+      makeStage(1, async (ctx) => {
+        if (ctx.iteration === 0) {
+          return {
+            outcome: "needs_clarification",
+            message: "vague",
+            validVerdicts: scopedKeywords,
+          } satisfies StageResult;
+        }
+        receivedInstruction = ctx.userInstruction;
+        return { outcome: "completed", message: "done" };
+      }),
+    ];
+    await runPipeline(makePipelineOpts({ stages }));
+    const expected = buildClarificationPrompt("vague", scopedKeywords);
+    expect(receivedInstruction).toBe(expected);
+    // The scoped prompt must mention the valid keywords.
+    expect(receivedInstruction).toContain("APPROVED");
+    expect(receivedInstruction).toContain("NOT_APPROVED");
+    // It must NOT mention keywords outside the scoped set.
+    expect(receivedInstruction).not.toContain("COMPLETED");
+    expect(receivedInstruction).not.toContain("BLOCKED");
+  });
+
   test("handleAmbiguous not called on first ambiguous (auto-retry first)", async () => {
     const prompt = makePrompt();
     let callCount = 0;

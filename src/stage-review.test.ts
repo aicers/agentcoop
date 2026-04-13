@@ -6,7 +6,9 @@ import {
   buildAuthorCompletionCheckPrompt,
   buildAuthorFixPrompt,
   buildPrFinalizationPrompt,
+  buildPrFinalizationVerdictPrompt,
   buildReviewPrompt,
+  buildReviewVerdictPrompt,
   buildUnresolvedSummaryPrompt,
   createReviewStageHandler,
   type ReviewStageOptions,
@@ -70,13 +72,15 @@ function makeOpts(
       makeStream(
         makeResult({
           sessionId: "sess-a",
-          responseText: "PR_FINALIZED",
+          responseText: "I verified the PR body.",
         }),
       ),
     ),
     resume: vi
       .fn()
-      .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+      .mockReturnValue(
+        makeStream(makeResult({ responseText: "PR_FINALIZED" })),
+      ),
   };
 
   const agentB: AgentAdapter = {
@@ -84,12 +88,19 @@ function makeOpts(
       makeStream(
         makeResult({
           sessionId: "sess-b",
-          responseText: "Looks good.\n\nAPPROVED",
+          responseText: "Looks good.",
         }),
       ),
     ),
     resume: vi
       .fn()
+      // 1st resume: review verdict
+      .mockReturnValueOnce(makeStream(makeResult({ responseText: "APPROVED" })))
+      // 2nd resume: unresolved summary
+      .mockReturnValueOnce(
+        makeStream(makeResult({ responseText: "Summary text" })),
+      )
+      // 3rd resume: unresolved verdict
       .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
   };
 
@@ -124,8 +135,14 @@ describe("buildReviewPrompt", () => {
     expect(prompt).toContain("[Reviewer Round 2]");
   });
 
-  test("mentions APPROVED and NOT_APPROVED", () => {
+  test("review prompt no longer contains verdict keywords", () => {
     const prompt = buildReviewPrompt(BASE_CTX, makeOpts(), 1);
+    expect(prompt).not.toContain("APPROVED");
+    expect(prompt).not.toContain("NOT_APPROVED");
+  });
+
+  test("verdict prompt mentions APPROVED and NOT_APPROVED", () => {
+    const prompt = buildReviewVerdictPrompt();
     expect(prompt).toContain("APPROVED");
     expect(prompt).toContain("NOT_APPROVED");
   });
@@ -245,10 +262,13 @@ describe("buildAuthorCompletionCheckPrompt", () => {
 });
 
 describe("buildUnresolvedSummaryPrompt", () => {
-  test("includes round number and NONE keyword", () => {
+  test("includes round number and does not contain verdict keywords", () => {
     const prompt = buildUnresolvedSummaryPrompt(3);
     expect(prompt).toContain("[Reviewer Unresolved Round 3]");
-    expect(prompt).toContain("NONE");
+    // Work prompt must not contain verdict keywords — those belong
+    // in the dedicated verdict follow-up.
+    expect(prompt).not.toContain("NONE");
+    expect(prompt).not.toContain("COMPLETED");
   });
 });
 
@@ -273,8 +293,13 @@ describe("buildPrFinalizationPrompt", () => {
     expect(prompt).toContain("gh pr edit --body");
   });
 
-  test("ends with PR_FINALIZED keyword", () => {
+  test("finalization prompt no longer contains PR_FINALIZED", () => {
     const prompt = buildPrFinalizationPrompt(BASE_CTX, makeOpts());
+    expect(prompt).not.toContain("PR_FINALIZED");
+  });
+
+  test("finalization verdict prompt mentions PR_FINALIZED", () => {
+    const prompt = buildPrFinalizationVerdictPrompt();
     expect(prompt).toContain("PR_FINALIZED");
   });
 });
@@ -305,12 +330,10 @@ describe("createReviewStageHandler", () => {
     const stage = createReviewStageHandler(opts);
     await stage.handler(BASE_CTX);
 
-    // Agent B should have been resumed with the unresolved summary prompt.
-    expect(opts.agentB.resume).toHaveBeenCalledWith(
-      "sess-b",
-      expect.stringContaining("unresolved"),
-      { cwd: "/tmp/wt" },
-    );
+    // 1st resume: review verdict, 2nd resume: unresolved summary.
+    const calls = (opts.agentB.resume as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(calls[1][1]).toContain("unresolved");
   });
 
   // -- not approved path ------------------------------------------------------
@@ -321,16 +344,33 @@ describe("createReviewStageHandler", () => {
         makeStream(
           makeResult({
             sessionId: "sess-b",
-            responseText: "Needs changes.\n\nNOT_APPROVED",
+            responseText: "Needs changes.",
+          }),
+        ),
+      ),
+      // 1st resume: review verdict (NOT_APPROVED)
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
+    };
+
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a",
+            responseText: "Fixed.",
           }),
         ),
       ),
       resume: vi
         .fn()
-        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
     };
 
-    const opts = makeOpts({ agentB });
+    const opts = makeOpts({ agentA, agentB });
     const stage = createReviewStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
 
@@ -346,11 +386,16 @@ describe("createReviewStageHandler", () => {
         makeStream(
           makeResult({
             sessionId: "sess-b",
-            responseText: "Issues found.\n\nNOT_APPROVED",
+            responseText: "Issues found.",
           }),
         ),
       ),
-      resume: vi.fn(),
+      // 1st resume: review verdict (NOT_APPROVED)
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
     };
 
     const opts = makeOpts({ agentB });
@@ -388,7 +433,12 @@ describe("createReviewStageHandler", () => {
           }),
         ),
       ),
-      resume: vi.fn(),
+      // 1st resume: review verdict
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
     };
 
     const agentA: AgentAdapter = {
@@ -425,7 +475,12 @@ describe("createReviewStageHandler", () => {
           }),
         ),
       ),
-      resume: vi.fn(),
+      // 1st resume: review verdict
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
     };
 
     const getCiStatus = vi
@@ -501,7 +556,12 @@ describe("createReviewStageHandler", () => {
           }),
         ),
       ),
-      resume: vi.fn(),
+      // 1st resume: review verdict
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
     };
 
     const agentA: AgentAdapter = {
@@ -537,7 +597,12 @@ describe("createReviewStageHandler", () => {
           }),
         ),
       ),
-      resume: vi.fn(),
+      // 1st resume: review verdict
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
     };
 
     const agentA: AgentAdapter = {
@@ -578,7 +643,12 @@ describe("createReviewStageHandler", () => {
           }),
         ),
       ),
-      resume: vi.fn(),
+      // 1st resume: review verdict
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
     };
 
     const agentA: AgentAdapter = {
@@ -609,7 +679,12 @@ describe("createReviewStageHandler", () => {
           }),
         ),
       ),
-      resume: vi.fn(),
+      // 1st resume: review verdict
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
     };
 
     let resumeCall = 0;
@@ -643,8 +718,8 @@ describe("createReviewStageHandler", () => {
     expect(result.outcome).toBe("not_approved");
     expect(agentA.resume).toHaveBeenCalledTimes(2);
 
-    // The retry prompt must be the stage-specific completion check
-    // (COMPLETED/BLOCKED only), not the generic clarification prompt.
+    // The retry prompt uses buildClarificationPrompt with
+    // AUTHOR_CHECK_KEYWORDS (COMPLETED/BLOCKED), not the generic one.
     const retryPrompt = (agentA.resume as ReturnType<typeof vi.fn>).mock
       .calls[1][1] as string;
     expect(retryPrompt).toContain("COMPLETED");
@@ -652,7 +727,7 @@ describe("createReviewStageHandler", () => {
     expect(retryPrompt).not.toContain("NOT_APPROVED");
   });
 
-  test("ambiguous author check without sessionId skips internal clarification", async () => {
+  test("ambiguous author check without sessionId retries via fallback session", async () => {
     const agentB: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(
         makeStream(
@@ -662,13 +737,26 @@ describe("createReviewStageHandler", () => {
           }),
         ),
       ),
-      resume: vi.fn(),
+      // 1st resume: review verdict
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
     };
 
     const ambiguousCheck = makeResult({
       sessionId: undefined,
       responseText: "I addressed the feedback.",
     });
+
+    let aResumeCall = 0;
+    const aResumeResults = [
+      // 1st resume: ambiguous completion check (no sessionId)
+      makeStream(ambiguousCheck),
+      // 2nd resume: clarification retry via fallback session
+      makeStream(makeResult({ responseText: "COMPLETED" })),
+    ];
 
     const agentA: AgentAdapter = {
       invoke: vi
@@ -678,18 +766,23 @@ describe("createReviewStageHandler", () => {
             makeResult({ sessionId: "sess-a", responseText: "Fixed." }),
           ),
         ),
-      resume: vi.fn().mockReturnValueOnce(makeStream(ambiguousCheck)),
+      resume: vi.fn().mockImplementation(() => aResumeResults[aResumeCall++]),
     };
 
     const opts = makeOpts({ agentA, agentB });
     const stage = createReviewStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
 
-    expect(result.outcome).toBe("needs_clarification");
-    expect(agentA.resume).toHaveBeenCalledTimes(1);
+    // Clarification retry succeeds via fallback to "sess-a".
+    expect(result.outcome).toBe("not_approved");
+    expect(agentA.resume).toHaveBeenCalledTimes(2);
+    // The retry used the invoke session as fallback.
+    expect((agentA.resume as ReturnType<typeof vi.fn>).mock.calls[1][0]).toBe(
+      "sess-a",
+    );
   });
 
-  test("returns needs_clarification when author check stays ambiguous after retry", async () => {
+  test("returns blocked when author check stays ambiguous after retry", async () => {
     const agentB: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(
         makeStream(
@@ -699,7 +792,12 @@ describe("createReviewStageHandler", () => {
           }),
         ),
       ),
-      resume: vi.fn(),
+      // 1st resume: review verdict
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
     };
 
     let resumeCall = 0;
@@ -728,7 +826,9 @@ describe("createReviewStageHandler", () => {
     const stage = createReviewStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
 
-    expect(result.outcome).toBe("needs_clarification");
+    // Surfaces a blocked condition so the user can decide how to
+    // proceed, rather than polling stale CI on an unchanged head.
+    expect(result.outcome).toBe("blocked");
   });
 
   test("returns error when author clarification retry fails", async () => {
@@ -741,7 +841,12 @@ describe("createReviewStageHandler", () => {
           }),
         ),
       ),
-      resume: vi.fn(),
+      // 1st resume: review verdict
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
     };
 
     let resumeCall = 0;
@@ -783,7 +888,7 @@ describe("createReviewStageHandler", () => {
 
   // -- ambiguous review response -----------------------------------------------
 
-  test("returns needs_clarification on ambiguous review response", async () => {
+  test("returns needs_clarification on ambiguous review verdict", async () => {
     const agentB: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(
         makeStream(
@@ -793,7 +898,15 @@ describe("createReviewStageHandler", () => {
           }),
         ),
       ),
-      resume: vi.fn(),
+      // 1st resume: ambiguous verdict, 2nd resume: still ambiguous after clarification
+      resume: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b2",
+            responseText: "I think it looks fine.",
+          }),
+        ),
+      ),
     };
 
     const opts = makeOpts({ agentB });
@@ -801,6 +914,254 @@ describe("createReviewStageHandler", () => {
     const result = await stage.handler(BASE_CTX);
 
     expect(result.outcome).toBe("needs_clarification");
+  });
+
+  test("ambiguous review verdict → clarification retry → APPROVED completes", async () => {
+    let bResumeCall = 0;
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "Looks good.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockImplementation(() => {
+        bResumeCall++;
+        if (bResumeCall === 1) {
+          // 1st resume: ambiguous verdict
+          return makeStream(
+            makeResult({
+              sessionId: "sess-b2",
+              responseText: "I think it is fine.",
+            }),
+          );
+        }
+        if (bResumeCall === 2) {
+          // 2nd resume: clarification → APPROVED
+          return makeStream(makeResult({ responseText: "APPROVED" }));
+        }
+        if (bResumeCall === 3) {
+          // 3rd resume: unresolved summary
+          return makeStream(
+            makeResult({ responseText: "No unresolved items." }),
+          );
+        }
+        // 4th resume: unresolved verdict
+        return makeStream(makeResult({ responseText: "NONE" }));
+      }),
+    };
+
+    const opts = makeOpts({ agentB });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    // Clarification retry was attempted (3rd call = clarification, not unresolved)
+    expect(agentB.resume).toHaveBeenCalledTimes(4);
+  });
+
+  test("ambiguous review verdict → clarification retry → NOT_APPROVED triggers fix loop", async () => {
+    let bResumeCall = 0;
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "Needs work.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockImplementation(() => {
+        bResumeCall++;
+        if (bResumeCall === 1) {
+          // 1st resume: ambiguous verdict
+          return makeStream(
+            makeResult({ sessionId: "sess-b2", responseText: "Hmm not sure" }),
+          );
+        }
+        // 2nd resume: clarification → NOT_APPROVED
+        return makeStream(makeResult({ responseText: "NOT_APPROVED" }));
+      }),
+    };
+
+    // Agent A must handle the fix loop after NOT_APPROVED.
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a",
+            responseText: "Fixed the issues.",
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+
+    const opts = makeOpts({ agentA, agentB });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("not_approved");
+  });
+
+  test("out-of-scope keyword in review verdict triggers clarification → APPROVED", async () => {
+    let bResumeCall = 0;
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "Looks good.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockImplementation(() => {
+        bResumeCall++;
+        if (bResumeCall === 1) {
+          // 1st resume: out-of-scope keyword COMPLETED
+          return makeStream(
+            makeResult({ sessionId: "sess-b2", responseText: "COMPLETED" }),
+          );
+        }
+        if (bResumeCall === 2) {
+          // 2nd resume: clarification → APPROVED
+          return makeStream(makeResult({ responseText: "APPROVED" }));
+        }
+        if (bResumeCall === 3) {
+          // 3rd resume: unresolved summary
+          return makeStream(
+            makeResult({ responseText: "Nothing unresolved." }),
+          );
+        }
+        // 4th resume: unresolved verdict
+        return makeStream(makeResult({ responseText: "NONE" }));
+      }),
+    };
+
+    const opts = makeOpts({ agentB });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(agentB.resume).toHaveBeenCalledTimes(4);
+  });
+
+  test("returns error when review verdict clarification retry fails", async () => {
+    let bResumeCall = 0;
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "Looks good.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockImplementation(() => {
+        bResumeCall++;
+        if (bResumeCall === 1) {
+          // 1st resume: ambiguous verdict
+          return makeStream(
+            makeResult({ sessionId: "sess-b2", responseText: "I think so" }),
+          );
+        }
+        // 2nd resume: clarification error
+        return makeStream(
+          makeResult({
+            status: "error",
+            errorType: "execution_error",
+            stderrText: "crash",
+            responseText: "",
+          }),
+        );
+      }),
+    };
+
+    const opts = makeOpts({ agentB });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("review verdict clarification");
+  });
+
+  // -- PR finalization clarification paths ----------------------------------------
+
+  test("ambiguous finalization verdict → clarification → PR_FINALIZED completes", async () => {
+    let aResumeCall = 0;
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a",
+            responseText: "I verified the PR body.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockImplementation(() => {
+        aResumeCall++;
+        if (aResumeCall === 1) {
+          // 1st resume: ambiguous verdict
+          return makeStream(
+            makeResult({
+              sessionId: "sess-a2",
+              responseText: "Done updating.",
+            }),
+          );
+        }
+        // 2nd resume: clarification → PR_FINALIZED
+        return makeStream(makeResult({ responseText: "PR_FINALIZED" }));
+      }),
+    };
+
+    const opts = makeOpts({ agentA });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+  });
+
+  test("returns error when finalization clarification retry fails", async () => {
+    let aResumeCall = 0;
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a",
+            responseText: "I verified the PR body.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockImplementation(() => {
+        aResumeCall++;
+        if (aResumeCall === 1) {
+          // 1st resume: ambiguous verdict
+          return makeStream(
+            makeResult({ sessionId: "sess-a2", responseText: "Updated it." }),
+          );
+        }
+        // 2nd resume: clarification error
+        return makeStream(
+          makeResult({
+            status: "error",
+            errorType: "execution_error",
+            stderrText: "crash",
+            responseText: "",
+          }),
+        );
+      }),
+    };
+
+    const opts = makeOpts({ agentA });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("PR finalization clarification");
   });
 
   // -- unresolved summary paths -------------------------------------------------
@@ -811,20 +1172,27 @@ describe("createReviewStageHandler", () => {
         makeStream(
           makeResult({
             sessionId: "sess-b",
-            responseText: "APPROVED",
+            responseText: "Looks good.",
           }),
         ),
       ),
-      resume: vi.fn().mockReturnValue(
-        makeStream(
-          makeResult({
-            status: "error",
-            errorType: "execution_error",
-            stderrText: "crash",
-            responseText: "",
-          }),
+      resume: vi
+        .fn()
+        // 1st resume: review verdict (APPROVED)
+        .mockReturnValueOnce(
+          makeStream(makeResult({ responseText: "APPROVED" })),
+        )
+        // 2nd resume: unresolved summary (error)
+        .mockReturnValue(
+          makeStream(
+            makeResult({
+              status: "error",
+              errorType: "execution_error",
+              stderrText: "crash",
+              responseText: "",
+            }),
+          ),
         ),
-      ),
     };
 
     const opts = makeOpts({ agentB });
@@ -841,18 +1209,27 @@ describe("createReviewStageHandler", () => {
         makeStream(
           makeResult({
             sessionId: "sess-b",
-            responseText: "APPROVED",
+            responseText: "Looks good.",
           }),
         ),
       ),
-      resume: vi.fn().mockReturnValue(
-        makeStream(
-          makeResult({
-            responseText:
-              "**[Reviewer Unresolved Round 1]**\n- Error handling in module X\n- Missing test for edge case Y",
-          }),
-        ),
-      ),
+      resume: vi
+        .fn()
+        // 1st resume: review verdict (APPROVED)
+        .mockReturnValueOnce(
+          makeStream(makeResult({ responseText: "APPROVED" })),
+        )
+        // 2nd resume: unresolved summary (items found)
+        .mockReturnValueOnce(
+          makeStream(
+            makeResult({
+              responseText:
+                "**[Reviewer Unresolved Round 1]**\n- Error handling in module X\n- Missing test for edge case Y",
+            }),
+          ),
+        )
+        // 3rd resume: unresolved verdict (COMPLETED — items were posted)
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
     };
 
     const opts = makeOpts({ agentB });
@@ -874,7 +1251,272 @@ describe("createReviewStageHandler", () => {
     expect(result.message).toContain("Review approved at round 1.");
   });
 
-  test("invokes fresh when sessionId is undefined for unresolved summary", async () => {
+  test("retries with clarification when unresolved verdict is ambiguous", async () => {
+    let bResumeCall = 0;
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "Review posted.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockImplementation(() => {
+        bResumeCall++;
+        if (bResumeCall === 1) {
+          // 1st resume: review verdict
+          return makeStream(makeResult({ responseText: "APPROVED" }));
+        }
+        if (bResumeCall === 2) {
+          // 2nd resume: unresolved summary (work step)
+          return makeStream(
+            makeResult({
+              responseText:
+                "**[Reviewer Unresolved Round 1]**\n- Item X needs attention",
+            }),
+          );
+        }
+        if (bResumeCall === 3) {
+          // 3rd resume: unresolved verdict — ambiguous response
+          return makeStream(makeResult({ responseText: "APPROVED" }));
+        }
+        if (bResumeCall === 4) {
+          // 4th resume: clarification retry — correct verdict
+          return makeStream(makeResult({ responseText: "COMPLETED" }));
+        }
+        return makeStream(makeResult({ responseText: "COMPLETED" }));
+      }),
+    };
+
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "PR finalized." })),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "PR_FINALIZED" })),
+        ),
+    };
+
+    const opts = makeOpts({ agentB, agentA });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(result.message).toContain("Unresolved items:");
+    expect(result.message).toContain("Item X needs attention");
+    // Agent B should be resumed 4 times: review verdict, unresolved
+    // summary, ambiguous verdict, clarification retry.
+    expect(agentB.resume).toHaveBeenCalledTimes(4);
+  });
+
+  test("treats out-of-scope unresolved verdict as ambiguous and retries", async () => {
+    let bResumeCall = 0;
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "Review posted.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockImplementation(() => {
+        bResumeCall++;
+        if (bResumeCall === 1) {
+          return makeStream(makeResult({ responseText: "APPROVED" }));
+        }
+        if (bResumeCall === 2) {
+          // unresolved summary work step
+          return makeStream(
+            makeResult({ responseText: "Nothing unresolved." }),
+          );
+        }
+        if (bResumeCall === 3) {
+          // unresolved verdict — out-of-scope keyword
+          return makeStream(makeResult({ responseText: "NONE and COMPLETED" }));
+        }
+        // clarification retry — correct verdict
+        return makeStream(makeResult({ responseText: "NONE" }));
+      }),
+    };
+
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "PR finalized." })),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "PR_FINALIZED" })),
+        ),
+    };
+
+    const opts = makeOpts({ agentB, agentA });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(result.message).not.toContain("Unresolved items:");
+    // Clarification retry was needed: 4 resume calls.
+    expect(agentB.resume).toHaveBeenCalledTimes(4);
+  });
+
+  test("returns error when unresolved verdict clarification retry fails", async () => {
+    let bResumeCall = 0;
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "Review posted.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockImplementation(() => {
+        bResumeCall++;
+        if (bResumeCall === 1) {
+          return makeStream(makeResult({ responseText: "APPROVED" }));
+        }
+        if (bResumeCall === 2) {
+          return makeStream(
+            makeResult({ responseText: "Nothing unresolved." }),
+          );
+        }
+        if (bResumeCall === 3) {
+          // ambiguous verdict
+          return makeStream(makeResult({ responseText: "I think NONE" }));
+        }
+        // clarification retry — error
+        return makeStream(
+          makeResult({
+            status: "error",
+            errorType: "execution_error",
+            responseText: "agent crashed",
+          }),
+        );
+      }),
+    };
+
+    const opts = makeOpts({ agentB });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("unresolved summary clarification");
+  });
+
+  test("includes summary text when unresolved verdict stays ambiguous after retry", async () => {
+    let bResumeCall = 0;
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b",
+            responseText: "Review posted.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockImplementation(() => {
+        bResumeCall++;
+        if (bResumeCall === 1) {
+          return makeStream(makeResult({ responseText: "APPROVED" }));
+        }
+        if (bResumeCall === 2) {
+          // unresolved summary work step
+          return makeStream(
+            makeResult({
+              responseText:
+                "**[Reviewer Unresolved Round 1]**\n- Item still open",
+            }),
+          );
+        }
+        if (bResumeCall === 3) {
+          // unresolved verdict — ambiguous
+          return makeStream(
+            makeResult({ responseText: "I'm not sure, maybe COMPLETED" }),
+          );
+        }
+        // clarification retry — still ambiguous
+        return makeStream(
+          makeResult({ responseText: "Well, it could be either one" }),
+        );
+      }),
+    };
+
+    const opts = makeOpts({ agentB });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    // Conservatively includes the summary text and proceeds to PR
+    // finalization (default agentA mock handles it).
+    expect(result.outcome).toBe("completed");
+    expect(agentB.resume).toHaveBeenCalledTimes(4);
+  });
+
+  test("uses verdict session ID for unresolved summary when verdict advances session", async () => {
+    let bResumeCall = 0;
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b-initial",
+            responseText: "Review posted.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockImplementation(() => {
+        bResumeCall++;
+        if (bResumeCall === 1) {
+          // 1st resume: review verdict — returns a NEW session ID
+          return makeStream(
+            makeResult({
+              sessionId: "sess-b-after-verdict",
+              responseText: "APPROVED",
+            }),
+          );
+        }
+        if (bResumeCall === 2) {
+          // 2nd resume: unresolved summary work step
+          return makeStream(
+            makeResult({ responseText: "Nothing unresolved." }),
+          );
+        }
+        // 3rd resume: unresolved verdict
+        return makeStream(makeResult({ responseText: "NONE" }));
+      }),
+    };
+
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "PR finalized." })),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "PR_FINALIZED" })),
+        ),
+    };
+
+    const opts = makeOpts({ agentB, agentA });
+    const stage = createReviewStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    // The unresolved summary (2nd resume) must use the session ID
+    // returned by the verdict step, not the initial invoke session.
+    const calls = (agentB.resume as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[1][0]).toBe("sess-b-after-verdict");
+  });
+
+  test("throws when B returns no sessionId (verdict follow-up needs session)", async () => {
     const agentB: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(
         makeStream(
@@ -889,12 +1531,7 @@ describe("createReviewStageHandler", () => {
 
     const opts = makeOpts({ agentB });
     const stage = createReviewStageHandler(opts);
-    const result = await stage.handler(BASE_CTX);
-
-    expect(result.outcome).toBe("completed");
-    // invoke called twice: once for review, once for unresolved summary
-    expect(agentB.invoke).toHaveBeenCalledTimes(2);
-    expect(agentB.resume).not.toHaveBeenCalled();
+    await expect(stage.handler(BASE_CTX)).rejects.toThrow("no session ID");
   });
 
   // -- PR finalization on approval ---------------------------------------------
@@ -933,42 +1570,239 @@ describe("createReviewStageHandler", () => {
     expect(result.message).toContain("PR finalization");
   });
 
-  test("returns needs_clarification when finalization lacks PR_FINALIZED", async () => {
+  test("proceeds as completed when finalization verdict is ambiguous but PR body has issue reference", async () => {
     const agentA: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(
         makeStream(
           makeResult({
+            sessionId: "sess-a",
             responseText: "I could not update the PR body.",
           }),
         ),
       ),
-      resume: vi.fn(),
+      // Verdict follow-up also lacks PR_FINALIZED, and clarification retry too.
+      resume: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a2",
+            responseText: "I still could not finalize.",
+          }),
+        ),
+      ),
     };
 
-    const opts = makeOpts({ agentA });
+    const getPrBody = vi.fn().mockReturnValue("Closes #42");
+    const opts = makeOpts({ agentA, getPrBody });
     const stage = createReviewStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
 
-    expect(result.outcome).toBe("needs_clarification");
+    // Closes #N with no "## Not addressed" — consistent, safe to proceed.
+    expect(result.outcome).toBe("completed");
+    expect(getPrBody).toHaveBeenCalledWith("org", "repo", "issue-42");
   });
 
-  test("returns needs_clarification when finalization replies APPROVED without PR_FINALIZED", async () => {
+  test("returns blocked when finalization verdict is ambiguous and PR body lacks issue reference", async () => {
     const agentA: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(
         makeStream(
           makeResult({
+            sessionId: "sess-a",
+            responseText: "I could not update the PR body.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a2",
+            responseText: "I still could not finalize.",
+          }),
+        ),
+      ),
+    };
+
+    const getPrBody = vi.fn().mockReturnValue("Some PR body without ref");
+    const opts = makeOpts({ agentA, getPrBody });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.message).toContain("#42");
+  });
+
+  test("returns blocked when finalization verdict replies APPROVED and PR body lacks issue reference", async () => {
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a",
+            responseText: "Done.",
+          }),
+        ),
+      ),
+      // Verdict follow-up says APPROVED (wrong keyword), clarification retry too.
+      resume: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a2",
             responseText: "APPROVED",
           }),
         ),
       ),
-      resume: vi.fn(),
     };
 
-    const opts = makeOpts({ agentA });
+    const getPrBody = vi.fn().mockReturnValue("No issue ref here");
+    const opts = makeOpts({ agentA, getPrBody });
     const stage = createReviewStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
 
-    expect(result.outcome).toBe("needs_clarification");
+    expect(result.outcome).toBe("blocked");
+  });
+
+  test("proceeds as completed when finalization verdict replies APPROVED but PR body has Part of ref", async () => {
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a",
+            responseText: "Done.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a2",
+            responseText: "APPROVED",
+          }),
+        ),
+      ),
+    };
+
+    const getPrBody = vi
+      .fn()
+      .mockReturnValue("Part of #42\n\n## Not addressed\n- item");
+    const opts = makeOpts({ agentA, getPrBody });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+  });
+
+  test("blocks when Part of ref is present but ## Not addressed section is missing", async () => {
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a",
+            responseText: "Done.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a2",
+            responseText: "APPROVED",
+          }),
+        ),
+      ),
+    };
+
+    const getPrBody = vi.fn().mockReturnValue("Part of #42");
+    const opts = makeOpts({ agentA, getPrBody });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("blocked");
+  });
+
+  test("blocks when Closes ref is present alongside contradictory ## Not addressed section", async () => {
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a",
+            responseText: "Done.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a2",
+            responseText: "APPROVED",
+          }),
+        ),
+      ),
+    };
+
+    const getPrBody = vi
+      .fn()
+      .mockReturnValue("Closes #42\n\n## Not addressed\n- item");
+    const opts = makeOpts({ agentA, getPrBody });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("blocked");
+  });
+
+  test("blocks when both Closes and Part of refs are present without ## Not addressed", async () => {
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a",
+            responseText: "Done.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a2",
+            responseText: "APPROVED",
+          }),
+        ),
+      ),
+    };
+
+    const getPrBody = vi.fn().mockReturnValue("Closes #42\nPart of #42");
+    const opts = makeOpts({ agentA, getPrBody });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("blocked");
+  });
+
+  test("blocks when both Closes and Part of refs are present with ## Not addressed", async () => {
+    const agentA: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a",
+            responseText: "Done.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-a2",
+            responseText: "APPROVED",
+          }),
+        ),
+      ),
+    };
+
+    const getPrBody = vi
+      .fn()
+      .mockReturnValue("Closes #42\nPart of #42\n\n## Not addressed\n- item");
+    const opts = makeOpts({ agentA, getPrBody });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("blocked");
   });
 
   test("reports Agent A session ID after PR finalization", async () => {
@@ -978,11 +1812,16 @@ describe("createReviewStageHandler", () => {
         makeStream(
           makeResult({
             sessionId: "sess-a-fin",
-            responseText: "PR_FINALIZED",
+            responseText: "I verified the PR body.",
           }),
         ),
       ),
-      resume: vi.fn(),
+      // Verdict follow-up: PR_FINALIZED
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "PR_FINALIZED" })),
+        ),
     };
 
     const opts = makeOpts({ agentA });
@@ -1016,7 +1855,7 @@ describe("createReviewStageHandler", () => {
 
   // -- ambiguous does not invoke Agent A --------------------------------------
 
-  test("does not invoke Agent A when review is ambiguous", async () => {
+  test("does not invoke Agent A when review verdict is ambiguous", async () => {
     const agentB: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(
         makeStream(
@@ -1026,7 +1865,15 @@ describe("createReviewStageHandler", () => {
           }),
         ),
       ),
-      resume: vi.fn(),
+      // 1st resume: ambiguous verdict, 2nd: still ambiguous after clarification
+      resume: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b2",
+            responseText: "I think it is fine.",
+          }),
+        ),
+      ),
     };
 
     const opts = makeOpts({ agentB });
@@ -1048,12 +1895,30 @@ describe("createReviewStageHandler", () => {
           }),
         ),
       ),
-      resume: vi.fn(),
+      // 1st resume: review verdict
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
+    };
+
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-a", responseText: "Fixed." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
     };
 
     const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pass"));
     const getHeadSha = vi.fn().mockReturnValue("deadbeef");
-    const opts = makeOpts({ agentB, getCiStatus, getHeadSha });
+    const opts = makeOpts({ agentA, agentB, getCiStatus, getHeadSha });
     const stage = createReviewStageHandler(opts);
     await stage.handler(BASE_CTX);
 
@@ -1078,7 +1943,25 @@ describe("createReviewStageHandler", () => {
           }),
         ),
       ),
-      resume: vi.fn(),
+      // 1st resume: review verdict
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
+    };
+
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-a", responseText: "Fixed." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
     };
 
     const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pending"));
@@ -1090,6 +1973,7 @@ describe("createReviewStageHandler", () => {
     vi.spyOn(Date, "now").mockImplementation(() => startTime + elapsed);
 
     const opts = makeOpts({
+      agentA,
       agentB,
       getCiStatus,
       delay,
@@ -1115,21 +1999,43 @@ describe("createReviewStageHandler", () => {
         makeStream(
           makeResult({
             sessionId: "sess-b",
-            responseText: "Needs changes.\n\nNOT_APPROVED",
+            responseText: "Needs changes.",
           }),
         ),
       ),
-      resume: vi.fn().mockReturnValue(
-        makeStream(
-          makeResult({
-            responseText:
-              "**[Reviewer Unresolved Round 1]**\n- Missing validation in handler",
-          }),
-        ),
-      ),
+      resume: vi
+        .fn()
+        // 1st resume: review verdict (NOT_APPROVED)
+        .mockReturnValueOnce(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        )
+        // 2nd resume: unresolved summary (items found)
+        .mockReturnValueOnce(
+          makeStream(
+            makeResult({
+              responseText:
+                "**[Reviewer Unresolved Round 1]**\n- Missing validation in handler",
+            }),
+          ),
+        )
+        // 3rd resume: unresolved verdict (COMPLETED)
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
     };
 
-    const opts = makeOpts({ agentB });
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-a", responseText: "Fixed." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+
+    const opts = makeOpts({ agentA, agentB });
     const stage = createReviewStageHandler(opts);
     const ctx = { ...BASE_CTX, lastAutoIteration: true };
     const result = await stage.handler(ctx);
@@ -1137,11 +2043,9 @@ describe("createReviewStageHandler", () => {
     expect(result.outcome).toBe("not_approved");
     expect(result.message).toContain("Unresolved items:");
     expect(result.message).toContain("Missing validation in handler");
-    expect(agentB.resume).toHaveBeenCalledWith(
-      "sess-b",
-      expect.stringContaining("unresolved"),
-      { cwd: "/tmp/wt" },
-    );
+    // 2nd resume call should be the unresolved summary prompt.
+    const calls = (agentB.resume as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[1][1]).toContain("unresolved");
   });
 
   test("skips unresolved summary on NOT_APPROVED when lastAutoIteration is false", async () => {
@@ -1150,21 +2054,39 @@ describe("createReviewStageHandler", () => {
         makeStream(
           makeResult({
             sessionId: "sess-b",
-            responseText: "Needs changes.\n\nNOT_APPROVED",
+            responseText: "Needs changes.",
           }),
         ),
       ),
-      resume: vi.fn(),
+      // 1st resume: review verdict (NOT_APPROVED)
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
     };
 
-    const opts = makeOpts({ agentB });
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-a", responseText: "Fixed." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+
+    const opts = makeOpts({ agentA, agentB });
     const stage = createReviewStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
 
     expect(result.outcome).toBe("not_approved");
     expect(result.message).not.toContain("Unresolved items:");
-    // Agent B resume should not be called (no unresolved summary request).
-    expect(agentB.resume).not.toHaveBeenCalled();
+    // Agent B resume is called once for the verdict, but not for unresolved summary.
+    expect(agentB.resume).toHaveBeenCalledTimes(1);
   });
 
   test("returns error when unresolved summary fails on lastAutoIteration", async () => {
@@ -1177,19 +2099,39 @@ describe("createReviewStageHandler", () => {
           }),
         ),
       ),
-      resume: vi.fn().mockReturnValue(
-        makeStream(
-          makeResult({
-            status: "error",
-            errorType: "execution_error",
-            stderrText: "crash",
-            responseText: "",
-          }),
+      resume: vi
+        .fn()
+        // 1st resume: review verdict (NOT_APPROVED)
+        .mockReturnValueOnce(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        )
+        // 2nd resume: unresolved summary (error)
+        .mockReturnValue(
+          makeStream(
+            makeResult({
+              status: "error",
+              errorType: "execution_error",
+              stderrText: "crash",
+              responseText: "",
+            }),
+          ),
         ),
-      ),
     };
 
-    const opts = makeOpts({ agentB });
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-a", responseText: "Fixed." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+
+    const opts = makeOpts({ agentA, agentB });
     const stage = createReviewStageHandler(opts);
     const ctx = { ...BASE_CTX, lastAutoIteration: true };
     const result = await stage.handler(ctx);
@@ -1210,10 +2152,32 @@ describe("createReviewStageHandler", () => {
       ),
       resume: vi
         .fn()
+        // 1st resume: review verdict (NOT_APPROVED)
+        .mockReturnValueOnce(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        )
+        // 2nd resume: unresolved summary (some text)
+        .mockReturnValueOnce(
+          makeStream(makeResult({ responseText: "Nothing unresolved." })),
+        )
+        // 3rd resume: unresolved verdict (NONE)
         .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
     };
 
-    const opts = makeOpts({ agentB });
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-a", responseText: "Fixed." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+
+    const opts = makeOpts({ agentA, agentB });
     const stage = createReviewStageHandler(opts);
     const ctx = { ...BASE_CTX, lastAutoIteration: true };
     const result = await stage.handler(ctx);
@@ -1222,31 +2186,23 @@ describe("createReviewStageHandler", () => {
     expect(result.message).not.toContain("Unresolved items:");
   });
 
-  test("invokes fresh when sessionId is undefined for unresolved summary on lastAutoIteration", async () => {
+  test("throws when B returns no sessionId on lastAutoIteration (verdict follow-up needs session)", async () => {
     const agentB: AgentAdapter = {
-      invoke: vi
-        .fn()
-        .mockReturnValueOnce(
-          makeStream(
-            makeResult({
-              sessionId: undefined,
-              responseText: "NOT_APPROVED",
-            }),
-          ),
-        )
-        .mockReturnValueOnce(makeStream(makeResult({ responseText: "NONE" }))),
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: undefined,
+            responseText: "NOT_APPROVED",
+          }),
+        ),
+      ),
       resume: vi.fn(),
     };
 
     const opts = makeOpts({ agentB });
     const stage = createReviewStageHandler(opts);
     const ctx = { ...BASE_CTX, lastAutoIteration: true };
-    const result = await stage.handler(ctx);
-
-    expect(result.outcome).toBe("not_approved");
-    // invoke called twice: once for review, once for unresolved summary (fresh)
-    expect(agentB.invoke).toHaveBeenCalledTimes(2);
-    expect(agentB.resume).not.toHaveBeenCalled();
+    await expect(stage.handler(ctx)).rejects.toThrow("no session ID");
   });
 
   // -- CI passes after fix on second attempt ----------------------------------
@@ -1261,7 +2217,12 @@ describe("createReviewStageHandler", () => {
           }),
         ),
       ),
-      resume: vi.fn(),
+      // 1st resume: review verdict
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
     };
 
     const getCiStatus = vi
@@ -1309,11 +2270,20 @@ describe("onSessionId", () => {
         .fn()
         .mockReturnValue(
           makeStream(
-            makeResult({ sessionId: "sess-b-1", responseText: "APPROVED" }),
+            makeResult({ sessionId: "sess-b-1", responseText: "Looks good." }),
           ),
         ),
       resume: vi
         .fn()
+        // 1st resume: review verdict (APPROVED)
+        .mockReturnValueOnce(
+          makeStream(makeResult({ responseText: "APPROVED" })),
+        )
+        // 2nd resume: unresolved summary
+        .mockReturnValueOnce(
+          makeStream(makeResult({ responseText: "Nothing." })),
+        )
+        // 3rd resume: unresolved verdict (NONE)
         .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
     };
     const agentA: AgentAdapter = {
@@ -1321,11 +2291,16 @@ describe("onSessionId", () => {
         makeStream(
           makeResult({
             sessionId: "sess-a-fin",
-            responseText: "PR_FINALIZED",
+            responseText: "I verified the PR body.",
           }),
         ),
       ),
-      resume: vi.fn(),
+      // Verdict follow-up: PR_FINALIZED
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "PR_FINALIZED" })),
+        ),
     };
     const opts = makeOpts({ agentA, agentB });
     const stage = createReviewStageHandler(opts);
@@ -1348,14 +2323,19 @@ describe("onSessionId", () => {
           }),
         ),
       ),
-      resume: vi.fn(),
+      // 1st resume: review verdict
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
     };
     const agentA: AgentAdapter = {
       invoke: vi
         .fn()
         .mockReturnValue(
           makeStream(
-            makeResult({ sessionId: "sess-a-1", responseText: "COMPLETED" }),
+            makeResult({ sessionId: "sess-a-1", responseText: "Fixed." }),
           ),
         ),
       resume: vi

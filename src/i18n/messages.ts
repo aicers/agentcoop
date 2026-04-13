@@ -219,6 +219,7 @@ export interface Messages {
   "review.approved": (round: number) => string;
   "review.unresolvedItems": (base: string, summary: string) => string;
   "review.fixesApplied": (round: number) => string;
+  "review.finalizationUnverified": (issueNumber: number) => string;
 
   // ---- stage-util errors -------------------------------------------------
 
