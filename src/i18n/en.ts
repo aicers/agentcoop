@@ -92,6 +92,7 @@ export const en: Messages = {
   "stage.ciCheck": "CI check",
   "stage.testPlan": "Test plan verification",
   "stage.squash": "Squash commits",
+  "stage.rebase": "Rebase",
   "stage.review": "Review",
   "stage.done": "Done",
 

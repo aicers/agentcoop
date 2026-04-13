@@ -93,6 +93,7 @@ export interface Messages {
   "stage.ciCheck": string;
   "stage.testPlan": string;
   "stage.squash": string;
+  "stage.rebase": string;
   "stage.review": string;
   "stage.done": string;
 

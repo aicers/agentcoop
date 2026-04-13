@@ -1211,6 +1211,38 @@ describe("StatusBar", () => {
     expect(frame).toContain("aicers/agentcoop#42:");
     expect(frame).toContain("\u2026");
   });
+
+  test("stage:name-override changes displayed name then restores on next override", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={49}
+      />,
+    );
+
+    emitter.emit("stage:enter", {
+      stageNumber: 9,
+      stageName: "Done",
+      iteration: 0,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastFrame()).toContain("Stage 9: Done");
+
+    // Override to "Rebase"
+    emitter.emit("stage:name-override", { stageName: "Rebase" });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastFrame()).toContain("Stage 9: Rebase");
+    expect(lastFrame()).not.toContain("Stage 9: Done");
+
+    // Restore to "Done"
+    emitter.emit("stage:name-override", { stageName: "Done" });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastFrame()).toContain("Stage 9: Done");
+    expect(lastFrame()).not.toContain("Stage 9: Rebase");
+  });
 });
 
 // ---- InputArea ---------------------------------------------------------------

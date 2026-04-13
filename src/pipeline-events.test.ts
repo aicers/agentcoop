@@ -7,6 +7,7 @@ import {
   PipelineEventEmitter,
   type StageEnterEvent,
   type StageExitEvent,
+  type StageNameOverrideEvent,
 } from "./pipeline-events.js";
 
 describe("PipelineEventEmitter", () => {
@@ -104,6 +105,17 @@ describe("PipelineEventEmitter", () => {
       usage: { inputTokens: 100, outputTokens: 50, cachedInputTokens: 10 },
     };
     emitter.emit("agent:usage", event);
+
+    expect(handler).toHaveBeenCalledWith(event);
+  });
+
+  test("emits and receives stage:name-override events", () => {
+    const emitter = new PipelineEventEmitter();
+    const handler = vi.fn();
+    emitter.on("stage:name-override", handler);
+
+    const event: StageNameOverrideEvent = { stageName: "Rebase" };
+    emitter.emit("stage:name-override", event);
 
     expect(handler).toHaveBeenCalledWith(event);
   });

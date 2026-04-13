@@ -17,6 +17,10 @@ export interface StageExitEvent {
   outcome: string;
 }
 
+export interface StageNameOverrideEvent {
+  stageName: string;
+}
+
 export interface AgentInvokeEvent {
   agent: "a" | "b";
   type: "invoke" | "resume";
@@ -38,6 +42,7 @@ interface PipelineEventMap {
   "agent:usage": [AgentUsageEvent];
   "stage:enter": [StageEnterEvent];
   "stage:exit": [StageExitEvent];
+  "stage:name-override": [StageNameOverrideEvent];
   "agent:invoke": [AgentInvokeEvent];
 }
 
