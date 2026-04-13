@@ -748,8 +748,9 @@ async function handleUnresolvedSummary(
       cwd,
       onUsage: usageSink,
     });
-    if (sink) drainToSink(stream, sink);
+    const drained = sink ? drainToSink(stream, sink) : undefined;
     result = await stream.result;
+    if (drained) await drained;
   }
 
   if (result.status === "error") {
@@ -782,8 +783,9 @@ async function handleUnresolvedSummary(
       cwd,
       onUsage: usageSink,
     });
-    if (sink) drainToSink(stream, sink);
+    const drained = sink ? drainToSink(stream, sink) : undefined;
     verdictResult = await stream.result;
+    if (drained) await drained;
   }
 
   if (verdictResult.status === "error") {
@@ -825,8 +827,9 @@ async function handleUnresolvedSummary(
         cwd,
         onUsage: usageSink,
       });
-      if (sink) drainToSink(stream, sink);
+      const drained = sink ? drainToSink(stream, sink) : undefined;
       retryResult = await stream.result;
+      if (drained) await drained;
     }
 
     if (retryResult.status === "error") {

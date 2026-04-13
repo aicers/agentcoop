@@ -88,10 +88,11 @@ export function createRebaseHandler(
       cwd: ctx.worktreePath,
       onUsage: ctx.usageSinks?.a,
     });
-    if (ctx.streamSinks?.a) {
-      drainToSink(stream, ctx.streamSinks.a);
-    }
+    const drained = ctx.streamSinks?.a
+      ? drainToSink(stream, ctx.streamSinks.a)
+      : undefined;
     const result = await stream.result;
+    if (drained) await drained;
 
     if (result.sessionId) {
       ctx.onSessionId?.("a", result.sessionId);

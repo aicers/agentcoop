@@ -188,17 +188,22 @@ export function mapParsedStepToResult(
 
 /**
  * Drain the async iterator of a stream, forwarding chunks to a sink.
- * The task runs detached — the returned promise is the stream's
- * `.result` (which resolves independently of the iterator).
+ *
+ * Returns a promise that resolves when the iterator is fully consumed.
+ * Callers should await this promise after `stream.result` to guarantee
+ * all chunks have been delivered before injecting the next prompt.
  */
-export function drainToSink(stream: AgentStream, sink: StreamSink): void {
-  (async () => {
+export function drainToSink(
+  stream: AgentStream,
+  sink: StreamSink,
+): Promise<void> {
+  return (async () => {
     try {
       for await (const chunk of stream) {
         sink(chunk);
       }
     } catch {
-      // Fire-and-forget: sink errors must not become unhandled rejections.
+      // Sink errors must not become unhandled rejections.
     }
   })();
 }
@@ -234,8 +239,9 @@ async function retryOnTimeout(
       cwd,
       onUsage: usageSink,
     });
-    if (sink) drainToSink(stream, sink);
+    const drained = sink ? drainToSink(stream, sink) : undefined;
     result = await stream.result;
+    if (drained) await drained;
   }
 
   return result;
@@ -291,8 +297,9 @@ async function invokeOrResumeOnce(
   const opts = { cwd, onUsage: usageSink };
   if (savedSessionId) {
     const stream = agent.resume(savedSessionId, prompt, opts);
-    if (sink) drainToSink(stream, sink);
+    const drained = sink ? drainToSink(stream, sink) : undefined;
     const result = await stream.result;
+    if (drained) await drained;
     if (result.status === "success") {
       return result;
     }
@@ -310,8 +317,10 @@ async function invokeOrResumeOnce(
     // Session expired or unknown error — fall back to fresh invoke.
   }
   const stream = agent.invoke(prompt, opts);
-  if (sink) drainToSink(stream, sink);
-  return stream.result;
+  const drained = sink ? drainToSink(stream, sink) : undefined;
+  const result = await stream.result;
+  if (drained) await drained;
+  return result;
 }
 
 /**
@@ -341,8 +350,9 @@ export async function sendFollowUp(
     cwd,
     onUsage: usageSink,
   });
-  if (sink) drainToSink(stream, sink);
+  const drained = sink ? drainToSink(stream, sink) : undefined;
   const result = await stream.result;
+  if (drained) await drained;
   return retryOnTimeout(
     agent,
     result,
