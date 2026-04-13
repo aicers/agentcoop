@@ -230,7 +230,7 @@ describe("createSquashStageHandler", () => {
       resume: vi.fn().mockReturnValue(
         makeStream(
           makeResult({
-            responseText: "Cannot squash.\n\nBLOCKED",
+            responseText: "BLOCKED",
           }),
         ),
       ),
@@ -241,7 +241,7 @@ describe("createSquashStageHandler", () => {
 
     expect(result.outcome).toBe("blocked");
     expect(result.message).toContain("Tried to squash");
-    expect(result.message).toContain("Cannot squash");
+    expect(result.message).toContain("BLOCKED");
   });
 
   // -- CI fails after squash -------------------------------------------------
@@ -427,25 +427,38 @@ describe("createSquashStageHandler", () => {
     expect(agent.resume).toHaveBeenCalledTimes(2);
   });
 
-  test("ambiguous check without sessionId skips internal clarification", async () => {
+  test("ambiguous check without sessionId retries via fallback session", async () => {
     const ambiguousCheck = makeResult({
       sessionId: undefined,
       responseText: "I squashed the commits.",
     });
 
+    let resumeCall = 0;
+    const resumeResults = [
+      // 1st resume: ambiguous completion check (no sessionId)
+      makeStream(ambiguousCheck),
+      // 2nd resume: clarification retry via fallback session
+      makeStream(makeResult({ responseText: "COMPLETED" })),
+    ];
+
     const agent: AgentAdapter = {
       invoke: vi
         .fn()
         .mockReturnValue(makeStream(makeResult({ sessionId: "sess-squash" }))),
-      resume: vi.fn().mockReturnValueOnce(makeStream(ambiguousCheck)),
+      resume: vi.fn().mockImplementation(() => resumeResults[resumeCall++]),
     };
 
     const opts = makeOpts({ agent });
     const stage = createSquashStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
 
-    expect(result.outcome).toBe("needs_clarification");
-    expect(agent.resume).toHaveBeenCalledTimes(1);
+    // Clarification retry succeeds via fallback to "sess-squash".
+    expect(result.outcome).toBe("completed");
+    expect(agent.resume).toHaveBeenCalledTimes(2);
+    // The retry used the invoke session as fallback.
+    expect((agent.resume as ReturnType<typeof vi.fn>).mock.calls[1][0]).toBe(
+      "sess-squash",
+    );
   });
 
   // -- CI pending then pass ---------------------------------------------------
@@ -537,7 +550,7 @@ describe("createSquashStageHandler", () => {
 
   // -- non-terminal non-blocked completion outcome ----------------------------
 
-  test("returns needs_clarification when clarification also ambiguous", async () => {
+  test("proceeds as completed when clarification also ambiguous but commit count decreased", async () => {
     let resumeCall = 0;
     const resumeResults = [
       makeStream(
@@ -563,11 +576,51 @@ describe("createSquashStageHandler", () => {
       resume: vi.fn().mockImplementation(() => resumeResults[resumeCall++]),
     };
 
-    const opts = makeOpts({ agent });
+    const countBranchCommits = vi
+      .fn()
+      .mockReturnValueOnce(2) // initial check: > 1, proceed
+      .mockReturnValueOnce(1); // post-condition: decreased, completed
+    const opts = makeOpts({ agent, countBranchCommits });
     const stage = createSquashStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
 
-    expect(result.outcome).toBe("needs_clarification");
+    expect(result.outcome).toBe("completed");
+    expect(countBranchCommits).toHaveBeenCalledTimes(2);
+  });
+
+  test("returns blocked when clarification also ambiguous and commit count unchanged", async () => {
+    let resumeCall = 0;
+    const resumeResults = [
+      makeStream(
+        makeResult({
+          sessionId: "sess-2",
+          responseText: "I squashed the commits.",
+        }),
+      ),
+      makeStream(
+        makeResult({ responseText: "I finished the squash process." }),
+      ),
+    ];
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-squash",
+            responseText: "Squashed.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockImplementation(() => resumeResults[resumeCall++]),
+    };
+
+    const countBranchCommits = vi.fn().mockReturnValue(2); // unchanged
+    const opts = makeOpts({ agent, countBranchCommits });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.message).toContain("Squashed.");
   });
 
   // -- getHeadSha forwarding ----------------------------------------------------

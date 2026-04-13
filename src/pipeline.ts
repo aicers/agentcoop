@@ -45,6 +45,12 @@ export interface StageResult {
   outcome: StageOutcome;
   /** Free-form message shown to the user or forwarded to the next stage. */
   message: string;
+  /**
+   * Valid keywords for clarification — set when outcome is
+   * `needs_clarification` so the pipeline engine can build a correctly
+   * scoped clarification prompt without knowing stage internals.
+   */
+  validVerdicts?: readonly string[];
 }
 
 /**
@@ -733,7 +739,10 @@ async function runStage(
       if (!clarificationAttempted) {
         // First ambiguous response: auto-retry with a clarification prompt.
         clarificationAttempted = true;
-        userInstruction = buildClarificationPrompt(result.message);
+        userInstruction = buildClarificationPrompt(
+          result.message,
+          result.validVerdicts,
+        );
       } else {
         // Clarification already tried once — fall back to user.
         clarificationAttempted = false;

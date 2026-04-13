@@ -42,6 +42,40 @@ export function findPrNumber(
   return prs.length > 0 ? prs[0].number : undefined;
 }
 
+// ---- PR body -----------------------------------------------------------------
+
+/**
+ * Read the body of the PR associated with `branch` in `owner/repo`.
+ *
+ * Returns the body text, or `undefined` if the PR does not exist or
+ * the command fails.
+ */
+export function getPrBody(
+  owner: string,
+  repo: string,
+  branch: string,
+): string | undefined {
+  try {
+    return execFileSync(
+      "gh",
+      [
+        "pr",
+        "view",
+        "--repo",
+        `${owner}/${repo}`,
+        branch,
+        "--json",
+        "body",
+        "--jq",
+        ".body",
+      ],
+      { encoding: "utf-8" },
+    ).trim();
+  } catch {
+    return undefined;
+  }
+}
+
 // ---- mergeable state ---------------------------------------------------------
 
 /**

@@ -107,6 +107,8 @@ export function buildSquashPrompt(
   return lines.join("\n");
 }
 
+export const SQUASH_CHECK_KEYWORDS = ["COMPLETED", "BLOCKED"] as const;
+
 export function buildSquashCompletionCheckPrompt(): string {
   return [
     `You have finished your squash attempt.  Please evaluate the result`,
@@ -115,8 +117,7 @@ export function buildSquashCompletionCheckPrompt(): string {
     `- COMPLETED — if the commits were squashed and force-pushed`,
     `- BLOCKED — if you could not squash and need user intervention`,
     ``,
-    `If BLOCKED, add a brief reason on the next line explaining what`,
-    `went wrong.`,
+    `Do not include any other commentary — just the keyword.`,
   ].join("\n");
 }
 
@@ -181,16 +182,21 @@ export function createSquashStageHandler(
         return mapAgentError(checkResult, "during squash completion check");
       }
 
-      let result = mapResponseToResult(checkResult.responseText);
+      let result = mapResponseToResult(
+        checkResult.responseText,
+        undefined,
+        SQUASH_CHECK_KEYWORDS,
+      );
 
-      if (result.outcome === "needs_clarification" && checkResult.sessionId) {
+      if (result.outcome === "needs_clarification") {
         const clarifyPrompt = buildClarificationPrompt(
           checkResult.responseText,
+          SQUASH_CHECK_KEYWORDS,
         );
         ctx.promptSinks?.a?.(clarifyPrompt);
         const retryResult = await sendFollowUp(
           opts.agent,
-          checkResult.sessionId,
+          checkResult.sessionId ?? squashResult.sessionId,
           clarifyPrompt,
           ctx.worktreePath,
           ctx.streamSinks?.a,
@@ -206,7 +212,28 @@ export function createSquashStageHandler(
         }
 
         checkResult = retryResult;
-        result = mapResponseToResult(retryResult.responseText);
+        result = mapResponseToResult(
+          retryResult.responseText,
+          undefined,
+          SQUASH_CHECK_KEYWORDS,
+        );
+      }
+
+      // If still ambiguous after the in-session retry, verify
+      // the squash actually happened by checking whether the
+      // commit count decreased.
+      if (result.outcome === "needs_clarification") {
+        const postCount = (
+          opts.countBranchCommits ?? defaultCountBranchCommits
+        )(ctx.worktreePath, opts.defaultBranch);
+        if (postCount < count) {
+          result = { outcome: "completed", message: result.message };
+        } else {
+          result = {
+            outcome: "blocked",
+            message: `${squashResult.responseText}\n\n---\n\n${checkResult.responseText}`,
+          };
+        }
       }
 
       if (result.outcome === "blocked") {

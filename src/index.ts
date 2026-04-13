@@ -30,6 +30,7 @@ import type {
 import { createDoneStageHandler } from "./pipeline.js";
 import { PipelineEventEmitter } from "./pipeline-events.js";
 import { checkMergeable, findPrNumber } from "./pr.js";
+import { createRebaseHandler } from "./rebase.js";
 import {
   deleteRunState,
   loadRunState,
@@ -44,10 +45,8 @@ import { createReviewStageHandler } from "./stage-review.js";
 import { createSelfCheckStageHandler } from "./stage-selfcheck.js";
 import { createSquashStageHandler } from "./stage-squash.js";
 import { createTestPlanStageHandler } from "./stage-testplan.js";
-import { drainToSink } from "./stage-util.js";
 import type { AgentConfig } from "./startup.js";
 import { modelDisplayName, runStartup, selectTarget } from "./startup.js";
-import { parseStepStatus } from "./step-parser.js";
 import { renderApp } from "./ui/render-app.js";
 import {
   bootstrapRepo,
@@ -577,64 +576,7 @@ try {
         if (tuiPrompt) return tuiPrompt.waitForManualResolve(msg);
       },
     },
-    rebaseOntoMain: async (ctx) => {
-      const rebasePrompt = [
-        `You are rebasing a feature branch onto the latest main.`,
-        ``,
-        `## Repository`,
-        `- Owner: ${ctx.owner}`,
-        `- Repo: ${ctx.repo}`,
-        `- Branch: ${ctx.branch}`,
-        `- Worktree: ${ctx.worktreePath}`,
-        ``,
-        `## Instructions`,
-        ``,
-        `1. Run \`git fetch origin ${defaultBranch}\` to get the latest main.`,
-        `2. Run \`git rebase origin/${defaultBranch}\` to rebase onto main.`,
-        `3. Resolve any merge conflicts that arise.`,
-        `4. After resolving conflicts, verify the result locally:`,
-        `   - Build the project to ensure it compiles.`,
-        `   - Run the full test suite to ensure nothing is broken.`,
-        `5. Only if the build and all tests pass, force-push the branch:`,
-        `   \`git push --force-with-lease\``,
-        `6. After a successful force-push, post a brief PR comment noting`,
-        `   which main commit the branch was rebased onto and a short`,
-        `   summary of resolved conflicts. Use:`,
-        `   \`gh pr comment --body "<your summary>"\``,
-        `   If no PR exists or the comment fails, continue without failing.`,
-        ``,
-        `IMPORTANT: If you cannot resolve conflicts cleanly or if the`,
-        `build/tests fail after resolution, do NOT push. Instead, abort`,
-        `the rebase (\`git rebase --abort\`) and report failure.`,
-        ``,
-        `When you are done, end your response with exactly one of:`,
-        `- COMPLETED — if the rebase succeeded and was force-pushed.`,
-        `- BLOCKED — if you could not resolve conflicts or tests failed.`,
-      ].join("\n");
-
-      ctx.promptSinks?.a?.(rebasePrompt);
-      const stream = agentA.invoke(rebasePrompt, {
-        cwd: ctx.worktreePath,
-        onUsage: ctx.usageSinks?.a,
-      });
-      if (ctx.streamSinks?.a) {
-        drainToSink(stream, ctx.streamSinks.a);
-      }
-      const result = await stream.result;
-
-      if (result.sessionId) {
-        ctx.onSessionId?.("a", result.sessionId);
-      }
-
-      if (result.status === "error") {
-        return { success: false, message: result.responseText };
-      }
-
-      const parsed = parseStepStatus(result.responseText);
-      const success =
-        parsed.status === "completed" || parsed.status === "fixed";
-      return { success, message: result.responseText };
-    },
+    rebaseOntoMain: createRebaseHandler(agentA, defaultBranch),
     pollCiAndFix: async (ctx) => {
       return pollCiAndFix({
         ctx,

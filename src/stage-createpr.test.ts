@@ -127,10 +127,10 @@ describe("buildPrCompletionCheckPrompt", () => {
     expect(prompt).toContain("exactly one");
   });
 
-  test("asks for a brief reason when BLOCKED", () => {
+  test("asks for just the keyword with no other commentary", () => {
     const prompt = buildPrCompletionCheckPrompt();
     expect(prompt).toContain("BLOCKED");
-    expect(prompt).toContain("brief reason");
+    expect(prompt).toContain("Do not include any other commentary");
   });
 });
 
@@ -190,10 +190,11 @@ describe("createCreatePrStageHandler", () => {
     expect(result.outcome).toBe("completed");
   });
 
-  test("returns completed on DONE", async () => {
+  test("proceeds as completed on DONE (not in valid keywords) when PR exists", async () => {
     const checkResult = makeResult({ responseText: "DONE" });
     const agent = makeAgent(makeResult(), checkResult);
-    const stage = createCreatePrStageHandler(makeOpts({ agent }));
+    const findPrNumber = vi.fn().mockReturnValue(99);
+    const stage = createCreatePrStageHandler(makeOpts({ agent, findPrNumber }));
     const result = await stage.handler(BASE_CTX);
     expect(result.outcome).toBe("completed");
   });
@@ -211,23 +212,22 @@ describe("createCreatePrStageHandler", () => {
       sessionId: "sess-pr",
       responseText: "Push failed: permission denied to push to main.",
     });
-    const checkResult = makeResult({
-      responseText: "BLOCKED\nCannot push to the remote.",
-    });
+    const checkResult = makeResult({ responseText: "BLOCKED" });
     const agent = makeAgent(prResult, checkResult);
     const stage = createCreatePrStageHandler(makeOpts({ agent }));
     const result = await stage.handler(BASE_CTX);
     expect(result.outcome).toBe("blocked");
     expect(result.message).toContain("permission denied");
-    expect(result.message).toContain("Cannot push to the remote");
+    expect(result.message).toContain("BLOCKED");
   });
 
-  test("returns not_approved on NOT_APPROVED", async () => {
+  test("proceeds as completed on NOT_APPROVED (not in valid keywords) when PR exists", async () => {
     const checkResult = makeResult({ responseText: "NOT_APPROVED" });
     const agent = makeAgent(makeResult(), checkResult);
-    const stage = createCreatePrStageHandler(makeOpts({ agent }));
+    const findPrNumber = vi.fn().mockReturnValue(99);
+    const stage = createCreatePrStageHandler(makeOpts({ agent, findPrNumber }));
     const result = await stage.handler(BASE_CTX);
-    expect(result.outcome).toBe("not_approved");
+    expect(result.outcome).toBe("completed");
   });
 
   test("ambiguous check → internal clarification → completed", async () => {
@@ -256,7 +256,7 @@ describe("createCreatePrStageHandler", () => {
     expect(agent.resume).toHaveBeenCalledTimes(2);
   });
 
-  test("ambiguous check → internal clarification also ambiguous → needs_clarification", async () => {
+  test("ambiguous check → clarification also ambiguous → completed when PR exists", async () => {
     const prResult = makeResult({ sessionId: "sess-pr" });
     const ambiguousCheck = makeResult({
       sessionId: "sess-check",
@@ -274,30 +274,72 @@ describe("createCreatePrStageHandler", () => {
         .mockReturnValueOnce(makeStream(stillAmbiguous)),
     };
 
-    const stage = createCreatePrStageHandler(makeOpts({ agent }));
+    const findPrNumber = vi.fn().mockReturnValue(99);
+    const stage = createCreatePrStageHandler(makeOpts({ agent, findPrNumber }));
     const result = await stage.handler(BASE_CTX);
 
-    expect(result.outcome).toBe("needs_clarification");
+    expect(result.outcome).toBe("completed");
+    expect(findPrNumber).toHaveBeenCalledWith("org", "repo", "issue-42");
   });
 
-  test("ambiguous check without sessionId skips internal clarification", async () => {
+  test("ambiguous check → clarification also ambiguous → blocked when no PR exists", async () => {
+    const prResult = makeResult({
+      sessionId: "sess-pr",
+      responseText: "I tried to create the PR.",
+    });
+    const ambiguousCheck = makeResult({
+      sessionId: "sess-check",
+      responseText: "I think it worked.",
+    });
+    const stillAmbiguous = makeResult({
+      responseText: "I think so maybe.",
+    });
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(prResult)),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(ambiguousCheck))
+        .mockReturnValueOnce(makeStream(stillAmbiguous)),
+    };
+
+    const findPrNumber = vi.fn().mockReturnValue(undefined);
+    const stage = createCreatePrStageHandler(makeOpts({ agent, findPrNumber }));
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.message).toContain("I tried to create the PR.");
+  });
+
+  test("ambiguous check without sessionId retries via fallback session", async () => {
     const prResult = makeResult({ sessionId: "sess-pr" });
     const ambiguousCheck = makeResult({
       sessionId: undefined,
       responseText: "I think it worked.",
     });
 
+    let resumeCall = 0;
+    const resumeResults = [
+      // 1st resume: ambiguous completion check (no sessionId)
+      makeStream(ambiguousCheck),
+      // 2nd resume: clarification retry via fallback session
+      makeStream(makeResult({ responseText: "COMPLETED" })),
+    ];
+
     const agent: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(makeStream(prResult)),
-      resume: vi.fn().mockReturnValueOnce(makeStream(ambiguousCheck)),
+      resume: vi.fn().mockImplementation(() => resumeResults[resumeCall++]),
     };
 
     const stage = createCreatePrStageHandler(makeOpts({ agent }));
     const result = await stage.handler(BASE_CTX);
 
-    expect(result.outcome).toBe("needs_clarification");
-    // Only one resume call (completion check), no clarification attempt
-    expect(agent.resume).toHaveBeenCalledTimes(1);
+    // Clarification retry succeeds via fallback to "sess-pr".
+    expect(result.outcome).toBe("completed");
+    expect(agent.resume).toHaveBeenCalledTimes(2);
+    expect((agent.resume as ReturnType<typeof vi.fn>).mock.calls[1][0]).toBe(
+      "sess-pr",
+    );
   });
 
   // -- error handling --------------------------------------------------------
@@ -341,7 +383,8 @@ describe("createCreatePrStageHandler", () => {
       responseText: "PR #99 created successfully.\n\nCOMPLETED",
     });
     const agent = makeAgent(makeResult(), checkResult);
-    const stage = createCreatePrStageHandler(makeOpts({ agent }));
+    const findPrNumber = vi.fn().mockReturnValue(99);
+    const stage = createCreatePrStageHandler(makeOpts({ agent, findPrNumber }));
     const result = await stage.handler(BASE_CTX);
     expect(result.message).toBe("PR #99 created successfully.\n\nCOMPLETED");
   });

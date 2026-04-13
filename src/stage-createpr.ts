@@ -10,8 +10,10 @@
  * If the completion check response is ambiguous, the handler retries
  * by resuming the same session with a clarification prompt.  This
  * avoids re-entering the handler (which would re-run the side-effectful
- * PR creation step).  If clarification also fails, the ambiguous
- * result is returned to the engine for user intervention.
+ * PR creation step).  If clarification also fails, the handler
+ * performs a post-condition check (`findPrNumber`) to verify whether
+ * a PR was actually created.  If the PR exists, the stage completes;
+ * otherwise it reports BLOCKED.
  *
  * `requiresArtifact` is set to `true` so the engine suppresses the
  * "Proceed" option when the agent reports BLOCKED — only Instruct and
@@ -21,6 +23,7 @@
 import type { AgentAdapter } from "./agent.js";
 import { t } from "./i18n/index.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
+import { findPrNumber as defaultFindPrNumber } from "./pr.js";
 import {
   invokeOrResume,
   mapAgentError,
@@ -33,6 +36,12 @@ export interface CreatePrStageOptions {
   agent: AgentAdapter;
   issueTitle: string;
   issueBody: string;
+  /** Injected for testability. Defaults to `pr.findPrNumber`. */
+  findPrNumber?: (
+    owner: string,
+    repo: string,
+    branch: string,
+  ) => number | undefined;
 }
 
 export function buildCreatePrPrompt(
@@ -78,6 +87,8 @@ export function buildCreatePrPrompt(
   return lines.join("\n");
 }
 
+export const PR_CHECK_KEYWORDS = ["COMPLETED", "BLOCKED"] as const;
+
 export function buildPrCompletionCheckPrompt(): string {
   return [
     `You have finished your PR creation attempt.  Please evaluate the`,
@@ -86,8 +97,7 @@ export function buildPrCompletionCheckPrompt(): string {
     `- COMPLETED — if the pull request was created successfully`,
     `- BLOCKED — if you could not create the PR and need user intervention`,
     ``,
-    `If BLOCKED, add a brief reason on the next line explaining what`,
-    `went wrong (e.g. auth failure, push rejected, PR already exists).`,
+    `Do not include any other commentary — just the keyword.`,
   ].join("\n");
 }
 
@@ -140,16 +150,21 @@ export function createCreatePrStageHandler(
         return mapAgentError(checkResult, "during PR completion check");
       }
 
-      let result = mapResponseToResult(checkResult.responseText);
+      let result = mapResponseToResult(
+        checkResult.responseText,
+        undefined,
+        PR_CHECK_KEYWORDS,
+      );
 
-      if (result.outcome === "needs_clarification" && checkResult.sessionId) {
+      if (result.outcome === "needs_clarification") {
         const clarifyPrompt = buildClarificationPrompt(
           checkResult.responseText,
+          PR_CHECK_KEYWORDS,
         );
         ctx.promptSinks?.a?.(clarifyPrompt);
         const retryResult = await sendFollowUp(
           opts.agent,
-          checkResult.sessionId,
+          checkResult.sessionId ?? prResult.sessionId,
           clarifyPrompt,
           ctx.worktreePath,
           ctx.streamSinks?.a,
@@ -165,7 +180,29 @@ export function createCreatePrStageHandler(
         }
 
         checkResult = retryResult;
-        result = mapResponseToResult(retryResult.responseText);
+        result = mapResponseToResult(
+          retryResult.responseText,
+          undefined,
+          PR_CHECK_KEYWORDS,
+        );
+      }
+
+      // If still ambiguous after the in-session retry, verify
+      // the PR actually exists before proceeding.
+      if (result.outcome === "needs_clarification") {
+        const prNumber = (opts.findPrNumber ?? defaultFindPrNumber)(
+          ctx.owner,
+          ctx.repo,
+          ctx.branch,
+        );
+        if (prNumber != null) {
+          result = { outcome: "completed", message: result.message };
+        } else {
+          result = {
+            outcome: "blocked",
+            message: `${prResult.responseText}\n\n---\n\n${checkResult.responseText}`,
+          };
+        }
       }
 
       // When blocked, combine the step 1 diagnostic text with the

@@ -1,12 +1,13 @@
 /**
  * Stage 3 — Self-check loop.
  *
- * Two-step flow per iteration:
+ * Three-step flow per iteration:
  *   1. Send a self-check prompt to Agent A covering 8 review items.
- *   2. Resume the session with a fix-or-done prompt.
+ *   2. Resume the session with a fix-or-done work prompt — the agent
+ *      performs fixes if needed but does **not** embed a verdict keyword.
+ *   3. A dedicated verdict follow-up asks for exactly FIXED or DONE.
  *
- * The agent responds with FIXED (loop again) or DONE (proceed).  The
- * pipeline engine's built-in loop control manages the 3-automatic /
+ * The pipeline engine's built-in loop control manages the 3-automatic /
  * 4th-asks-user budget — the handler returns `"not_approved"` on FIXED
  * so the engine loops.
  */
@@ -14,7 +15,9 @@
 import type { AgentAdapter } from "./agent.js";
 import { t } from "./i18n/index.js";
 import {
+  buildIssueSyncClarificationPrompt,
   buildIssueSyncPrompt,
+  buildIssueSyncVerdictPrompt,
   type IssueChange,
   type IssueSyncStatus,
   parseIssueSyncResponse,
@@ -27,6 +30,7 @@ import {
   mapFixOrDoneResponse,
   sendFollowUp,
 } from "./stage-util.js";
+import { buildClarificationPrompt } from "./step-parser.js";
 
 export interface SelfCheckStageOptions {
   agent: AgentAdapter;
@@ -105,10 +109,22 @@ export function buildFixOrDonePrompt(): string {
   return [
     `Based on your self-check above, decide what to do next.`,
     ``,
-    `- If you found issues that need fixing, fix them now and end your`,
-    `  response with the keyword FIXED.`,
-    `- If everything looks good and no changes are needed, end your`,
-    `  response with the keyword DONE.`,
+    `- If you found issues that need fixing, fix them now.`,
+    `- If everything looks good and no changes are needed, you are done.`,
+  ].join("\n");
+}
+
+export const FIX_OR_DONE_KEYWORDS = ["FIXED", "DONE"] as const;
+
+export function buildFixOrDoneVerdictPrompt(): string {
+  return [
+    `You have finished the self-check pass.`,
+    `Respond with exactly one of the following keywords:`,
+    ``,
+    `- FIXED — if you found and fixed issues`,
+    `- DONE — if everything looks good and no changes were needed`,
+    ``,
+    `Do not include any other commentary — just the keyword.`,
   ].join("\n");
 }
 
@@ -140,7 +156,7 @@ export function createSelfCheckStageHandler(
         return mapAgentError(checkResult, "during self-check");
       }
 
-      // Step 2: Send fix-or-done prompt (resume the same session).
+      // Step 2: Send fix-or-done work prompt (resume the same session).
       const fixPrompt = buildFixOrDonePrompt();
       ctx.promptSinks?.a?.(fixPrompt);
       const fixResult = await sendFollowUp(
@@ -157,16 +173,74 @@ export function createSelfCheckStageHandler(
         return mapAgentError(fixResult, "during fix");
       }
 
-      const result = mapFixOrDoneResponse(fixResult.responseText);
+      // Step 3: Verdict follow-up — ask for exactly FIXED or DONE.
+      const verdictPrompt = buildFixOrDoneVerdictPrompt();
+      ctx.promptSinks?.a?.(verdictPrompt);
+      const verdictResult = await sendFollowUp(
+        opts.agent,
+        fixResult.sessionId,
+        verdictPrompt,
+        ctx.worktreePath,
+        ctx.streamSinks?.a,
+        undefined,
+        ctx.usageSinks?.a,
+      );
 
-      // Step 3: Issue description sync (only when self-check is done).
-      if (result.outcome === "completed" && fixResult.sessionId) {
+      if (verdictResult.status === "error") {
+        return mapAgentError(verdictResult, "during fix verdict");
+      }
+
+      let verdictCheckResult = verdictResult;
+      let result = mapFixOrDoneResponse(
+        verdictCheckResult.responseText,
+        FIX_OR_DONE_KEYWORDS,
+      );
+
+      // Internal clarification retry (same pattern as other stages).
+      if (result.outcome === "needs_clarification") {
+        const clarifyPrompt = buildClarificationPrompt(
+          verdictCheckResult.responseText,
+          FIX_OR_DONE_KEYWORDS,
+        );
+        ctx.promptSinks?.a?.(clarifyPrompt);
+        const retryResult = await sendFollowUp(
+          opts.agent,
+          verdictCheckResult.sessionId ?? fixResult.sessionId,
+          clarifyPrompt,
+          ctx.worktreePath,
+          ctx.streamSinks?.a,
+          undefined,
+          ctx.usageSinks?.a,
+        );
+
+        if (retryResult.status === "error") {
+          return mapAgentError(retryResult, "during fix verdict clarification");
+        }
+
+        verdictCheckResult = retryResult;
+        result = mapFixOrDoneResponse(
+          retryResult.responseText,
+          FIX_OR_DONE_KEYWORDS,
+        );
+      }
+
+      // If still ambiguous after the in-session retry, fall back to
+      // not_approved so the pipeline loops the self-check again.
+      // Treating ambiguity as "completed" would skip the re-check
+      // loop when the agent actually said FIXED, and would trigger
+      // issue sync even though the verdict is uncertain.
+      if (result.outcome === "needs_clarification") {
+        result = { outcome: "not_approved", message: result.message };
+      }
+
+      // Step 4: Issue description sync (only when self-check is done).
+      if (result.outcome === "completed" && verdictCheckResult.sessionId) {
         try {
           const syncPrompt = buildIssueSyncPrompt(ctx, opts);
           ctx.promptSinks?.a?.(syncPrompt);
           const syncResult = await sendFollowUp(
             opts.agent,
-            fixResult.sessionId,
+            verdictCheckResult.sessionId,
             syncPrompt,
             ctx.worktreePath,
             ctx.streamSinks?.a,
@@ -175,11 +249,60 @@ export function createSelfCheckStageHandler(
           );
 
           if (syncResult.status === "success") {
-            const changes = parseIssueSyncResponse(syncResult.responseText);
-            for (const change of changes) {
-              opts.onIssueChange?.(change);
+            // Verdict follow-up: ask for sync status report.
+            const syncVerdictPrompt = buildIssueSyncVerdictPrompt();
+            ctx.promptSinks?.a?.(syncVerdictPrompt);
+            const syncVerdictResult = await sendFollowUp(
+              opts.agent,
+              syncResult.sessionId ?? verdictCheckResult.sessionId,
+              syncVerdictPrompt,
+              ctx.worktreePath,
+              ctx.streamSinks?.a,
+              undefined,
+              ctx.usageSinks?.a,
+            );
+
+            if (syncVerdictResult.status === "success") {
+              let parseResult = parseIssueSyncResponse(
+                syncVerdictResult.responseText,
+              );
+
+              // Clarification retry if the response was malformed.
+              if (!parseResult.valid) {
+                const clarifyPrompt = buildIssueSyncClarificationPrompt();
+                ctx.promptSinks?.a?.(clarifyPrompt);
+                const retryResult = await sendFollowUp(
+                  opts.agent,
+                  syncVerdictResult.sessionId ??
+                    syncResult.sessionId ??
+                    verdictCheckResult.sessionId,
+                  clarifyPrompt,
+                  ctx.worktreePath,
+                  ctx.streamSinks?.a,
+                  undefined,
+                  ctx.usageSinks?.a,
+                );
+
+                if (retryResult.status === "success") {
+                  parseResult = parseIssueSyncResponse(
+                    retryResult.responseText,
+                  );
+                }
+                // If retry failed or still invalid, fall through
+                // to the valid check below.
+              }
+
+              if (parseResult.valid) {
+                for (const change of parseResult.changes) {
+                  opts.onIssueChange?.(change);
+                }
+                opts.onIssueSyncStatus?.("completed");
+              } else {
+                opts.onIssueSyncStatus?.("failed");
+              }
+            } else {
+              opts.onIssueSyncStatus?.("failed");
             }
-            opts.onIssueSyncStatus?.("completed");
           } else {
             opts.onIssueSyncStatus?.("failed");
           }

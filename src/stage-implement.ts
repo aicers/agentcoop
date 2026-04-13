@@ -17,6 +17,7 @@ import {
   mapResponseToResult,
   sendFollowUp,
 } from "./stage-util.js";
+import { buildClarificationPrompt } from "./step-parser.js";
 
 export interface ImplementStageOptions {
   agent: AgentAdapter;
@@ -62,6 +63,8 @@ export function buildImplementPrompt(
 
   return lines.join("\n");
 }
+
+export const IMPLEMENT_CHECK_KEYWORDS = ["COMPLETED", "BLOCKED"] as const;
 
 export function buildCompletionCheckPrompt(): string {
   return [
@@ -120,7 +123,49 @@ export function createImplementStageHandler(
         return mapAgentError(checkResult, "during completion check");
       }
 
-      return mapResponseToResult(checkResult.responseText);
+      let result = mapResponseToResult(
+        checkResult.responseText,
+        undefined,
+        IMPLEMENT_CHECK_KEYWORDS,
+      );
+
+      // Internal clarification retry (same pattern as stage 4 / stage 8).
+      if (result.outcome === "needs_clarification") {
+        const clarifyPrompt = buildClarificationPrompt(
+          checkResult.responseText,
+          IMPLEMENT_CHECK_KEYWORDS,
+        );
+        ctx.promptSinks?.a?.(clarifyPrompt);
+        const retryResult = await sendFollowUp(
+          opts.agent,
+          checkResult.sessionId ?? implResult.sessionId,
+          clarifyPrompt,
+          ctx.worktreePath,
+          ctx.streamSinks?.a,
+          undefined,
+          ctx.usageSinks?.a,
+        );
+
+        if (retryResult.status === "error") {
+          return mapAgentError(retryResult, "during completion clarification");
+        }
+
+        result = mapResponseToResult(
+          retryResult.responseText,
+          undefined,
+          IMPLEMENT_CHECK_KEYWORDS,
+        );
+      }
+
+      // If still ambiguous after the in-session retry, surface a
+      // blocked condition so the user can decide how to proceed.
+      // Treating ambiguity as "completed" could mask a real BLOCKED
+      // and send the pipeline into self-check on an unfinished branch.
+      if (result.outcome === "needs_clarification") {
+        result = { outcome: "blocked", message: result.message };
+      }
+
+      return result;
     },
   };
 }

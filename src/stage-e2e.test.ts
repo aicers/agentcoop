@@ -222,7 +222,7 @@ describe("Stage 2 (Implement) through pipeline", () => {
     expect(callCount).toBe(2);
   });
 
-  test("NOT_APPROVED on check → pipeline loops → COMPLETED", async () => {
+  test("NOT_APPROVED on check → blocked (user intervention)", async () => {
     let callCount = 0;
     const agent: AgentAdapter = {
       invoke: vi.fn().mockImplementation(() => {
@@ -231,36 +231,42 @@ describe("Stage 2 (Implement) through pipeline", () => {
           makeResult({ sessionId: `s${callCount}`, responseText: "impl" }),
         );
       }),
-      resume: vi.fn().mockImplementation(() => {
-        if (callCount === 1) {
-          return makeStream(makeResult({ responseText: "NOT_APPROVED" }));
-        }
-        return makeStream(makeResult({ responseText: "COMPLETED" }));
-      }),
+      // NOT_APPROVED is out-of-scope for implement — both the check
+      // and the internal clarification retry return it, so the handler
+      // falls back to "blocked" to surface the ambiguity to the user.
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
     };
 
+    const prompt = makePrompt();
     const stage = createImplementStageHandler({ agent, ...ISSUE_CTX });
-    const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
+    const result = await runPipeline(
+      makePipelineOpts({ stages: [stage], prompt }),
+    );
 
-    expect(result.success).toBe(true);
-    expect(callCount).toBe(2);
+    expect(result.success).toBe(false);
+    expect(prompt.handleBlocked).toHaveBeenCalled();
+    expect(callCount).toBe(1);
   });
 
   test("ambiguous check → auto-clarification → completed", async () => {
-    let callCount = 0;
     const agent: AgentAdapter = {
-      invoke: vi.fn().mockImplementation(() => {
-        callCount++;
-        return makeStream(
-          makeResult({ sessionId: `s${callCount}`, responseText: "impl" }),
-        );
-      }),
-      resume: vi.fn().mockImplementation(() => {
-        if (callCount === 1) {
-          return makeStream(makeResult({ responseText: "maybe done?" }));
-        }
-        return makeStream(makeResult({ responseText: "COMPLETED" }));
-      }),
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ sessionId: "s1", responseText: "impl" })),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(
+          makeStream(makeResult({ responseText: "maybe done?" })),
+        )
+        .mockReturnValueOnce(
+          makeStream(makeResult({ responseText: "COMPLETED" })),
+        ),
     };
 
     const stage = createImplementStageHandler({ agent, ...ISSUE_CTX });
@@ -283,10 +289,10 @@ describe("Stage 3 (Self-check) through pipeline", () => {
       sessionId: "s1",
       responseText: "Review.",
     });
-    const fixResult = makeResult({ responseText: "All good.\n\nDONE" });
+    const doneResult = makeResult({ responseText: "DONE" });
     const agent: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(makeStream(checkResult)),
-      resume: vi.fn().mockReturnValue(makeStream(fixResult)),
+      resume: vi.fn().mockReturnValue(makeStream(doneResult)),
     };
 
     const stage = createSelfCheckStageHandler({ agent, ...ISSUE_CTX });
@@ -308,15 +314,21 @@ describe("Stage 3 (Self-check) through pipeline", () => {
           }),
         );
       }),
-      resume: vi.fn().mockImplementation(() => {
+      resume: vi.fn().mockImplementation((_s: string, prompt: string) => {
         resumeCalls++;
-        if (resumeCalls < 3) {
+        if (prompt.includes("Report what issue sync")) {
+          return makeStream(makeResult({ responseText: "ISSUE_NO_CHANGES" }));
+        }
+        // 3-step flow: odd = work, even = verdict per iteration.
+        if (resumeCalls % 2 === 1) {
+          return makeStream(makeResult({ responseText: "Applied fixes." }));
+        }
+        if (resumeCalls < 5) {
+          // Even calls 2,4 = verdict FIXED
           return makeStream(makeResult({ responseText: "FIXED" }));
         }
-        // resumeCalls 3 = DONE, resumeCalls 4 = issue sync follow-up
-        return makeStream(
-          makeResult({ responseText: "ISSUE_NO_CHANGES\n\nDONE" }),
-        );
+        // Even calls >= 5: verdict DONE or issue sync work
+        return makeStream(makeResult({ responseText: "DONE" }));
       }),
     };
 
@@ -325,7 +337,7 @@ describe("Stage 3 (Self-check) through pipeline", () => {
 
     expect(result.success).toBe(true);
     expect(invokeCalls).toBe(3); // 3 self-check rounds
-    expect(resumeCalls).toBe(4); // 3 fix-or-done + 1 issue sync
+    expect(resumeCalls).toBe(8); // 3x(work+verdict) + issue sync + issue sync verdict
   });
 
   test("FIXED 3x → budget exhausted → user approves → DONE", async () => {
@@ -338,15 +350,21 @@ describe("Stage 3 (Self-check) through pipeline", () => {
           makeResult({ sessionId: `s${invokeCalls}`, responseText: "rev" }),
         );
       }),
-      resume: vi.fn().mockImplementation(() => {
+      resume: vi.fn().mockImplementation((_s: string, prompt: string) => {
         resumeCalls++;
-        if (resumeCalls <= 3) {
+        if (prompt.includes("Report what issue sync")) {
+          return makeStream(makeResult({ responseText: "ISSUE_NO_CHANGES" }));
+        }
+        // 3-step flow: odd = work, even = verdict.
+        if (resumeCalls % 2 === 1) {
+          return makeStream(makeResult({ responseText: "Applied fixes." }));
+        }
+        if (resumeCalls <= 6) {
+          // Even calls 2,4,6 = verdict FIXED (3 rounds)
           return makeStream(makeResult({ responseText: "FIXED" }));
         }
-        // resumeCalls 4 = DONE, resumeCalls 5 = issue sync follow-up
-        return makeStream(
-          makeResult({ responseText: "ISSUE_NO_CHANGES\n\nDONE" }),
-        );
+        // Even calls > 6: verdict DONE or issue sync work
+        return makeStream(makeResult({ responseText: "DONE" }));
       }),
     };
     const prompt = makePrompt({
@@ -488,7 +506,7 @@ describe("Stage 3 (Self-check) through pipeline", () => {
     expect(prompt.handleAmbiguous).not.toHaveBeenCalled();
   });
 
-  test("blocked during fix → user instructs → completes next round", async () => {
+  test("error during fix → user retries → completes next round", async () => {
     let invokeCalls = 0;
     let resumeCalls = 0;
     const agent: AgentAdapter = {
@@ -504,16 +522,22 @@ describe("Stage 3 (Self-check) through pipeline", () => {
       resume: vi.fn().mockImplementation(() => {
         resumeCalls++;
         if (resumeCalls === 1) {
-          return makeStream(makeResult({ responseText: "BLOCKED" }));
+          // Work step returns agent error on first round.
+          return makeStream(
+            makeResult({
+              status: "error",
+              errorType: "execution_error",
+              stderrText: "timeout",
+              responseText: "",
+            }),
+          );
         }
+        // Subsequent rounds: work + verdict + sync all succeed.
         return makeStream(makeResult({ responseText: "DONE" }));
       }),
     };
     const prompt = makePrompt({
-      handleBlocked: vi.fn().mockResolvedValueOnce({
-        action: "instruct",
-        instruction: "skip the flaky test",
-      }),
+      handleError: vi.fn().mockResolvedValueOnce({ action: "retry" }),
     });
 
     const stage = createSelfCheckStageHandler({ agent, ...ISSUE_CTX });
@@ -628,12 +652,14 @@ describe("Stage 4 (Create PR) through pipeline", () => {
           makeResult({ sessionId: `s${callCount}`, responseText: "pr" }),
         );
       }),
-      resume: vi.fn().mockImplementation(() => {
-        if (callCount === 1) {
-          return makeStream(makeResult({ responseText: "I think it worked?" }));
-        }
-        return makeStream(makeResult({ responseText: "COMPLETED" }));
-      }),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(
+          makeStream(makeResult({ responseText: "I think it worked?" })),
+        )
+        .mockReturnValueOnce(
+          makeStream(makeResult({ responseText: "COMPLETED" })),
+        ),
     };
     const prompt = makePrompt();
 
@@ -1030,10 +1056,10 @@ describe("Stage 6 (Test plan verification) through pipeline", () => {
       sessionId: "s1",
       responseText: "Verified.",
     });
-    const checkResult = makeResult({ responseText: "All good.\n\nDONE" });
+    const doneResult = makeResult({ responseText: "DONE" });
     const agent: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(makeStream(verifyResult)),
-      resume: vi.fn().mockReturnValue(makeStream(checkResult)),
+      resume: vi.fn().mockReturnValue(makeStream(doneResult)),
     };
 
     const stage = createTestPlanStageHandler({ agent, ...ISSUE_CTX });
@@ -1057,7 +1083,11 @@ describe("Stage 6 (Test plan verification) through pipeline", () => {
       }),
       resume: vi.fn().mockImplementation(() => {
         resumeCalls++;
-        if (resumeCalls < 3) {
+        // 3-step flow: odd = work, even = verdict.
+        if (resumeCalls % 2 === 1) {
+          return makeStream(makeResult({ responseText: "Checked items." }));
+        }
+        if (resumeCalls < 5) {
           return makeStream(makeResult({ responseText: "FIXED" }));
         }
         return makeStream(makeResult({ responseText: "DONE" }));
@@ -1069,7 +1099,7 @@ describe("Stage 6 (Test plan verification) through pipeline", () => {
 
     expect(result.success).toBe(true);
     expect(invokeCalls).toBe(3);
-    expect(resumeCalls).toBe(3);
+    expect(resumeCalls).toBe(6); // 3x(work+verdict)
   });
 
   test("FIXED 3x → budget exhausted → user approves → DONE", async () => {
@@ -1084,7 +1114,11 @@ describe("Stage 6 (Test plan verification) through pipeline", () => {
       }),
       resume: vi.fn().mockImplementation(() => {
         resumeCalls++;
-        if (resumeCalls <= 3) {
+        // 3-step flow: odd = work, even = verdict.
+        if (resumeCalls % 2 === 1) {
+          return makeStream(makeResult({ responseText: "Checked items." }));
+        }
+        if (resumeCalls <= 6) {
           return makeStream(makeResult({ responseText: "FIXED" }));
         }
         return makeStream(makeResult({ responseText: "DONE" }));
@@ -1199,7 +1233,7 @@ describe("Stage 6 (Test plan verification) through pipeline", () => {
     expect(prompt.handleAmbiguous).not.toHaveBeenCalled();
   });
 
-  test("blocked during self-check → user instructs → completes next round", async () => {
+  test("error during self-check → user retries → completes next round", async () => {
     let invokeCalls = 0;
     let resumeCalls = 0;
     const agent: AgentAdapter = {
@@ -1215,16 +1249,22 @@ describe("Stage 6 (Test plan verification) through pipeline", () => {
       resume: vi.fn().mockImplementation(() => {
         resumeCalls++;
         if (resumeCalls === 1) {
-          return makeStream(makeResult({ responseText: "BLOCKED" }));
+          // Work step returns agent error on first round.
+          return makeStream(
+            makeResult({
+              status: "error",
+              errorType: "execution_error",
+              stderrText: "timeout",
+              responseText: "",
+            }),
+          );
         }
+        // Subsequent rounds: work + verdict both succeed with DONE.
         return makeStream(makeResult({ responseText: "DONE" }));
       }),
     };
     const prompt = makePrompt({
-      handleBlocked: vi.fn().mockResolvedValueOnce({
-        action: "instruct",
-        instruction: "skip the flaky check",
-      }),
+      handleError: vi.fn().mockResolvedValueOnce({ action: "retry" }),
     });
 
     const stage = createTestPlanStageHandler({ agent, ...ISSUE_CTX });
@@ -1318,7 +1358,7 @@ describe("Multi-stage E2E: Stage 4 → Stage 5 → Stage 6", () => {
       return makeCiStatus("pass");
     });
 
-    let tpResumeCalls = 0;
+    let tpVerdictCalls = 0;
     const agent: AgentAdapter = {
       invoke: vi.fn().mockImplementation((prompt: string) => {
         if (prompt.includes("creating a pull request")) {
@@ -1335,12 +1375,16 @@ describe("Multi-stage E2E: Stage 4 → Stage 5 → Stage 6", () => {
         if (prompt.includes("PR creation attempt")) {
           return makeStream(makeResult({ responseText: "COMPLETED" }));
         }
-        // Test plan self-check
-        tpResumeCalls++;
-        if (tpResumeCalls === 1) {
-          return makeStream(makeResult({ responseText: "FIXED" }));
+        // Test plan verdict follow-up (3-step: work + verdict)
+        if (prompt.includes("finished the test plan verification pass")) {
+          tpVerdictCalls++;
+          if (tpVerdictCalls === 1) {
+            return makeStream(makeResult({ responseText: "FIXED" }));
+          }
+          return makeStream(makeResult({ responseText: "DONE" }));
         }
-        return makeStream(makeResult({ responseText: "DONE" }));
+        // Test plan self-check work prompt
+        return makeStream(makeResult({ responseText: "Checked items." }));
       }),
     };
 
@@ -1366,7 +1410,7 @@ describe("Multi-stage E2E: Stage 4 → Stage 5 → Stage 6", () => {
     expect(result.success).toBe(true);
     // CI polled twice: once on initial pass-through, once on restart
     expect(ciPollCount).toBe(2);
-    expect(tpResumeCalls).toBe(2);
+    expect(tpVerdictCalls).toBe(2);
   });
 
   test("test plan FIXED 3x → restart budget exhausted → user declines", async () => {
@@ -1456,8 +1500,11 @@ describe("Multi-stage E2E: Stage 2 → Stage 3", () => {
           implResumeCalls++;
           return makeStream(makeResult({ responseText: "COMPLETED" }));
         }
-        // Fix-or-done
+        // Self-check: work, verdict, issue sync, issue sync verdict
         scResumeCalls++;
+        if (prompt.includes("Report what issue sync")) {
+          return makeStream(makeResult({ responseText: "ISSUE_NO_CHANGES" }));
+        }
         return makeStream(makeResult({ responseText: "DONE" }));
       }),
     };
@@ -1479,8 +1526,8 @@ describe("Multi-stage E2E: Stage 2 → Stage 3", () => {
     expect(implInvokeCalls).toBe(1);
     expect(implResumeCalls).toBe(1);
     expect(scInvokeCalls).toBe(1);
-    // 1 fix-or-done + 1 issue sync follow-up
-    expect(scResumeCalls).toBe(2);
+    // 1 work + 1 verdict + 1 issue sync + 1 issue sync verdict
+    expect(scResumeCalls).toBe(4);
   });
 
   test("implement completes → self-check FIXED twice then DONE", async () => {
@@ -1501,14 +1548,20 @@ describe("Multi-stage E2E: Stage 2 → Stage 3", () => {
         if (prompt.includes("evaluate the")) {
           return makeStream(makeResult({ responseText: "COMPLETED" }));
         }
+        // 3-step self-check: odd = work, even = verdict.
         scResumeCalls++;
-        if (scResumeCalls <= 2) {
+        if (prompt.includes("Report what issue sync")) {
+          return makeStream(makeResult({ responseText: "ISSUE_NO_CHANGES" }));
+        }
+        if (scResumeCalls % 2 === 1) {
+          return makeStream(makeResult({ responseText: "Applied fixes." }));
+        }
+        if (scResumeCalls <= 4) {
+          // Verdict calls 2,4 = FIXED
           return makeStream(makeResult({ responseText: "FIXED" }));
         }
-        // scResumeCalls 3 = DONE, 4 = issue sync follow-up
-        return makeStream(
-          makeResult({ responseText: "ISSUE_NO_CHANGES\n\nDONE" }),
-        );
+        // Even calls > 4: verdict DONE or issue sync work
+        return makeStream(makeResult({ responseText: "DONE" }));
       }),
     };
 
@@ -1526,8 +1579,8 @@ describe("Multi-stage E2E: Stage 2 → Stage 3", () => {
     );
 
     expect(result.success).toBe(true);
-    // 2 FIXED + 1 DONE + 1 issue sync follow-up
-    expect(scResumeCalls).toBe(4);
+    // 2 FIXED + 1 DONE: 3x(work+verdict) + issue sync + issue sync verdict
+    expect(scResumeCalls).toBe(8);
   });
 
   test("step mode asks before each stage", async () => {
@@ -1760,25 +1813,36 @@ describe("Stage 7 (Review) through pipeline", () => {
         makeStream(
           makeResult({
             sessionId: "sa-fin",
-            responseText: "PR_FINALIZED",
-          }),
-        ),
-      ),
-      resume: vi.fn(),
-    };
-
-    const agentB: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(
-        makeStream(
-          makeResult({
-            sessionId: "sb",
-            responseText: "Looks good.\n\nAPPROVED",
+            responseText: "PR body verified.",
           }),
         ),
       ),
       resume: vi
         .fn()
-        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "PR_FINALIZED" })),
+        ),
+    };
+
+    let bResumeCalls = 0;
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sb",
+            responseText: "Looks good.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockImplementation(() => {
+        bResumeCalls++;
+        if (bResumeCalls === 1) {
+          // Verdict follow-up
+          return makeStream(makeResult({ responseText: "APPROVED" }));
+        }
+        // Unresolved summary + unresolved verdict
+        return makeStream(makeResult({ responseText: "NONE" }));
+      }),
     };
 
     const stage = createReviewStageHandler({
@@ -1801,43 +1865,47 @@ describe("Stage 7 (Review) through pipeline", () => {
 
   test("NOT_APPROVED → fix → CI pass → loops → APPROVED: completes", async () => {
     let bInvokeCalls = 0;
+    let bResumeCalls = 0;
     const agentB: AgentAdapter = {
       invoke: vi.fn().mockImplementation(() => {
         bInvokeCalls++;
-        if (bInvokeCalls === 1) {
-          return makeStream(
-            makeResult({
-              sessionId: "sb1",
-              responseText: "NOT_APPROVED",
-            }),
-          );
-        }
         return makeStream(
           makeResult({
-            sessionId: "sb2",
-            responseText: "APPROVED",
+            sessionId: `sb${bInvokeCalls}`,
+            responseText: "Review posted.",
           }),
         );
       }),
-      resume: vi
-        .fn()
-        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+      resume: vi.fn().mockImplementation(() => {
+        bResumeCalls++;
+        if (bResumeCalls === 1) {
+          // Round 1 verdict: NOT_APPROVED
+          return makeStream(makeResult({ responseText: "NOT_APPROVED" }));
+        }
+        if (bResumeCalls === 2) {
+          // Round 2 verdict: APPROVED
+          return makeStream(makeResult({ responseText: "APPROVED" }));
+        }
+        // Unresolved summary + verdict
+        return makeStream(makeResult({ responseText: "NONE" }));
+      }),
     };
 
     const agentA: AgentAdapter = {
-      invoke: vi.fn().mockImplementation((prompt: string) =>
+      invoke: vi.fn().mockReturnValue(
         makeStream(
           makeResult({
             sessionId: "sa1",
-            responseText: prompt.includes("PR_FINALIZED")
-              ? "PR_FINALIZED"
-              : "Fixed.",
+            responseText: "Fixed.",
           }),
         ),
       ),
-      resume: vi
-        .fn()
-        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+      resume: vi.fn().mockImplementation((_sid: string, prompt: string) => {
+        if (prompt.includes("PR_FINALIZED")) {
+          return makeStream(makeResult({ responseText: "PR_FINALIZED" }));
+        }
+        return makeStream(makeResult({ responseText: "COMPLETED" }));
+      }),
     };
 
     const stage = createReviewStageHandler({
@@ -1864,13 +1932,18 @@ describe("Stage 7 (Review) through pipeline", () => {
         makeStream(
           makeResult({
             sessionId: "sb",
-            responseText: "NOT_APPROVED",
+            responseText: "Review posted.",
           }),
         ),
       ),
-      resume: vi
-        .fn()
-        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+      resume: vi.fn().mockImplementation((_sid: string, prompt: string) => {
+        // Verdict follow-up → NOT_APPROVED
+        if (prompt.includes("posted your review")) {
+          return makeStream(makeResult({ responseText: "NOT_APPROVED" }));
+        }
+        // Unresolved summary + verdict
+        return makeStream(makeResult({ responseText: "NONE" }));
+      }),
     };
 
     const agentA: AgentAdapter = {
@@ -1919,40 +1992,41 @@ describe("Stage 7 (Review) through pipeline", () => {
     const agentB: AgentAdapter = {
       invoke: vi.fn().mockImplementation(() => {
         bInvokeCalls++;
-        if (bInvokeCalls <= 3) {
-          return makeStream(
-            makeResult({
-              sessionId: `sb${bInvokeCalls}`,
-              responseText: "NOT_APPROVED",
-            }),
-          );
-        }
         return makeStream(
           makeResult({
             sessionId: `sb${bInvokeCalls}`,
-            responseText: "APPROVED",
+            responseText: "Review posted.",
           }),
         );
       }),
-      resume: vi
-        .fn()
-        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+      resume: vi.fn().mockImplementation((_sid: string, prompt: string) => {
+        // Verdict follow-up
+        if (prompt.includes("posted your review")) {
+          if (bInvokeCalls <= 3) {
+            return makeStream(makeResult({ responseText: "NOT_APPROVED" }));
+          }
+          return makeStream(makeResult({ responseText: "APPROVED" }));
+        }
+        // Unresolved summary + verdict
+        return makeStream(makeResult({ responseText: "NONE" }));
+      }),
     };
 
     const agentA: AgentAdapter = {
-      invoke: vi.fn().mockImplementation((prompt: string) =>
+      invoke: vi.fn().mockReturnValue(
         makeStream(
           makeResult({
             sessionId: "sa",
-            responseText: prompt.includes("PR_FINALIZED")
-              ? "PR_FINALIZED"
-              : "Fixed.",
+            responseText: "Fixed.",
           }),
         ),
       ),
-      resume: vi
-        .fn()
-        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+      resume: vi.fn().mockImplementation((_sid: string, prompt: string) => {
+        if (prompt.includes("PR_FINALIZED")) {
+          return makeStream(makeResult({ responseText: "PR_FINALIZED" }));
+        }
+        return makeStream(makeResult({ responseText: "COMPLETED" }));
+      }),
     };
 
     const prompt = makePrompt({
@@ -1991,18 +2065,27 @@ describe("Stage 7 (Review) through pipeline", () => {
         return makeStream(
           makeResult({
             sessionId: `sb${bInvokeCalls}`,
-            responseText: "NOT_APPROVED",
+            responseText: "Review posted.",
           }),
         );
       }),
-      resume: vi.fn().mockReturnValue(
-        makeStream(
-          makeResult({
-            responseText:
-              "**[Reviewer Unresolved Round 3]**\n- Missing error handling in parser",
-          }),
-        ),
-      ),
+      resume: vi.fn().mockImplementation((_sid: string, prompt: string) => {
+        // Review verdict follow-up
+        if (prompt.includes("posted your review")) {
+          return makeStream(makeResult({ responseText: "NOT_APPROVED" }));
+        }
+        // Unresolved summary work step (contains "review cycle")
+        if (prompt.includes("review cycle")) {
+          return makeStream(
+            makeResult({
+              responseText:
+                "**[Reviewer Unresolved Round 3]**\n- Missing error handling in parser",
+            }),
+          );
+        }
+        // Unresolved verdict follow-up or clarification
+        return makeStream(makeResult({ responseText: "COMPLETED" }));
+      }),
     };
 
     const agentA: AgentAdapter = {
@@ -2045,14 +2128,10 @@ describe("Stage 7 (Review) through pipeline", () => {
     expect(result.success).toBe(false);
     expect(prompt.confirmContinueLoop).toHaveBeenCalled();
 
-    // Agent B should be resumed for unresolved summary only on round 3
-    // (the last auto-iteration). Rounds 1-2 should not trigger resume.
-    expect(agentB.resume).toHaveBeenCalledTimes(1);
-    expect(agentB.resume).toHaveBeenCalledWith(
-      "sb3",
-      expect.stringContaining("unresolved"),
-      { cwd: "/tmp/wt" },
-    );
+    // Agent B resumed: 3 verdict follow-ups + unresolved summary +
+    // unresolved verdict on round 3 (lastAutoIteration).
+    // Rounds 1-2 only have verdict follow-up, round 3 adds unresolved.
+    expect(agentB.resume).toHaveBeenCalledTimes(5);
 
     // The unresolved summary must reach the user via confirmContinueLoop.
     expect(prompt.confirmContinueLoop).toHaveBeenCalledWith(
@@ -2067,40 +2146,53 @@ describe("Stage 7 (Review) through pipeline", () => {
     const agentB: AgentAdapter = {
       invoke: vi.fn().mockImplementation(() => {
         bInvokeCalls++;
-        if (bInvokeCalls <= 2) {
-          return makeStream(
-            makeResult({
-              sessionId: `sb${bInvokeCalls}`,
-              responseText: "NOT_APPROVED",
-            }),
-          );
-        }
         return makeStream(
           makeResult({
             sessionId: `sb${bInvokeCalls}`,
-            responseText: "APPROVED",
+            responseText: "Review posted.",
           }),
         );
       }),
-      resume: vi
-        .fn()
-        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+      resume: vi.fn().mockImplementation((_sid: string, prompt: string) => {
+        // Verdict follow-up — return a session ID that advances
+        // beyond the invoke session, so we can verify the
+        // unresolved summary resumes the verdict session.
+        if (prompt.includes("posted your review")) {
+          if (bInvokeCalls <= 2) {
+            return makeStream(
+              makeResult({
+                sessionId: `sb${bInvokeCalls}-v`,
+                responseText: "NOT_APPROVED",
+              }),
+            );
+          }
+          return makeStream(
+            makeResult({
+              sessionId: `sb${bInvokeCalls}-v`,
+              responseText: "APPROVED",
+            }),
+          );
+        }
+        // Unresolved summary + verdict
+        return makeStream(makeResult({ responseText: "NONE" }));
+      }),
     };
 
     const agentA: AgentAdapter = {
-      invoke: vi.fn().mockImplementation((prompt: string) =>
+      invoke: vi.fn().mockReturnValue(
         makeStream(
           makeResult({
             sessionId: "sa",
-            responseText: prompt.includes("PR_FINALIZED")
-              ? "PR_FINALIZED"
-              : "Fixed.",
+            responseText: "Fixed.",
           }),
         ),
       ),
-      resume: vi
-        .fn()
-        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+      resume: vi.fn().mockImplementation((_sid: string, prompt: string) => {
+        if (prompt.includes("PR_FINALIZED")) {
+          return makeStream(makeResult({ responseText: "PR_FINALIZED" }));
+        }
+        return makeStream(makeResult({ responseText: "COMPLETED" }));
+      }),
     };
 
     const stage = {
@@ -2122,11 +2214,14 @@ describe("Stage 7 (Review) through pipeline", () => {
     const result = await runPipeline(makePipelineOpts({ stages: [stage] }));
     expect(result.success).toBe(true);
 
-    // Agent B resumed once: for the APPROVED unresolved summary (round 3).
-    // Rounds 1-2 (NOT_APPROVED, not lastAutoIteration) should NOT trigger resume.
-    expect(agentB.resume).toHaveBeenCalledTimes(1);
+    // Agent B resumed: 2 verdict follow-ups (NOT_APPROVED, rounds 1-2) +
+    // 1 verdict follow-up (APPROVED, round 3) + unresolved summary + verdict.
+    // Rounds 1-2 do NOT trigger unresolved summary (not lastAutoIteration).
+    expect(agentB.resume).toHaveBeenCalledTimes(5);
+    // The unresolved summary call should use the verdict session ID
+    // ("sb3-v"), not the initial review invoke session ("sb3").
     expect(agentB.resume).toHaveBeenCalledWith(
-      "sb3",
+      "sb3-v",
       expect.stringContaining("unresolved"),
       { cwd: "/tmp/wt" },
     );
@@ -2138,11 +2233,15 @@ describe("Stage 7 (Review) through pipeline", () => {
         makeStream(
           makeResult({
             sessionId: "sb",
-            responseText: "NOT_APPROVED",
+            responseText: "Review posted.",
           }),
         ),
       ),
-      resume: vi.fn(),
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
     };
 
     const getCiStatus = vi
@@ -2213,25 +2312,34 @@ describe("Stages 7+8 (Review + Squash) through pipeline", () => {
         makeStream(
           makeResult({
             sessionId: "sa-fin",
-            responseText: "PR_FINALIZED",
-          }),
-        ),
-      ),
-      resume: vi.fn(),
-    };
-
-    const agentB: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(
-        makeStream(
-          makeResult({
-            sessionId: "sb",
-            responseText: "APPROVED",
+            responseText: "PR body verified.",
           }),
         ),
       ),
       resume: vi
         .fn()
-        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "PR_FINALIZED" })),
+        ),
+    };
+
+    let bResumeCalls = 0;
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sb",
+            responseText: "Looks good.",
+          }),
+        ),
+      ),
+      resume: vi.fn().mockImplementation(() => {
+        bResumeCalls++;
+        if (bResumeCalls === 1) {
+          return makeStream(makeResult({ responseText: "APPROVED" }));
+        }
+        return makeStream(makeResult({ responseText: "NONE" }));
+      }),
     };
 
     const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pass"));
@@ -2284,18 +2392,23 @@ describe("Stages 7+8 (Review + Squash) through pipeline", () => {
         .mockReturnValue(makeStream(makeResult({ responseText: "BLOCKED" }))),
     };
 
+    let bResumeCalls = 0;
     const agentB: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(
         makeStream(
           makeResult({
             sessionId: "sb",
-            responseText: "Looks good.\n\nAPPROVED",
+            responseText: "Looks good.",
           }),
         ),
       ),
-      resume: vi
-        .fn()
-        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+      resume: vi.fn().mockImplementation(() => {
+        bResumeCalls++;
+        if (bResumeCalls === 1) {
+          return makeStream(makeResult({ responseText: "APPROVED" }));
+        }
+        return makeStream(makeResult({ responseText: "NONE" }));
+      }),
     };
 
     const prompt = makePrompt({
@@ -2321,11 +2434,15 @@ describe("Stages 7+8 (Review + Squash) through pipeline", () => {
         makeStream(
           makeResult({
             sessionId: "sa-fin",
-            responseText: "PR_FINALIZED",
+            responseText: "PR body verified.",
           }),
         ),
       ),
-      resume: vi.fn(),
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "PR_FINALIZED" })),
+        ),
     };
 
     const reviewStage = createReviewStageHandler({
@@ -2414,7 +2531,9 @@ describe("Pipeline event emitter integration", () => {
     const implResult = makeResult({ sessionId: "s1", responseText: "ok" });
     const implCheck = makeResult({ responseText: "COMPLETED" });
     const selfResult = makeResult({ sessionId: "s2", responseText: "ok" });
-    const selfCheck = makeResult({ responseText: "DONE" });
+    const selfWork = makeResult({ responseText: "All good." });
+    const selfDone = makeResult({ responseText: "DONE" });
+    const syncVerdict = makeResult({ responseText: "ISSUE_NO_CHANGES" });
 
     const agent: AgentAdapter = {
       invoke: vi
@@ -2424,7 +2543,11 @@ describe("Pipeline event emitter integration", () => {
       resume: vi
         .fn()
         .mockReturnValueOnce(makeStream(implCheck))
-        .mockReturnValueOnce(makeStream(selfCheck)),
+        // Self-check: work + verdict + issue sync + issue sync verdict
+        .mockReturnValueOnce(makeStream(selfWork))
+        .mockReturnValueOnce(makeStream(selfDone))
+        .mockReturnValueOnce(makeStream(selfDone))
+        .mockReturnValueOnce(makeStream(syncVerdict)),
     };
 
     const emitter = new PipelineEventEmitter();
@@ -2464,29 +2587,39 @@ describe("Pipeline event emitter integration", () => {
   test("review stage emits chunks for agent B on sink b", async () => {
     const reviewResult = makeResult({
       sessionId: "sb1",
-      responseText: "APPROVED",
+      responseText: "Looks good.",
     });
-    // Unresolved summary response.
-    const summaryResult = makeResult({ responseText: "NONE" });
 
     const agentA: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(
         makeStream(
           makeResult({
             sessionId: "sa-fin",
-            responseText: "PR_FINALIZED",
+            responseText: "PR body verified.",
           }),
         ),
       ),
-      resume: vi.fn(),
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "PR_FINALIZED" })),
+        ),
     };
+
+    let bResumeCalls = 0;
     const agentB: AgentAdapter = {
       invoke: vi
         .fn()
         .mockReturnValue(
           makeStreamWithChunks(reviewResult, ["review-b1", "review-b2"]),
         ),
-      resume: vi.fn().mockReturnValue(makeStream(summaryResult)),
+      resume: vi.fn().mockImplementation(() => {
+        bResumeCalls++;
+        if (bResumeCalls === 1) {
+          return makeStream(makeResult({ responseText: "APPROVED" }));
+        }
+        return makeStream(makeResult({ responseText: "NONE" }));
+      }),
     };
 
     const emitter = new PipelineEventEmitter();
@@ -2515,11 +2648,12 @@ describe("Pipeline event emitter integration", () => {
     const implCheck = makeResult({ responseText: "COMPLETED" });
 
     const selfResult1 = makeResult({ sessionId: "s2", responseText: "ok" });
-    const selfCheck1 = makeResult({ responseText: "FIXED" });
+    const selfWork = makeResult({ responseText: "Applied fixes." });
+    const selfFixed = makeResult({ responseText: "FIXED" });
     const selfResult2 = makeResult({ sessionId: "s3", responseText: "ok" });
-    const selfCheck2 = makeResult({ responseText: "FIXED" });
     const selfResult3 = makeResult({ sessionId: "s4", responseText: "ok" });
-    const selfCheck3 = makeResult({ responseText: "DONE" });
+    const selfDoneResult = makeResult({ responseText: "DONE" });
+    const syncVerdictResult = makeResult({ responseText: "ISSUE_NO_CHANGES" });
 
     const agent: AgentAdapter = {
       invoke: vi
@@ -2530,10 +2664,19 @@ describe("Pipeline event emitter integration", () => {
         .mockReturnValueOnce(makeStream(selfResult3)),
       resume: vi
         .fn()
+        // Stage 2: completion check
         .mockReturnValueOnce(makeStream(implCheck))
-        .mockReturnValueOnce(makeStream(selfCheck1))
-        .mockReturnValueOnce(makeStream(selfCheck2))
-        .mockReturnValueOnce(makeStream(selfCheck3)),
+        // Stage 3, iteration 0: work + verdict FIXED
+        .mockReturnValueOnce(makeStream(selfWork))
+        .mockReturnValueOnce(makeStream(selfFixed))
+        // Stage 3, iteration 1: work + verdict FIXED
+        .mockReturnValueOnce(makeStream(selfWork))
+        .mockReturnValueOnce(makeStream(selfFixed))
+        // Stage 3, iteration 2: work + verdict DONE + issue sync + verdict
+        .mockReturnValueOnce(makeStream(selfWork))
+        .mockReturnValueOnce(makeStream(selfDoneResult))
+        .mockReturnValueOnce(makeStream(selfDoneResult))
+        .mockReturnValueOnce(makeStream(syncVerdictResult)),
     };
 
     const emitter = new PipelineEventEmitter();
@@ -2573,7 +2716,9 @@ describe("Pipeline event emitter integration", () => {
     const implResult = makeResult({ sessionId: "s1", responseText: "ok" });
     const implCheck = makeResult({ responseText: "COMPLETED" });
     const selfResult = makeResult({ sessionId: "s2", responseText: "ok" });
-    const selfCheck = makeResult({ responseText: "DONE" });
+    const selfWork = makeResult({ responseText: "All good." });
+    const selfDoneEvt = makeResult({ responseText: "DONE" });
+    const syncVerdictEvt = makeResult({ responseText: "ISSUE_NO_CHANGES" });
 
     const agent: AgentAdapter = {
       invoke: vi
@@ -2583,7 +2728,11 @@ describe("Pipeline event emitter integration", () => {
       resume: vi
         .fn()
         .mockReturnValueOnce(makeStream(implCheck))
-        .mockReturnValueOnce(makeStream(selfCheck)),
+        // Self-check: work + verdict + issue sync + issue sync verdict
+        .mockReturnValueOnce(makeStream(selfWork))
+        .mockReturnValueOnce(makeStream(selfDoneEvt))
+        .mockReturnValueOnce(makeStream(selfDoneEvt))
+        .mockReturnValueOnce(makeStream(syncVerdictEvt)),
     };
 
     const emitter = new PipelineEventEmitter();

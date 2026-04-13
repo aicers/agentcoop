@@ -3,8 +3,10 @@ import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
 import type { StageContext } from "./pipeline.js";
 import {
   buildFixOrDonePrompt,
+  buildFixOrDoneVerdictPrompt,
   buildSelfCheckPrompt,
   createSelfCheckStageHandler,
+  FIX_OR_DONE_KEYWORDS,
   type SelfCheckStageOptions,
 } from "./stage-selfcheck.js";
 
@@ -13,7 +15,7 @@ import {
 function makeResult(overrides: Partial<AgentResult> = {}): AgentResult {
   return {
     sessionId: "sess-1",
-    responseText: "All checks pass.\n\nDONE",
+    responseText: "All checks pass.",
     status: "success",
     errorType: undefined,
     stderrText: "",
@@ -31,12 +33,22 @@ function makeStream(result: AgentResult): AgentStream {
   };
 }
 
+/**
+ * Create a mock agent that returns the given results in sequence.
+ * The first call to `invoke` returns `invokeResult`.
+ * Subsequent calls to `resume` return from `resumeResults` in order.
+ */
 function makeAgent(
-  checkResult: AgentResult,
-  fixResult?: AgentResult,
+  invokeResult: AgentResult,
+  ...resumeResults: AgentResult[]
 ): AgentAdapter {
-  const invoke = vi.fn().mockReturnValue(makeStream(checkResult));
-  const resume = vi.fn().mockReturnValue(makeStream(fixResult ?? checkResult));
+  const invoke = vi.fn().mockReturnValue(makeStream(invokeResult));
+  let resumeCall = 0;
+  const resume = vi.fn().mockImplementation(() => {
+    const r = resumeResults[resumeCall] ?? invokeResult;
+    resumeCall++;
+    return makeStream(r);
+  });
   return { invoke, resume };
 }
 
@@ -55,7 +67,11 @@ function makeOpts(
   overrides: Partial<SelfCheckStageOptions> = {},
 ): SelfCheckStageOptions {
   return {
-    agent: makeAgent(makeResult()),
+    agent: makeAgent(
+      makeResult(),
+      makeResult(),
+      makeResult({ responseText: "DONE" }),
+    ),
     issueTitle: "Fix the widget",
     issueBody: "The widget is broken.",
     ...overrides,
@@ -129,10 +145,32 @@ describe("buildSelfCheckPrompt", () => {
 // ---- buildFixOrDonePrompt --------------------------------------------------
 
 describe("buildFixOrDonePrompt", () => {
-  test("mentions FIXED and DONE keywords", () => {
+  test("mentions fix and done actions without verdict keywords", () => {
     const prompt = buildFixOrDonePrompt();
+    expect(prompt).toContain("fix them now");
+    expect(prompt).toContain("you are done");
+    // Should NOT contain the verdict keywords — those are in the verdict prompt
+    expect(prompt).not.toContain("FIXED");
+    expect(prompt).not.toContain("DONE");
+  });
+});
+
+// ---- buildFixOrDoneVerdictPrompt -------------------------------------------
+
+describe("buildFixOrDoneVerdictPrompt", () => {
+  test("mentions FIXED and DONE keywords", () => {
+    const prompt = buildFixOrDoneVerdictPrompt();
     expect(prompt).toContain("FIXED");
     expect(prompt).toContain("DONE");
+  });
+});
+
+// ---- FIX_OR_DONE_KEYWORDS --------------------------------------------------
+
+describe("FIX_OR_DONE_KEYWORDS", () => {
+  test("contains FIXED and DONE", () => {
+    expect(FIX_OR_DONE_KEYWORDS).toContain("FIXED");
+    expect(FIX_OR_DONE_KEYWORDS).toContain("DONE");
   });
 });
 
@@ -145,15 +183,23 @@ describe("createSelfCheckStageHandler", () => {
     expect(stage.name).toBe("Self-check");
   });
 
-  // -- two-step flow ---------------------------------------------------------
+  // -- three-step flow -------------------------------------------------------
 
-  test("invokes agent for self-check then resumes for fix-or-done", async () => {
+  test("invokes agent for self-check then resumes for fix-or-done and verdict", async () => {
     const checkResult = makeResult({
       sessionId: "sess-check",
       responseText: "Review done.",
     });
-    const fixResult = makeResult({ responseText: "All good.\n\nDONE" });
-    const agent = makeAgent(checkResult, fixResult);
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "All good.",
+    });
+    // Use FIXED to avoid triggering issue sync (which would add more resume calls).
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "FIXED",
+    });
+    const agent = makeAgent(checkResult, fixResult, verdictResult);
     const stage = createSelfCheckStageHandler(makeOpts({ agent }));
 
     await stage.handler(BASE_CTX);
@@ -161,8 +207,17 @@ describe("createSelfCheckStageHandler", () => {
     expect(agent.invoke).toHaveBeenCalledWith(expect.any(String), {
       cwd: "/tmp/wt",
     });
-    expect(agent.resume).toHaveBeenCalledWith(
+    // Two resume calls: fix-or-done work + verdict
+    expect(agent.resume).toHaveBeenCalledTimes(2);
+    expect(agent.resume).toHaveBeenNthCalledWith(
+      1,
       "sess-check",
+      expect.any(String),
+      { cwd: "/tmp/wt" },
+    );
+    expect(agent.resume).toHaveBeenNthCalledWith(
+      2,
+      "sess-fix",
       expect.any(String),
       { cwd: "/tmp/wt" },
     );
@@ -176,64 +231,198 @@ describe("createSelfCheckStageHandler", () => {
     await expect(stage.handler(BASE_CTX)).rejects.toThrow("no session ID");
   });
 
-  // -- outcome mapping: DONE vs FIXED ---------------------------------------
+  // -- outcome mapping: DONE vs FIXED ----------------------------------------
 
-  test("returns completed when agent says DONE", async () => {
+  test("returns completed when verdict says DONE", async () => {
     const checkResult = makeResult({ sessionId: "sess-1" });
     const fixResult = makeResult({
-      responseText: "Everything is fine.\n\nDONE",
+      sessionId: "sess-fix",
+      responseText: "Everything is fine.",
     });
-    const agent = makeAgent(checkResult, fixResult);
+    const verdictResult = makeResult({ responseText: "DONE" });
+    const agent = makeAgent(checkResult, fixResult, verdictResult);
     const stage = createSelfCheckStageHandler(makeOpts({ agent }));
     const result = await stage.handler(BASE_CTX);
     expect(result.outcome).toBe("completed");
   });
 
-  test("returns not_approved when agent says FIXED (triggers loop)", async () => {
-    const checkResult = makeResult({ sessionId: "sess-1" });
-    const fixResult = makeResult({ responseText: "Fixed the test.\n\nFIXED" });
-    const agent = makeAgent(checkResult, fixResult);
-    const stage = createSelfCheckStageHandler(makeOpts({ agent }));
-    const result = await stage.handler(BASE_CTX);
-    expect(result.outcome).toBe("not_approved");
-  });
-
-  test("returns completed when agent says COMPLETED", async () => {
-    const checkResult = makeResult({ sessionId: "sess-1" });
-    const fixResult = makeResult({ responseText: "All set.\n\nCOMPLETED" });
-    const agent = makeAgent(checkResult, fixResult);
-    const stage = createSelfCheckStageHandler(makeOpts({ agent }));
-    const result = await stage.handler(BASE_CTX);
-    expect(result.outcome).toBe("completed");
-  });
-
-  test("returns blocked when agent says BLOCKED", async () => {
-    const checkResult = makeResult({ sessionId: "sess-1" });
-    const fixResult = makeResult({ responseText: "Cannot fix.\n\nBLOCKED" });
-    const agent = makeAgent(checkResult, fixResult);
-    const stage = createSelfCheckStageHandler(makeOpts({ agent }));
-    const result = await stage.handler(BASE_CTX);
-    expect(result.outcome).toBe("blocked");
-  });
-
-  test("returns not_approved on NOT_APPROVED", async () => {
+  test("returns not_approved when verdict says FIXED (triggers loop)", async () => {
     const checkResult = makeResult({ sessionId: "sess-1" });
     const fixResult = makeResult({
-      responseText: "Not right.\n\nNOT_APPROVED",
+      sessionId: "sess-fix",
+      responseText: "Fixed the test.",
     });
-    const agent = makeAgent(checkResult, fixResult);
+    const verdictResult = makeResult({ responseText: "FIXED" });
+    const agent = makeAgent(checkResult, fixResult, verdictResult);
     const stage = createSelfCheckStageHandler(makeOpts({ agent }));
     const result = await stage.handler(BASE_CTX);
     expect(result.outcome).toBe("not_approved");
   });
 
-  test("returns needs_clarification on ambiguous fix response", async () => {
+  test("out-of-scope keyword COMPLETED → clarification retry → fallback to not_approved", async () => {
     const checkResult = makeResult({ sessionId: "sess-1" });
-    const fixResult = makeResult({ responseText: "I looked at things." });
-    const agent = makeAgent(checkResult, fixResult);
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "All set.",
+    });
+    const verdictResult = makeResult({ responseText: "COMPLETED" });
+    const agent = makeAgent(checkResult, fixResult, verdictResult);
     const stage = createSelfCheckStageHandler(makeOpts({ agent }));
     const result = await stage.handler(BASE_CTX);
-    expect(result.outcome).toBe("needs_clarification");
+    expect(result.outcome).toBe("not_approved");
+  });
+
+  test("out-of-scope keyword BLOCKED → clarification retry → fallback to not_approved", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "Cannot fix.",
+    });
+    const verdictResult = makeResult({ responseText: "BLOCKED" });
+    const agent = makeAgent(checkResult, fixResult, verdictResult);
+    const stage = createSelfCheckStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+    expect(result.outcome).toBe("not_approved");
+  });
+
+  test("out-of-scope keyword NOT_APPROVED → clarification retry → fallback to not_approved", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "Not right.",
+    });
+    const verdictResult = makeResult({ responseText: "NOT_APPROVED" });
+    const agent = makeAgent(checkResult, fixResult, verdictResult);
+    const stage = createSelfCheckStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+    expect(result.outcome).toBe("not_approved");
+  });
+
+  test("ambiguous verdict response → clarification retry → fallback to not_approved", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "I looked at things.",
+    });
+    const verdictResult = makeResult({ responseText: "I looked at things." });
+    const agent = makeAgent(checkResult, fixResult, verdictResult);
+    const stage = createSelfCheckStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+    expect(result.outcome).toBe("not_approved");
+  });
+
+  // -- internal clarification retry ------------------------------------------
+
+  test("ambiguous verdict → internal clarification → DONE", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "Checked.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "I think it looks good",
+    });
+    const clarifiedResult = makeResult({
+      sessionId: "sess-clarified",
+      responseText: "DONE",
+    });
+    const syncWorkResult = makeResult({
+      sessionId: "sess-sync",
+      responseText: "Compared.",
+    });
+    const syncVerdictResult = makeResult({
+      responseText: "ISSUE_NO_CHANGES",
+    });
+    const agent = makeAgent(
+      checkResult,
+      fixResult,
+      verdictResult,
+      clarifiedResult,
+      syncWorkResult,
+      syncVerdictResult,
+    );
+    const stage = createSelfCheckStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    // (fix-or-done + verdict + clarification + issue sync + sync verdict)
+    expect(agent.resume).toHaveBeenCalledTimes(5);
+  });
+
+  test("out-of-scope COMPLETED → internal clarification → FIXED", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "Fixed things.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "COMPLETED",
+    });
+    const clarifiedResult = makeResult({ responseText: "FIXED" });
+    const agent = makeAgent(
+      checkResult,
+      fixResult,
+      verdictResult,
+      clarifiedResult,
+    );
+    const stage = createSelfCheckStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("not_approved");
+    expect(agent.resume).toHaveBeenCalledTimes(3);
+  });
+
+  test("ambiguous verdict → clarification also ambiguous → fallback to not_approved", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "Checked.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "Looks fine",
+    });
+    const stillAmbiguous = makeResult({ responseText: "It is fine" });
+    const agent = makeAgent(
+      checkResult,
+      fixResult,
+      verdictResult,
+      stillAmbiguous,
+    );
+    const stage = createSelfCheckStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+
+    // Falls back to not_approved so the pipeline loops the self-check
+    // again rather than advancing past an uncertain verdict.
+    expect(result.outcome).toBe("not_approved");
+    // 3 verdict-related resumes only — issue sync does not run.
+    expect(agent.resume).toHaveBeenCalledTimes(3);
+  });
+
+  test("clarification retry error → returns error", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "Checked.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "I think so",
+    });
+    const errorResult = makeResult({
+      status: "error",
+      errorType: "execution_error",
+      stderrText: "clarify crash",
+      responseText: "",
+    });
+    const agent = makeAgent(checkResult, fixResult, verdictResult, errorResult);
+    const stage = createSelfCheckStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("clarify crash");
   });
 
   // -- error handling --------------------------------------------------------
@@ -286,16 +475,40 @@ describe("createSelfCheckStageHandler", () => {
     expect(result.message).toContain("during fix");
   });
 
-  // -- message preservation --------------------------------------------------
-
-  test("preserves fix response text in message", async () => {
-    const text = "Fixed several issues.\n\nFIXED";
+  test("returns error when verdict follow-up fails", async () => {
     const checkResult = makeResult({ sessionId: "sess-1" });
-    const fixResult = makeResult({ responseText: text });
-    const agent = makeAgent(checkResult, fixResult);
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "Did some work.",
+    });
+    const verdictResult = makeResult({
+      status: "error",
+      errorType: "execution_error",
+      stderrText: "verdict crash",
+      responseText: "",
+    });
+    const agent = makeAgent(checkResult, fixResult, verdictResult);
     const stage = createSelfCheckStageHandler(makeOpts({ agent }));
     const result = await stage.handler(BASE_CTX);
-    expect(result.message).toBe(text);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("verdict crash");
+    expect(result.message).toContain("during fix verdict");
+  });
+
+  // -- message preservation --------------------------------------------------
+
+  test("preserves verdict response text in message", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "Fixed several issues.",
+    });
+    const verdictResult = makeResult({ responseText: "FIXED" });
+    const agent = makeAgent(checkResult, fixResult, verdictResult);
+    const stage = createSelfCheckStageHandler(makeOpts({ agent }));
+    const result = await stage.handler(BASE_CTX);
+    expect(result.message).toBe("FIXED");
   });
 
   // -- issue sync step -------------------------------------------------------
@@ -304,20 +517,27 @@ describe("createSelfCheckStageHandler", () => {
     const checkResult = makeResult({ sessionId: "sess-1" });
     const fixResult = makeResult({
       sessionId: "sess-fix",
-      responseText: "All good.\n\nDONE",
+      responseText: "All good.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "DONE",
     });
     const syncResult = makeResult({
-      responseText: "Everything matches.\n\nISSUE_NO_CHANGES",
+      sessionId: "sess-sync",
+      responseText: "Compared implementation.",
+    });
+    const syncVerdictResult = makeResult({
+      responseText: "ISSUE_NO_CHANGES",
     });
 
-    let resumeCall = 0;
-    const resumeResults = [fixResult, syncResult];
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(makeStream(checkResult)),
-      resume: vi
-        .fn()
-        .mockImplementation(() => makeStream(resumeResults[resumeCall++])),
-    };
+    const agent = makeAgent(
+      checkResult,
+      fixResult,
+      verdictResult,
+      syncResult,
+      syncVerdictResult,
+    );
     const onIssueSyncStatus = vi.fn();
     const stage = createSelfCheckStageHandler(
       makeOpts({ agent, onIssueSyncStatus }),
@@ -331,17 +551,62 @@ describe("createSelfCheckStageHandler", () => {
     const checkResult = makeResult({ sessionId: "sess-1" });
     const fixResult = makeResult({
       sessionId: "sess-fix",
-      responseText: "All good.\n\nDONE",
+      responseText: "All good.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "DONE",
     });
 
     let resumeCall = 0;
+    const resumeResults = [fixResult, verdictResult];
     const agent: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(makeStream(checkResult)),
       resume: vi.fn().mockImplementation(() => {
-        if (resumeCall++ === 0) return makeStream(fixResult);
+        if (resumeCall < resumeResults.length) {
+          return makeStream(resumeResults[resumeCall++]);
+        }
+        resumeCall++;
         throw new Error("network error");
       }),
     };
+    const onIssueSyncStatus = vi.fn();
+    const stage = createSelfCheckStageHandler(
+      makeOpts({ agent, onIssueSyncStatus }),
+    );
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(onIssueSyncStatus).toHaveBeenCalledWith("failed");
+  });
+
+  test("reports failed sync status when sync verdict follow-up returns error", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "All good.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "DONE",
+    });
+    const syncResult = makeResult({
+      sessionId: "sess-sync",
+      responseText: "Compared implementation.",
+    });
+    const syncVerdictResult = makeResult({
+      status: "error",
+      errorType: "execution_error",
+      responseText: "",
+    });
+
+    const agent = makeAgent(
+      checkResult,
+      fixResult,
+      verdictResult,
+      syncResult,
+      syncVerdictResult,
+    );
     const onIssueSyncStatus = vi.fn();
     const stage = createSelfCheckStageHandler(
       makeOpts({ agent, onIssueSyncStatus }),
@@ -356,21 +621,27 @@ describe("createSelfCheckStageHandler", () => {
     const checkResult = makeResult({ sessionId: "sess-1" });
     const fixResult = makeResult({
       sessionId: "sess-fix",
-      responseText: "All good.\n\nDONE",
+      responseText: "All good.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "DONE",
     });
     const syncResult = makeResult({
-      responseText:
-        "Compared implementation.\n\nISSUE_UPDATED: corrected file path",
+      sessionId: "sess-sync",
+      responseText: "Compared implementation.",
+    });
+    const syncVerdictResult = makeResult({
+      responseText: "ISSUE_UPDATED: corrected file path",
     });
 
-    let resumeCall = 0;
-    const resumeResults = [fixResult, syncResult];
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(makeStream(checkResult)),
-      resume: vi
-        .fn()
-        .mockImplementation(() => makeStream(resumeResults[resumeCall++])),
-    };
+    const agent = makeAgent(
+      checkResult,
+      fixResult,
+      verdictResult,
+      syncResult,
+      syncVerdictResult,
+    );
     const onIssueChange = vi.fn();
     const stage = createSelfCheckStageHandler(
       makeOpts({ agent, onIssueChange }),
@@ -378,7 +649,8 @@ describe("createSelfCheckStageHandler", () => {
     const result = await stage.handler(BASE_CTX);
 
     expect(result.outcome).toBe("completed");
-    expect(agent.resume).toHaveBeenCalledTimes(2);
+    // 4 resume calls: fix work, verdict, sync work, sync verdict
+    expect(agent.resume).toHaveBeenCalledTimes(4);
     expect(onIssueChange).toHaveBeenCalledWith({
       type: "minor",
       description: "corrected file path",
@@ -389,20 +661,27 @@ describe("createSelfCheckStageHandler", () => {
     const checkResult = makeResult({ sessionId: "sess-1" });
     const fixResult = makeResult({
       sessionId: "sess-fix",
-      responseText: "All good.\n\nDONE",
+      responseText: "All good.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "DONE",
     });
     const syncResult = makeResult({
+      sessionId: "sess-sync",
+      responseText: "Synced.",
+    });
+    const syncVerdictResult = makeResult({
       responseText: "ISSUE_COMMENTED: uses WebSocket instead of polling",
     });
 
-    let resumeCall = 0;
-    const resumeResults = [fixResult, syncResult];
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(makeStream(checkResult)),
-      resume: vi
-        .fn()
-        .mockImplementation(() => makeStream(resumeResults[resumeCall++])),
-    };
+    const agent = makeAgent(
+      checkResult,
+      fixResult,
+      verdictResult,
+      syncResult,
+      syncVerdictResult,
+    );
     const onIssueChange = vi.fn();
     const stage = createSelfCheckStageHandler(
       makeOpts({ agent, onIssueChange }),
@@ -415,13 +694,17 @@ describe("createSelfCheckStageHandler", () => {
     });
   });
 
-  test("skips issue sync when fix response is FIXED (not DONE)", async () => {
+  test("skips issue sync when verdict response is FIXED (not DONE)", async () => {
     const checkResult = makeResult({ sessionId: "sess-1" });
     const fixResult = makeResult({
       sessionId: "sess-fix",
-      responseText: "Fixed.\n\nFIXED",
+      responseText: "Fixed.",
     });
-    const agent = makeAgent(checkResult, fixResult);
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "FIXED",
+    });
+    const agent = makeAgent(checkResult, fixResult, verdictResult);
     const onIssueChange = vi.fn();
     const stage = createSelfCheckStageHandler(
       makeOpts({ agent, onIssueChange }),
@@ -429,8 +712,8 @@ describe("createSelfCheckStageHandler", () => {
     const result = await stage.handler(BASE_CTX);
 
     expect(result.outcome).toBe("not_approved");
-    // Only one resume call (fix-or-done), no issue sync
-    expect(agent.resume).toHaveBeenCalledTimes(1);
+    // Two resume calls: fix-or-done work + verdict, no issue sync
+    expect(agent.resume).toHaveBeenCalledTimes(2);
     expect(onIssueChange).not.toHaveBeenCalled();
   });
 
@@ -438,20 +721,27 @@ describe("createSelfCheckStageHandler", () => {
     const checkResult = makeResult({ sessionId: "sess-1" });
     const fixResult = makeResult({
       sessionId: "sess-fix",
-      responseText: "All good.\n\nDONE",
+      responseText: "All good.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "DONE",
     });
     const syncResult = makeResult({
-      responseText: "Everything matches.\n\nISSUE_NO_CHANGES",
+      sessionId: "sess-sync",
+      responseText: "Everything matches.",
+    });
+    const syncVerdictResult = makeResult({
+      responseText: "ISSUE_NO_CHANGES",
     });
 
-    let resumeCall = 0;
-    const resumeResults = [fixResult, syncResult];
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(makeStream(checkResult)),
-      resume: vi
-        .fn()
-        .mockImplementation(() => makeStream(resumeResults[resumeCall++])),
-    };
+    const agent = makeAgent(
+      checkResult,
+      fixResult,
+      verdictResult,
+      syncResult,
+      syncVerdictResult,
+    );
     const onIssueChange = vi.fn();
     const stage = createSelfCheckStageHandler(
       makeOpts({ agent, onIssueChange }),
@@ -465,7 +755,11 @@ describe("createSelfCheckStageHandler", () => {
     const checkResult = makeResult({ sessionId: "sess-1" });
     const fixResult = makeResult({
       sessionId: "sess-fix",
-      responseText: "All good.\n\nDONE",
+      responseText: "All good.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "DONE",
     });
     const syncResult = makeResult({
       status: "error",
@@ -473,14 +767,7 @@ describe("createSelfCheckStageHandler", () => {
       responseText: "",
     });
 
-    let resumeCall = 0;
-    const resumeResults = [fixResult, syncResult];
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(makeStream(checkResult)),
-      resume: vi
-        .fn()
-        .mockImplementation(() => makeStream(resumeResults[resumeCall++])),
-    };
+    const agent = makeAgent(checkResult, fixResult, verdictResult, syncResult);
     const onIssueSyncStatus = vi.fn();
     const stage = createSelfCheckStageHandler(
       makeOpts({ agent, onIssueSyncStatus }),
@@ -492,14 +779,151 @@ describe("createSelfCheckStageHandler", () => {
     expect(onIssueSyncStatus).toHaveBeenCalledWith("failed");
   });
 
-  test("skips issue sync when fix response has no session ID and reports skipped status", async () => {
+  // -- issue sync clarification retry ----------------------------------------
+
+  test("malformed sync verdict → clarification → completed", async () => {
     const checkResult = makeResult({ sessionId: "sess-1" });
     const fixResult = makeResult({
-      sessionId: undefined,
-      responseText: "All good.\n\nDONE",
+      sessionId: "sess-fix",
+      responseText: "All good.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "DONE",
+    });
+    const syncResult = makeResult({
+      sessionId: "sess-sync",
+      responseText: "Compared implementation.",
+    });
+    // Malformed: extra commentary mixed in.
+    const syncVerdictResult = makeResult({
+      sessionId: "sess-syncv",
+      responseText: "I updated the issue\nISSUE_UPDATED: fixed path",
+    });
+    // Clarification retry returns clean response.
+    const clarifiedResult = makeResult({
+      responseText: "ISSUE_UPDATED: fixed path",
     });
 
-    const agent = makeAgent(checkResult, fixResult);
+    const agent = makeAgent(
+      checkResult,
+      fixResult,
+      verdictResult,
+      syncResult,
+      syncVerdictResult,
+      clarifiedResult,
+    );
+    const onIssueChange = vi.fn();
+    const onIssueSyncStatus = vi.fn();
+    const stage = createSelfCheckStageHandler(
+      makeOpts({ agent, onIssueChange, onIssueSyncStatus }),
+    );
+    await stage.handler(BASE_CTX);
+
+    expect(onIssueSyncStatus).toHaveBeenCalledWith("completed");
+    expect(onIssueChange).toHaveBeenCalledWith({
+      type: "minor",
+      description: "fixed path",
+    });
+  });
+
+  test("malformed sync verdict → clarification also malformed → failed", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "All good.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "DONE",
+    });
+    const syncResult = makeResult({
+      sessionId: "sess-sync",
+      responseText: "Compared implementation.",
+    });
+    const syncVerdictResult = makeResult({
+      sessionId: "sess-syncv",
+      responseText: "ISSUE_UPDATED fixed title",
+    });
+    // Clarification also malformed.
+    const clarifiedResult = makeResult({
+      responseText: "I already updated it",
+    });
+
+    const agent = makeAgent(
+      checkResult,
+      fixResult,
+      verdictResult,
+      syncResult,
+      syncVerdictResult,
+      clarifiedResult,
+    );
+    const onIssueChange = vi.fn();
+    const onIssueSyncStatus = vi.fn();
+    const stage = createSelfCheckStageHandler(
+      makeOpts({ agent, onIssueChange, onIssueSyncStatus }),
+    );
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(onIssueSyncStatus).toHaveBeenCalledWith("failed");
+    expect(onIssueChange).not.toHaveBeenCalled();
+  });
+
+  test("malformed sync verdict → clarification error → failed", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "All good.",
+    });
+    const verdictResult = makeResult({
+      sessionId: "sess-verdict",
+      responseText: "DONE",
+    });
+    const syncResult = makeResult({
+      sessionId: "sess-sync",
+      responseText: "Compared implementation.",
+    });
+    const syncVerdictResult = makeResult({
+      sessionId: "sess-syncv",
+      responseText: "Sure, I did the sync",
+    });
+    const errorResult = makeResult({
+      status: "error",
+      errorType: "execution_error",
+      responseText: "",
+    });
+
+    const agent = makeAgent(
+      checkResult,
+      fixResult,
+      verdictResult,
+      syncResult,
+      syncVerdictResult,
+      errorResult,
+    );
+    const onIssueSyncStatus = vi.fn();
+    const stage = createSelfCheckStageHandler(
+      makeOpts({ agent, onIssueSyncStatus }),
+    );
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(onIssueSyncStatus).toHaveBeenCalledWith("failed");
+  });
+
+  test("skips issue sync when verdict response has no session ID and reports skipped status", async () => {
+    const checkResult = makeResult({ sessionId: "sess-1" });
+    const fixResult = makeResult({
+      sessionId: "sess-fix",
+      responseText: "All good.",
+    });
+    const verdictResult = makeResult({
+      sessionId: undefined,
+      responseText: "DONE",
+    });
+
+    const agent = makeAgent(checkResult, fixResult, verdictResult);
     const onIssueChange = vi.fn();
     const onIssueSyncStatus = vi.fn();
     const stage = createSelfCheckStageHandler(
