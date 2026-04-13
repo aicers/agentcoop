@@ -210,10 +210,11 @@ export async function pollCiAndFix(
       cwd: ctx.worktreePath,
       onUsage: ctx.usageSinks?.a,
     });
-    if (ctx.streamSinks?.a) {
-      drainToSink(fixStream, ctx.streamSinks.a);
-    }
+    const drained = ctx.streamSinks?.a
+      ? drainToSink(fixStream, ctx.streamSinks.a)
+      : undefined;
     const fixResult = await fixStream.result;
+    if (drained) await drained;
 
     if (fixResult.sessionId) {
       ctx.onSessionId?.("a", fixResult.sessionId);

@@ -725,8 +725,6 @@ describe("invokeOrResume with StreamSink", () => {
     const sink = (chunk: string) => collected.push(chunk);
 
     const out = await invokeOrResume(agent, undefined, "prompt", "/cwd", sink);
-    // Allow microtask queue to flush for the fire-and-forget drain.
-    await new Promise((r) => setTimeout(r, 10));
 
     expect(out).toBe(result);
     expect(collected).toEqual(["chunk1", "chunk2"]);
@@ -749,7 +747,6 @@ describe("invokeOrResume with StreamSink", () => {
       "/cwd",
       (chunk) => collected.push(chunk),
     );
-    await new Promise((r) => setTimeout(r, 10));
 
     expect(out).toBe(result);
     expect(collected).toEqual(["a", "b", "c"]);
@@ -781,7 +778,6 @@ describe("sendFollowUp with StreamSink", () => {
     const out = await sendFollowUp(agent, "sess-1", "prompt", "/cwd", (chunk) =>
       collected.push(chunk),
     );
-    await new Promise((r) => setTimeout(r, 10));
 
     expect(out.responseText).toBe("follow-up done");
     expect(collected).toEqual(["f1", "f2"]);
@@ -802,6 +798,45 @@ describe("sendFollowUp with StreamSink", () => {
 // ---- drainToSink edge cases -------------------------------------------------
 
 describe("drainToSink", () => {
+  test("all chunks are delivered before caller resumes (regression for #205)", async () => {
+    const result = makeResult({ responseText: "ok" });
+    // Iterator that yields on separate event-loop turns, simulating
+    // real I/O where chunks arrive after stream.result resolves.
+    const chunks = ["x", "y", "z"];
+    let idx = 0;
+    const stream: AgentStream = {
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => {
+            await new Promise<void>((r) => setTimeout(r, 0));
+            if (idx < chunks.length) {
+              return { done: false, value: chunks[idx++] };
+            }
+            return { done: true, value: "" };
+          },
+        };
+      },
+      result: Promise.resolve(result),
+      child: {} as AgentStream["child"],
+    };
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(stream),
+      resume: vi.fn(),
+    };
+
+    const collected: string[] = [];
+    await invokeOrResume(agent, undefined, "prompt", "/cwd", (chunk) =>
+      collected.push(chunk),
+    );
+
+    // Before the fix, drainToSink was fire-and-forget so the function
+    // returned as soon as stream.result resolved — while the iterator
+    // still had pending setTimeout turns.  This assertion would fail
+    // because collected would be incomplete.
+    expect(collected).toEqual(["x", "y", "z"]);
+  });
+
   test("result resolves independently even when sink throws", async () => {
     const result = makeResult({ responseText: "completed" });
     const agent: AgentAdapter = {
@@ -815,10 +850,8 @@ describe("drainToSink", () => {
       throw new Error("sink exploded");
     });
 
-    // drainToSink runs fire-and-forget, so the error is swallowed
-    // and .result should still resolve.
+    // drainToSink swallows sink errors, so .result should still resolve.
     const out = await invokeOrResume(agent, undefined, "prompt", "/cwd", sink);
-    await new Promise((r) => setTimeout(r, 10));
 
     expect(out).toBe(result);
     // sink was called at least once before the error stopped the drain.
@@ -840,7 +873,6 @@ describe("drainToSink", () => {
     await invokeOrResume(agent, undefined, "prompt", "/cwd", (chunk) =>
       collected.push(chunk),
     );
-    await new Promise((r) => setTimeout(r, 10));
 
     expect(collected).toEqual(["first", "second", "third"]);
   });

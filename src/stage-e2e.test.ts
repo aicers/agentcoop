@@ -2518,8 +2518,6 @@ describe("Pipeline event emitter integration", () => {
     const result = await runPipeline(
       makePipelineOpts({ stages: [stage], events: emitter }),
     );
-    // Allow fire-and-forget drain to flush.
-    await new Promise((r) => setTimeout(r, 20));
 
     expect(result.success).toBe(true);
     expect(chunkEvents.length).toBe(2);
@@ -2634,7 +2632,6 @@ describe("Pipeline event emitter integration", () => {
     const result = await runPipeline(
       makePipelineOpts({ stages: [stage], events: emitter }),
     );
-    await new Promise((r) => setTimeout(r, 20));
 
     expect(result.success).toBe(true);
     const agentBChunks = chunkEvents.filter((e) => e.agent === "b");
@@ -2783,9 +2780,6 @@ describe("agent:chunk events emitted during stage execution", () => {
     const stage = createImplementStageHandler({ agent, ...ISSUE_CTX });
     await runPipeline(makePipelineOpts({ stages: [stage], events: emitter }));
 
-    // Allow fire-and-forget drainToSink to flush.
-    await new Promise((r) => setTimeout(r, 20));
-
     // All chunks should be tagged as agent "a".
     expect(agentChunks.length).toBeGreaterThanOrEqual(2);
     for (const ev of agentChunks) {
@@ -2825,8 +2819,6 @@ describe("agent:chunk events emitted during stage execution", () => {
     });
     await runPipeline(makePipelineOpts({ stages: [stage], events: emitter }));
 
-    await new Promise((r) => setTimeout(r, 20));
-
     // At minimum, agent B chunks should appear (reviewer).
     expect(seenAgents.has("b")).toBe(true);
   });
@@ -2849,8 +2841,6 @@ describe("agent:chunk events emitted during stage execution", () => {
 
     const stage = createImplementStageHandler({ agent, ...ISSUE_CTX });
     await runPipeline(makePipelineOpts({ stages: [stage], events: emitter }));
-
-    await new Promise((r) => setTimeout(r, 20));
 
     // Enter must come before any chunk, exit must come after handler returns.
     const enterIdx = timeline.indexOf("enter:2");
