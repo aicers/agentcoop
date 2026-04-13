@@ -6,6 +6,7 @@ import type {
   PipelineEventEmitter,
   StageEnterEvent,
   StageExitEvent,
+  StageNameOverrideEvent,
 } from "../pipeline-events.js";
 
 /** Stage number for the self-check stage. */
@@ -213,11 +214,16 @@ export function StatusBar({
         setReviewCount((c) => c + 1);
       }
     };
+    const onNameOverride = (ev: StageNameOverrideEvent) => {
+      setStage((prev) => (prev ? { ...prev, stageName: ev.stageName } : prev));
+    };
     emitter.on("stage:enter", onEnter);
     emitter.on("stage:exit", onExit);
+    emitter.on("stage:name-override", onNameOverride);
     return () => {
       emitter.off("stage:enter", onEnter);
       emitter.off("stage:exit", onExit);
+      emitter.off("stage:name-override", onNameOverride);
     };
   }, [emitter]);
 

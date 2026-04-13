@@ -116,6 +116,7 @@ export const ko: Messages = {
   "stage.ciCheck": "CI \uAC80\uC0AC",
   "stage.testPlan": "\uD14C\uC2A4\uD2B8 \uACC4\uD68D \uAC80\uC99D",
   "stage.squash": "\uCEE4\uBC0B \uC2A4\uCFFC\uC2DC",
+  "stage.rebase": "\uB9AC\uBCA0\uC774\uC2A4",
   "stage.review": "\uB9AC\uBDF0",
   "stage.done": "\uC644\uB8CC",
 

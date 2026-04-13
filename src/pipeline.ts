@@ -802,6 +802,8 @@ export interface RebaseResult {
 
 /** Options for {@link createDoneStageHandler}. */
 export interface DoneStageOptions {
+  /** Pipeline event emitter for stage name overrides (e.g. "Rebase"). */
+  events?: PipelineEventEmitter;
   /**
    * Check whether the PR has merge conflicts with the base branch.
    * Returns the resolved mergeable state (with retries for UNKNOWN).
@@ -857,6 +859,12 @@ export function createDoneStageHandler(
 ): StageDefinition {
   // Agent rebase is limited to 1 attempt across all loop-backs.
   let rebaseAttempted = false;
+
+  const doneName = t()["stage.done"];
+  const rebaseName = t()["stage.rebase"];
+  const emitStageName = (name: string) => {
+    options.events?.emit("stage:name-override", { stageName: name });
+  };
 
   return {
     name: t()["stage.done"],
@@ -946,11 +954,14 @@ export function createDoneStageHandler(
 
         if (choice === "agent_rebase") {
           rebaseAttempted = true;
+          emitStageName(rebaseName);
           const rebaseResult = await options.rebaseOntoMain(ctx);
           if (ctx.signal?.aborted) {
+            emitStageName(doneName);
             return { outcome: "completed", message: "" };
           }
           if (!rebaseResult.success) {
+            emitStageName(doneName);
             // Agent could not resolve — notify and fall back to manual.
             await options.prompt.waitForManualResolve(
               m["pipeline.rebaseFailed"],
@@ -986,11 +997,13 @@ export function createDoneStageHandler(
           return { outcome: "completed", message: "" };
         }
         if (state === "CONFLICTING") {
+          emitStageName(doneName);
           // Still conflicting — return undefined so the top-level loop
           // re-enters mergeableLoop → handleConflicting.
           return undefined;
         }
         if (state === "UNKNOWN") {
+          emitStageName(doneName);
           // checkMergeable already exhausted its retry budget.  Show the
           // unknown-state prompt immediately instead of re-running the
           // full backoff cycle a second time.
@@ -1010,6 +1023,10 @@ export function createDoneStageHandler(
 
         // MERGEABLE — poll CI after resolution.
         const ciResult = await options.pollCiAndFix(ctx);
+        emitStageName(doneName);
+        console.error(
+          `[done-stage-debug] afterResolution ciResult: passed=${ciResult.passed} message=${ciResult.message}`,
+        );
         if (ctx.signal?.aborted) {
           return { outcome: "completed", message: "" };
         }
@@ -1093,16 +1110,20 @@ export function createDoneStageHandler(
           break; // back to confirmMerge
         }
         rebaseAttempted = true;
+        emitStageName(rebaseName);
         const rebaseResult = await options.rebaseOntoMain(ctx);
         if (ctx.signal?.aborted) {
+          emitStageName(doneName);
           return { outcome: "completed", message: "" };
         }
         if (!rebaseResult.success) {
+          emitStageName(doneName);
           break; // rebase failed — back to confirmMerge
         }
 
         // Rebase succeeded — poll CI and surface the result.
         const ciResult = await options.pollCiAndFix(ctx);
+        emitStageName(doneName);
         if (ctx.signal?.aborted) {
           return { outcome: "completed", message: "" };
         }

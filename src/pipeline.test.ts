@@ -19,6 +19,7 @@ import {
   PipelineEventEmitter,
   type StageEnterEvent,
   type StageExitEvent,
+  type StageNameOverrideEvent,
 } from "./pipeline-events.js";
 import { buildClarificationPrompt } from "./step-parser.js";
 
@@ -1468,6 +1469,158 @@ describe("createDoneStageHandler", () => {
     // CI polling still happens after the manual resolve re-check.
     expect(opts.pollCiAndFix).toHaveBeenCalledOnce();
     expect(result.outcome).toBe("completed");
+  });
+
+  // ---- stage:name-override events ------------------------------------------
+
+  test("handleConflicting rebase emits Rebase then Done on success", async () => {
+    const emitter = new PipelineEventEmitter();
+    const names: string[] = [];
+    emitter.on("stage:name-override", (ev: StageNameOverrideEvent) => {
+      names.push(ev.stageName);
+    });
+    const checkMergeable = vi
+      .fn()
+      .mockResolvedValueOnce("CONFLICTING")
+      .mockResolvedValueOnce("MERGEABLE");
+    const opts = makeDoneOpts({
+      events: emitter,
+      checkMergeable,
+      prompt: { handleConflict: vi.fn().mockResolvedValue("agent_rebase") },
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    await stage.handler(ctx);
+    // "Rebase" emitted before rebase, "Done" restored after CI poll.
+    expect(names).toEqual(["Rebase", "Done"]);
+  });
+
+  test("handleConflicting rebase emits Rebase then Done on failure", async () => {
+    const emitter = new PipelineEventEmitter();
+    const names: string[] = [];
+    emitter.on("stage:name-override", (ev: StageNameOverrideEvent) => {
+      names.push(ev.stageName);
+    });
+    const checkMergeable = vi
+      .fn()
+      .mockResolvedValueOnce("CONFLICTING")
+      .mockResolvedValueOnce("MERGEABLE");
+    const opts = makeDoneOpts({
+      events: emitter,
+      checkMergeable,
+      rebaseOntoMain: vi
+        .fn()
+        .mockResolvedValue({ success: false, message: "conflict" }),
+      prompt: { handleConflict: vi.fn().mockResolvedValue("agent_rebase") },
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    await stage.handler(ctx);
+    // "Rebase" emitted before rebase, "Done" restored on failure.
+    expect(names[0]).toBe("Rebase");
+    expect(names[1]).toBe("Done");
+  });
+
+  test("askMerge inner rebase emits Rebase then Done", async () => {
+    const emitter = new PipelineEventEmitter();
+    const names: string[] = [];
+    emitter.on("stage:name-override", (ev: StageNameOverrideEvent) => {
+      names.push(ev.stageName);
+    });
+    const checkMergeable = vi
+      .fn()
+      .mockResolvedValueOnce("MERGEABLE") // initial → askMerge
+      .mockResolvedValueOnce("CONFLICTING"); // inside askMerge
+    const confirmMerge = vi
+      .fn()
+      .mockResolvedValueOnce("check_conflicts")
+      .mockResolvedValueOnce("merged");
+    const opts = makeDoneOpts({
+      events: emitter,
+      checkMergeable,
+      prompt: { confirmMerge },
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    await stage.handler(ctx);
+    // "Rebase" emitted inside askMerge, "Done" restored after CI poll.
+    expect(names).toEqual(["Rebase", "Done"]);
+  });
+
+  test("handleConflicting rebase emits Done on abort", async () => {
+    const controller = new AbortController();
+    const emitter = new PipelineEventEmitter();
+    const names: string[] = [];
+    emitter.on("stage:name-override", (ev: StageNameOverrideEvent) => {
+      names.push(ev.stageName);
+    });
+    const opts = makeDoneOpts({
+      events: emitter,
+      checkMergeable: vi.fn().mockResolvedValue("CONFLICTING"),
+      rebaseOntoMain: vi.fn().mockImplementation(async () => {
+        controller.abort();
+        return { success: true, message: "" };
+      }),
+      prompt: { handleConflict: vi.fn().mockResolvedValue("agent_rebase") },
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+      signal: controller.signal,
+    };
+    await stage.handler(ctx);
+    expect(names).toEqual(["Rebase", "Done"]);
+  });
+
+  test("askMerge inner rebase emits Done on abort", async () => {
+    const controller = new AbortController();
+    const emitter = new PipelineEventEmitter();
+    const names: string[] = [];
+    emitter.on("stage:name-override", (ev: StageNameOverrideEvent) => {
+      names.push(ev.stageName);
+    });
+    const checkMergeable = vi
+      .fn()
+      .mockResolvedValueOnce("MERGEABLE")
+      .mockResolvedValueOnce("CONFLICTING");
+    const confirmMerge = vi.fn().mockResolvedValue("check_conflicts");
+    const opts = makeDoneOpts({
+      events: emitter,
+      checkMergeable,
+      rebaseOntoMain: vi.fn().mockImplementation(async () => {
+        controller.abort();
+        return { success: true, message: "" };
+      }),
+      prompt: { confirmMerge },
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+      signal: controller.signal,
+    };
+    await stage.handler(ctx);
+    expect(names).toEqual(["Rebase", "Done"]);
   });
 
   // ---- askMerge "check_conflicts" sub-path --------------------------------

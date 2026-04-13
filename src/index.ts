@@ -555,7 +555,10 @@ try {
       }
     | undefined;
 
+  const emitter = new PipelineEventEmitter();
+
   const doneStage = createDoneStageHandler({
+    events: emitter,
     checkMergeable: async () => checkMergeable(owner, repo, wt.branch),
     prompt: {
       confirmMerge: async (msg) => {
@@ -769,8 +772,6 @@ try {
   };
   process.on("SIGINT", sigintHandler);
 
-  const emitter = new PipelineEventEmitter();
-
   const startedAt = Date.now();
   const pipelineResult = await new Promise<PipelineResult>((resolve) => {
     const { unmount } = renderApp({
@@ -805,6 +806,9 @@ try {
   // (allows Ctrl+C to kill during cleanup prompts).
   process.off("SIGINT", sigintHandler);
 
+  console.error(
+    `[done-stage-debug] pipelineResult: success=${pipelineResult.success} stoppedAt=${pipelineResult.stoppedAt} cancelled=${pipelineResult.cancelled} message=${pipelineResult.message}`,
+  );
   console.log();
   console.log(pipelineResult.message);
 
