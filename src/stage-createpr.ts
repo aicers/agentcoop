@@ -181,7 +181,7 @@ export function createCreatePrStageHandler(
 
         checkResult = retryResult;
         result = mapResponseToResult(
-          retryResult.responseText,
+          checkResult.responseText,
           undefined,
           PR_CHECK_KEYWORDS,
         );

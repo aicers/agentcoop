@@ -632,7 +632,7 @@ export function createReviewStageHandler(
 
         checkResult = retryResult;
         checkMapped = mapResponseToResult(
-          retryResult.responseText,
+          checkResult.responseText,
           undefined,
           AUTHOR_CHECK_KEYWORDS,
         );
@@ -839,7 +839,6 @@ async function handleUnresolvedSummary(
       };
     }
 
-    verdictResult = retryResult;
     verdict = parseVerdictKeyword(
       retryResult.responseText,
       UNRESOLVED_KEYWORDS,

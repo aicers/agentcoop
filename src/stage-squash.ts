@@ -213,7 +213,7 @@ export function createSquashStageHandler(
 
         checkResult = retryResult;
         result = mapResponseToResult(
-          retryResult.responseText,
+          checkResult.responseText,
           undefined,
           SQUASH_CHECK_KEYWORDS,
         );

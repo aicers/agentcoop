@@ -219,7 +219,7 @@ export function createSelfCheckStageHandler(
 
         verdictCheckResult = retryResult;
         result = mapFixOrDoneResponse(
-          retryResult.responseText,
+          verdictCheckResult.responseText,
           FIX_OR_DONE_KEYWORDS,
         );
       }
