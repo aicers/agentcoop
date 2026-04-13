@@ -1,9 +1,23 @@
 # AgentCoop
 
 An AI pipeline that takes a GitHub issue and autonomously implements,
-reviews, and prepares it for merge. The current implementation uses
-two agents — one author and one reviewer. A future version will
-expand to three agents (one author and two reviewers).
+reviews, and prepares it for merge. Rather than having a single agent
+work longer on a large task, AgentCoop puts multiple agents through
+the same quality process that human engineering teams rely on —
+self-review, independent code review, and iterative feedback — to
+maximize the implementation quality of each issue.
+
+The current implementation uses two agents — one author and one
+reviewer. A future version will expand to three agents (one author
+and two reviewers).
+
+No single agent session produces perfect code on the first try —
+whether the task is a new feature, a bug fix, a refactor, or adding
+tests and documentation. Self-check catches what the author missed,
+an independent reviewer catches what self-check missed, and the
+back-and-forth between them refines what remains. AgentCoop is built
+on this premise — quality comes from the process, not from a more
+capable model.
 
 Break your project down into well-written issues, each scoped to a
 single PR. AgentCoop works through them — implementing, reviewing,
