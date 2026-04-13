@@ -1025,7 +1025,7 @@ export function createDoneStageHandler(
         const ciResult = await options.pollCiAndFix(ctx);
         emitStageName(doneName);
         console.error(
-          `[done-stage-debug] afterResolution ciResult: passed=${ciResult.passed} message=${ciResult.message}`,
+          `[done-stage-debug] afterResolution ciResult: ${JSON.stringify(ciResult)}`,
         );
         if (ctx.signal?.aborted) {
           return { outcome: "completed", message: "" };
