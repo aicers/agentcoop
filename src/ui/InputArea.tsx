@@ -46,7 +46,7 @@ export function InputArea({ request, onSubmit }: InputAreaProps) {
 
   if (request.choices) {
     return (
-      <Box flexDirection="column" paddingX={1}>
+      <Box flexDirection="column" paddingX={1} flexShrink={0}>
         {request.message.split("\n").map((line, i) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: static message lines never reorder
           <Text key={i}>{line || " "}</Text>
@@ -66,7 +66,7 @@ export function InputArea({ request, onSubmit }: InputAreaProps) {
   }
 
   return (
-    <Box flexDirection="column" paddingX={1}>
+    <Box flexDirection="column" paddingX={1} flexShrink={0}>
       {request.message.split("\n").map((line, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: static message lines never reorder
         <Text key={i}>{line || " "}</Text>
