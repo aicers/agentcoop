@@ -807,7 +807,7 @@ try {
   process.off("SIGINT", sigintHandler);
 
   console.error(
-    `[done-stage-debug] pipelineResult: success=${pipelineResult.success} stoppedAt=${pipelineResult.stoppedAt} cancelled=${pipelineResult.cancelled} message=${pipelineResult.message}`,
+    `[done-stage-debug] pipelineResult: ${JSON.stringify(pipelineResult)}`,
   );
   console.log();
   console.log(pipelineResult.message);
