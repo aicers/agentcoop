@@ -12,7 +12,7 @@
  */
 
 import type { AgentAdapter } from "./agent.js";
-import type { CiStatus, GetCiStatusFn } from "./ci.js";
+import type { CiRun, CiStatus, GetCiStatusFn } from "./ci.js";
 import {
   collectFailureLogs as defaultCollectFailureLogs,
   getCiStatus as defaultGetCiStatus,
@@ -47,7 +47,7 @@ export interface CiCheckStageOptions {
   /** Injected for testability. Defaults to `ci.getCiStatus`. */
   getCiStatus?: GetCiStatusFn;
   /** Injected for testability. Defaults to `ci.collectFailureLogs`. */
-  collectFailureLogs?: (owner: string, repo: string, runId: number) => string;
+  collectFailureLogs?: (owner: string, repo: string, run: CiRun) => string;
   /**
    * Read the current HEAD SHA from the worktree.  Called before each
    * CI poll so that fix pushes automatically target the new commit.
@@ -135,7 +135,24 @@ export function createCiCheckStageHandler(
       let ciStatus: CiStatus;
       while (true) {
         const commitSha = readHeadSha(ctx.worktreePath);
-        ciStatus = getCiStatus(ctx.owner, ctx.repo, ctx.branch, commitSha);
+
+        try {
+          ciStatus = getCiStatus(ctx.owner, ctx.repo, ctx.branch, commitSha);
+        } catch (err) {
+          // Transient lookup error — log and retry on the next poll cycle.
+          console.warn(
+            `CI status lookup failed (will retry): ${err instanceof Error ? err.message : err}`,
+          );
+          const elapsed = Date.now() - startTime;
+          if (elapsed >= pollTimeout) {
+            return {
+              outcome: "error",
+              message: t()["ci.pendingTimeout"](Math.round(pollTimeout / 1000)),
+            };
+          }
+          await delay(pollInterval);
+          continue;
+        }
 
         const elapsed = Date.now() - startTime;
 
@@ -173,7 +190,7 @@ export function createCiCheckStageHandler(
 
       const logSections: string[] = [];
       for (const run of failedRuns) {
-        const logs = collectLogs(ctx.owner, ctx.repo, run.databaseId);
+        const logs = collectLogs(ctx.owner, ctx.repo, run);
         if (logs) {
           logSections.push(
             `### ${run.name} (run ${run.databaseId})\n\n${logs}`,

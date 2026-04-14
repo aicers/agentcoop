@@ -40,6 +40,7 @@ function makeCiRun(overrides: Partial<CiRun> = {}): CiRun {
     conclusion: "success",
     headBranch: "issue-42",
     headSha: "abc123",
+    source: "workflow",
     ...overrides,
   };
 }
@@ -544,8 +545,16 @@ describe("createSquashStageHandler", () => {
     await stage.handler(BASE_CTX);
 
     expect(collectFailureLogs).toHaveBeenCalledTimes(2);
-    expect(collectFailureLogs).toHaveBeenCalledWith("org", "repo", 200);
-    expect(collectFailureLogs).toHaveBeenCalledWith("org", "repo", 201);
+    expect(collectFailureLogs).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      expect.objectContaining({ databaseId: 200 }),
+    );
+    expect(collectFailureLogs).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      expect.objectContaining({ databaseId: 201 }),
+    );
   });
 
   // -- non-terminal non-blocked completion outcome ----------------------------
