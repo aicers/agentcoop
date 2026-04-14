@@ -19,7 +19,20 @@ import { StatusBar } from "./StatusBar.js";
 import { TokenBar } from "./TokenBar.js";
 import { createTuiUserPrompt } from "./TuiUserPrompt.js";
 
-// ---- Terminal dimension hooks ------------------------------------------------
+// ---- Terminal helpers --------------------------------------------------------
+
+/**
+ * Reserve one column so no serialized output row reaches the exact terminal
+ * edge.  Some terminals visually wrap at column N when N characters are
+ * written, which confuses log-update's line counting and produces stale-row
+ * artifacts (see issue #203).  Ink's output serialization trims trailing
+ * spaces, so the gap is invisible.
+ */
+export function computeLayoutWidth(
+  terminalWidth: number | undefined,
+): number | undefined {
+  return terminalWidth !== undefined ? terminalWidth - 1 : undefined;
+}
 
 /** Read terminal dimensions from stdout, re-rendering on resize. */
 export function useTerminalDimensions(): {
@@ -263,6 +276,9 @@ export function App({
 }: AppProps) {
   const { height: terminalHeight, width: terminalWidth } =
     useTerminalDimensions();
+
+  const layoutWidth = computeLayoutWidth(terminalWidth);
+
   const messages = t();
   const [inputRequest, setInputRequest] = useState<InputRequest | null>(null);
   const resolveRef = useRef<((value: string) => void) | null>(null);
@@ -319,7 +335,7 @@ export function App({
       hasTokenData,
       preferredLayout,
       {
-        terminalWidth,
+        terminalWidth: layoutWidth,
         paneHeaderTexts,
       },
     );
@@ -328,7 +344,7 @@ export function App({
     inputHeight,
     hasTokenData,
     preferredLayout,
-    terminalWidth,
+    layoutWidth,
     paneHeaderTexts,
   ]);
 
@@ -338,18 +354,18 @@ export function App({
       : preferredLayout;
 
   // Content width budget for bordered components (StatusBar, TokenBar):
-  // terminal width minus border (2) and paddingX (2).
+  // layout width minus border (2) and paddingX (2).
   const borderedContentWidth =
-    terminalWidth !== undefined ? terminalWidth - 4 : undefined;
+    layoutWidth !== undefined ? layoutWidth - 4 : undefined;
 
   // Per-box content width for the split TokenBar.
-  // Row layout: each box gets half the terminal width.
-  // Column layout: each box gets the full terminal width.
+  // Row layout: each box gets half the layout width.
+  // Column layout: each box gets the full layout width.
   const tokenBarContentWidth =
-    terminalWidth !== undefined
+    layoutWidth !== undefined
       ? effectiveLayout === "row"
-        ? Math.floor(terminalWidth / 2) - 4
-        : terminalWidth - 4
+        ? Math.floor(layoutWidth / 2) - 4
+        : layoutWidth - 4
       : undefined;
 
   const notificationsRef = useRef(notifications);
@@ -435,7 +451,11 @@ export function App({
   }, [dispatch, abortController]);
 
   return (
-    <Box flexDirection="column" width="100%" height={terminalHeight ?? "100%"}>
+    <Box
+      flexDirection="column"
+      width={layoutWidth ?? "100%"}
+      height={terminalHeight ?? "100%"}
+    >
       {/* Agent panes: side by side (row) or stacked (column) */}
       <Box flexDirection={effectiveLayout} flexGrow={1}>
         <AgentPane

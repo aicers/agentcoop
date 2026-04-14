@@ -16,6 +16,7 @@ import {
 } from "../pipeline-events.js";
 import { AgentPane, renderPromptRows, splitIntoRows } from "./AgentPane.js";
 import {
+  computeLayoutWidth,
   computeVisibilityFlags,
   inputAreaHeight,
   useTerminalHeight,
@@ -2904,6 +2905,52 @@ describe("AgentPane showSeparator", () => {
         l.includes("\u2500") && !l.includes("\u250C") && !l.includes("\u2514"),
     );
     expect(separatorLines.length).toBeGreaterThan(0);
+  });
+
+  test("computeLayoutWidth keeps pane rows below terminal width (unit)", async () => {
+    // Unit test: verifies the arithmetic of computeLayoutWidth() by
+    // building a manual harness with the derived width.  The companion
+    // integration test in App.layout.test.tsx renders the real App
+    // component to ensure it actually consumes computeLayoutWidth().
+    const terminalWidth = 80;
+    const layoutWidth = computeLayoutWidth(terminalWidth) as number;
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box width={layoutWidth} height={12}>
+        <Box flexDirection="row" flexGrow={1}>
+          <AgentPane
+            label="Agent A"
+            agent="a"
+            emitter={emitter}
+            color="blue"
+            isFocused
+          />
+          <AgentPane
+            label="Agent B"
+            agent="b"
+            emitter={emitter}
+            color="green"
+          />
+        </Box>
+      </Box>,
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    const lines = frame.split("\n");
+    // Sanity: the separator characters rendered.
+    const separatorLines = lines.filter(
+      (l) =>
+        l.includes("\u2500") && !l.includes("\u250C") && !l.includes("\u2514"),
+    );
+    expect(separatorLines.length).toBeGreaterThan(0);
+
+    for (const line of lines) {
+      // Every serialized row must stay strictly below the terminal width.
+      // This prevents cursor-wrapping artifacts (issue #203).
+      expect(stringWidth(line)).toBeLessThan(terminalWidth);
+    }
   });
 });
 
