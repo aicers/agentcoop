@@ -787,9 +787,22 @@ You are addressing review feedback for the following GitHub issue.
 1. Find the pull request for this branch (use `gh pr view`).
 2. Read the review comments prefixed with `[Reviewer Round {n}]`
    (only comments from your own account).
-3. Fix all agreed-upon items from the review.
+3. Evaluate each review item against the issue requirements and
+   the codebase context before acting on it:
+   - **Accept and fix** items that are valid.
+   - **Push back with reasoning** on items that are incorrect,
+     out of scope, would introduce regressions, or conflict
+     with project conventions — do not apply them blindly.
+   - **Partially address** items where only part of the
+     suggestion is appropriate, and explain what you kept
+     and why.
 4. Post a response as a PR comment prefixed with
-   `**[Author Round {n}]**` summarising what you changed.
+   `**[Author Round {n}]**`. For each review item,
+   clearly state its disposition:
+   - **Fixed** — what you changed.
+   - **Pushed back** — why the suggestion should not be applied.
+   - **Partially addressed** — what you changed and what you
+     left, with reasoning.
 5. If your changes affect documentation, update it accordingly —
    code comments, inline API docs (JSDoc/TSDoc/docstrings), README
    files, CHANGELOG entries, and any user-facing manuals, guides,

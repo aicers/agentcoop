@@ -234,6 +234,22 @@ describe("buildAuthorFixPrompt", () => {
     expect(prompt).toContain("Commit and push");
   });
 
+  test("instructs critical evaluation of review items", () => {
+    const prompt = buildAuthorFixPrompt(BASE_CTX, makeOpts(), 1);
+    expect(prompt).toContain("Evaluate each review item");
+    expect(prompt).toContain("Accept and fix");
+    expect(prompt).toContain("Push back with reasoning");
+    expect(prompt).toContain("Partially address");
+    expect(prompt).toContain("do not apply them blindly");
+  });
+
+  test("requires clear disposition for each item in author comment", () => {
+    const prompt = buildAuthorFixPrompt(BASE_CTX, makeOpts(), 1);
+    expect(prompt).toContain("**Fixed**");
+    expect(prompt).toContain("**Pushed back**");
+    expect(prompt).toContain("**Partially addressed**");
+  });
+
   test("includes doc consistency instructions with screenshots", () => {
     const prompt = buildAuthorFixPrompt(BASE_CTX, makeOpts(), 1);
     expect(prompt).toContain("CHANGELOG");
