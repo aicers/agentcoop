@@ -55,6 +55,8 @@ export interface CiFinding {
   checkRunId: number;
   /** Name of the check run that produced this finding. */
   checkRunName: string;
+  /** Commit SHA of the check run that produced this finding. */
+  commitSha: string;
 }
 
 export interface CiStatus {
@@ -233,6 +235,7 @@ export function collectFindings(
         rule: a.title,
         checkRunId: run.databaseId,
         checkRunName: run.name,
+        commitSha: run.headSha,
       });
     }
   }
@@ -441,4 +444,158 @@ export function collectFailureLogs(
     { encoding: "utf-8" },
   );
   return typeof output === "string" ? output : "";
+}
+
+// ---- code scanning alerts (CodeQL) ----------------------------------------
+
+/** A code scanning alert from the GitHub Code Scanning API. */
+export interface CodeScanningAlert {
+  number: number;
+  rule: { id: string };
+  tool: { name: string };
+  most_recent_instance: {
+    location: {
+      path: string;
+      start_line: number;
+    };
+    commit_sha: string;
+  };
+  state: string;
+  html_url: string;
+}
+
+/**
+ * Signature shared by `fetchCodeScanningAlerts` and injectable overrides.
+ */
+export type FetchCodeScanningAlertsFn = (
+  owner: string,
+  repo: string,
+  ref: string,
+) => CodeScanningAlert[];
+
+/**
+ * Signature shared by `dismissCodeScanningAlert` and injectable overrides.
+ */
+export type DismissCodeScanningAlertFn = (
+  owner: string,
+  repo: string,
+  alertNumber: number,
+  reason: string,
+) => void;
+
+/**
+ * Fetch open code scanning alerts for a given ref from the GitHub
+ * Code Scanning API.  Returns an empty array when the API returns
+ * a 404 (code scanning not enabled) or other error.
+ */
+export function fetchCodeScanningAlerts(
+  owner: string,
+  repo: string,
+  ref: string,
+): CodeScanningAlert[] {
+  try {
+    const raw = execFileSync(
+      "gh",
+      [
+        "api",
+        "--paginate",
+        "--slurp",
+        `repos/${owner}/${repo}/code-scanning/alerts?ref=${encodeURIComponent(ref)}&state=open&per_page=100`,
+      ],
+      { encoding: "utf-8" },
+    );
+    const pages: CodeScanningAlert[][] = JSON.parse(raw);
+    return pages.flat();
+  } catch {
+    // Code scanning may not be enabled on the repo, or the ref
+    // may not exist yet.  Return empty so callers degrade
+    // gracefully to the non-triage prompt.
+    return [];
+  }
+}
+
+/** Result of correlating a CiFinding to a code scanning alert. */
+export interface CorrelatedFinding {
+  finding: CiFinding;
+  /** The matched alert number, or undefined if no match was found. */
+  alertNumber?: number;
+  /** The HTML URL of the matched alert, or undefined. */
+  alertUrl?: string;
+}
+
+/**
+ * Correlate CI findings with code scanning alerts.
+ *
+ * Matches on: rule.id ↔ finding.rule, tool.name ↔ finding.checkRunName,
+ * location.path ↔ finding.file, location.start_line ↔ finding.line,
+ * and commit_sha ↔ finding.commitSha.
+ *
+ * Returns one `CorrelatedFinding` per input finding.  Findings without
+ * a matching alert get `alertNumber: undefined`.
+ */
+export function correlateFindings(
+  findings: CiFinding[],
+  alerts: CodeScanningAlert[],
+): CorrelatedFinding[] {
+  // Index alerts for efficient lookup: key = "rule|tool|path|line|sha".
+  const alertIndex = new Map<string, CodeScanningAlert>();
+  for (const alert of alerts) {
+    const key = [
+      alert.rule.id,
+      alert.tool.name,
+      alert.most_recent_instance.location.path,
+      alert.most_recent_instance.location.start_line,
+      alert.most_recent_instance.commit_sha,
+    ].join("|");
+    alertIndex.set(key, alert);
+  }
+
+  return findings.map((finding) => {
+    // Try exact match first (all five fields).
+    const exactKey = [
+      finding.rule ?? "",
+      finding.checkRunName,
+      finding.file,
+      finding.line,
+      finding.commitSha,
+    ].join("|");
+    const exactMatch = alertIndex.get(exactKey);
+    if (exactMatch) {
+      return {
+        finding,
+        alertNumber: exactMatch.number,
+        alertUrl: exactMatch.html_url,
+      };
+    }
+
+    return { finding };
+  });
+}
+
+/**
+ * Dismiss a code scanning alert as a false positive via the GitHub
+ * Code Scanning API.
+ */
+export function dismissCodeScanningAlert(
+  owner: string,
+  repo: string,
+  alertNumber: number,
+  reason: string,
+): void {
+  execFileSync(
+    "gh",
+    [
+      "api",
+      "-X",
+      "PATCH",
+      `repos/${owner}/${repo}/code-scanning/alerts/${alertNumber}`,
+      "-f",
+      "state=dismissed",
+      "-f",
+      "dismissed_reason=false positive",
+      "-f",
+      `dismissed_comment=${reason}`,
+    ],
+    { encoding: "utf-8" },
+  );
 }

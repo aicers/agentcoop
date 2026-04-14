@@ -8,9 +8,16 @@
  */
 
 import type { AgentAdapter } from "./agent.js";
-import type { CiRun, CiStatus, GetCiStatusFn } from "./ci.js";
+import type {
+  CiRun,
+  CiStatus,
+  FetchCodeScanningAlertsFn,
+  GetCiStatusFn,
+} from "./ci.js";
 import {
+  correlateFindings,
   collectFailureLogs as defaultCollectFailureLogs,
+  fetchCodeScanningAlerts as defaultFetchAlerts,
   getCiStatus as defaultGetCiStatus,
   normaliseCiConclusion,
 } from "./ci.js";
@@ -52,6 +59,8 @@ export interface CiPollOptions {
    * Injected for testability.  Defaults to `worktree.getHeadSha`.
    */
   getHeadSha?: (cwd: string) => string;
+  /** Injected for testability. Defaults to `ci.fetchCodeScanningAlerts`. */
+  fetchCodeScanningAlerts?: FetchCodeScanningAlertsFn;
   /** Delay in ms between polls when CI is pending. Default 30 000. */
   pollIntervalMs?: number;
   /** Max time in ms to wait for pending CI. Default 600 000 (10 min). */
@@ -165,6 +174,7 @@ export async function pollCiAndFix(
 
   const { ctx, agent, issueTitle, issueBody } = options;
   const readHeadSha = options.getHeadSha ?? defaultGetHeadSha;
+  const fetchAlerts = options.fetchCodeScanningAlerts ?? defaultFetchAlerts;
   const emptyGrace =
     options.emptyRunsGracePeriodMs ?? DEFAULT_EMPTY_RUNS_GRACE_PERIOD_MS;
 
@@ -217,11 +227,20 @@ export async function pollCiAndFix(
 
       const shaBeforeReview = readHeadSha(ctx.worktreePath);
 
+      // Fetch code scanning alerts and correlate to findings so
+      // the agent can dismiss false positives by alert number.
+      const alerts = fetchAlerts(ctx.owner, ctx.repo, ctx.branch);
+      const correlated =
+        alerts.length > 0
+          ? correlateFindings(ciStatus.findings, alerts)
+          : undefined;
+
       const findingsPrompt = buildCiFindingsPrompt(
         ctx,
         { issueTitle, issueBody },
         ciStatus.findings,
         ciStatus.findingsIncomplete,
+        correlated,
       );
       ctx.promptSinks?.a?.(findingsPrompt);
       const reviewStream = agent.invoke(findingsPrompt, {

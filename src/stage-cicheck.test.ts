@@ -78,6 +78,7 @@ function makeOpts(
     getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
     collectFailureLogs: vi.fn().mockReturnValue(""),
     getHeadSha: vi.fn().mockReturnValue("abc123"),
+    fetchCodeScanningAlerts: vi.fn().mockReturnValue([]),
     delay: vi.fn().mockResolvedValue(undefined),
     pollIntervalMs: 100,
     pollTimeoutMs: 1000,
@@ -636,6 +637,7 @@ describe("createCiCheckStageHandler", () => {
         rule: "no-unused-vars",
         checkRunId: 500,
         checkRunName: "ESLint",
+        commitSha: "abc123",
       },
     ];
     const getCiStatus = vi
@@ -677,6 +679,7 @@ describe("createCiCheckStageHandler", () => {
         line: 1,
         checkRunId: 600,
         checkRunName: "Lint",
+        commitSha: "abc123",
       },
     ];
     const getCiStatus = vi
@@ -713,6 +716,7 @@ describe("createCiCheckStageHandler", () => {
         line: 10,
         checkRunId: 500,
         checkRunName: "ESLint",
+        commitSha: "abc123",
       },
     ];
     const getCiStatus = vi
@@ -799,6 +803,7 @@ describe("createCiCheckStageHandler", () => {
         line: 10,
         checkRunId: 500,
         checkRunName: "ESLint",
+        commitSha: "abc123",
       },
     ];
     const getCiStatus = vi
@@ -837,6 +842,7 @@ describe("buildCiFindingsPrompt", () => {
       rule: "no-unused-vars",
       checkRunId: 500,
       checkRunName: "ESLint",
+      commitSha: "abc123",
     },
     {
       level: "notice",
@@ -845,6 +851,7 @@ describe("buildCiFindingsPrompt", () => {
       line: 25,
       checkRunId: 500,
       checkRunName: "ESLint",
+      commitSha: "abc123",
     },
   ];
 
@@ -879,6 +886,7 @@ describe("buildCiFindingsPrompt", () => {
         line: 1,
         checkRunId: 100,
         checkRunName: "Lint",
+        commitSha: "abc123",
       },
       {
         level: "warning",
@@ -887,6 +895,7 @@ describe("buildCiFindingsPrompt", () => {
         line: 2,
         checkRunId: 200,
         checkRunName: "CodeQL",
+        commitSha: "abc123",
       },
     ];
     const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), mixed);
@@ -937,5 +946,238 @@ describe("buildCiFindingsPrompt", () => {
   test("omits feedback section when no instruction", () => {
     const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), sampleFindings);
     expect(prompt).not.toContain("Additional feedback");
+  });
+
+  test("includes triage instructions when correlated findings have alerts", () => {
+    const correlated = [
+      {
+        finding: sampleFindings[0],
+        alertNumber: 42,
+        alertUrl: "https://github.com/org/repo/security/code-scanning/42",
+      },
+      { finding: sampleFindings[1] },
+    ];
+    const prompt = buildCiFindingsPrompt(
+      BASE_CTX,
+      makeOpts(),
+      sampleFindings,
+      false,
+      correlated,
+    );
+    expect(prompt).toContain("CodeQL Triage");
+    expect(prompt).toContain("Evaluation criteria");
+    expect(prompt).toContain("real issue");
+    expect(prompt).toContain("false positive");
+    expect(prompt).toContain("Alert #42");
+    expect(prompt).toContain("[alert #42]");
+    expect(prompt).toContain("gh api -X PATCH");
+    expect(prompt).toContain("dismissed_reason=false positive");
+  });
+
+  test("omits triage instructions when no alerts are correlated", () => {
+    const correlated = [
+      { finding: sampleFindings[0] },
+      { finding: sampleFindings[1] },
+    ];
+    const prompt = buildCiFindingsPrompt(
+      BASE_CTX,
+      makeOpts(),
+      sampleFindings,
+      false,
+      correlated,
+    );
+    expect(prompt).not.toContain("CodeQL Triage");
+    expect(prompt).not.toContain("gh api -X PATCH");
+  });
+
+  test("omits triage section when correlated is undefined", () => {
+    const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), sampleFindings);
+    expect(prompt).not.toContain("CodeQL Triage");
+  });
+
+  test("includes alert number in findings list when correlated", () => {
+    const correlated = [
+      {
+        finding: sampleFindings[0],
+        alertNumber: 7,
+        alertUrl: "https://example.com",
+      },
+    ];
+    const prompt = buildCiFindingsPrompt(
+      BASE_CTX,
+      makeOpts(),
+      [sampleFindings[0]],
+      false,
+      correlated,
+    );
+    expect(prompt).toContain("[alert #7]");
+  });
+});
+
+// ---- createCiCheckStageHandler — triage integration -------------------------
+
+describe("createCiCheckStageHandler — triage", () => {
+  test("fetches code scanning alerts when CI passes with findings", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "SQL injection",
+        file: "src/db.ts",
+        line: 42,
+        rule: "js/sql-injection",
+        checkRunId: 500,
+        checkRunName: "CodeQL",
+        commitSha: "abc123",
+      },
+    ];
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+    const getHeadSha = vi.fn().mockReturnValue("same-sha");
+    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([]);
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
+      resume: vi.fn().mockReturnValue(makeStream(makeResult())),
+    };
+
+    const opts = makeOpts({
+      agent,
+      getCiStatus,
+      getHeadSha,
+      fetchCodeScanningAlerts,
+    });
+    const stage = createCiCheckStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    expect(fetchCodeScanningAlerts).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      "issue-42",
+    );
+  });
+
+  test("includes triage instructions when alerts are correlated", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "SQL injection",
+        file: "src/db.ts",
+        line: 42,
+        rule: "js/sql-injection",
+        checkRunId: 500,
+        checkRunName: "CodeQL",
+        commitSha: "abc123",
+      },
+    ];
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+    const getHeadSha = vi.fn().mockReturnValue("same-sha");
+    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([
+      {
+        number: 10,
+        rule: { id: "js/sql-injection" },
+        tool: { name: "CodeQL" },
+        most_recent_instance: {
+          location: { path: "src/db.ts", start_line: 42 },
+          commit_sha: "abc123",
+        },
+        state: "open",
+        html_url: "https://github.com/org/repo/security/code-scanning/10",
+      },
+    ]);
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
+      resume: vi.fn().mockReturnValue(makeStream(makeResult())),
+    };
+
+    const opts = makeOpts({
+      agent,
+      getCiStatus,
+      getHeadSha,
+      fetchCodeScanningAlerts,
+    });
+    const stage = createCiCheckStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    expect(invokedPrompt).toContain("CodeQL Triage");
+    expect(invokedPrompt).toContain("Alert #10");
+    expect(invokedPrompt).toContain("[alert #10]");
+    expect(invokedPrompt).toContain("dismissed_reason=false positive");
+  });
+
+  test("omits triage when no code scanning alerts are found", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "Unused variable",
+        file: "src/app.ts",
+        line: 10,
+        rule: "no-unused-vars",
+        checkRunId: 500,
+        checkRunName: "ESLint",
+        commitSha: "abc123",
+      },
+    ];
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+    const getHeadSha = vi.fn().mockReturnValue("same-sha");
+    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([]);
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
+      resume: vi.fn().mockReturnValue(makeStream(makeResult())),
+    };
+
+    const opts = makeOpts({
+      agent,
+      getCiStatus,
+      getHeadSha,
+      fetchCodeScanningAlerts,
+    });
+    const stage = createCiCheckStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    expect(invokedPrompt).not.toContain("CodeQL Triage");
+  });
+
+  test("does not fetch alerts on clean pass", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()]));
+    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([]);
+
+    const opts = makeOpts({ getCiStatus, fetchCodeScanningAlerts });
+    const stage = createCiCheckStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    expect(fetchCodeScanningAlerts).not.toHaveBeenCalled();
+  });
+
+  test("does not fetch alerts on CI failure", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      );
+    const collectFailureLogs = vi.fn().mockReturnValue("error");
+    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([]);
+
+    const opts = makeOpts({
+      getCiStatus,
+      collectFailureLogs,
+      fetchCodeScanningAlerts,
+    });
+    const stage = createCiCheckStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    expect(fetchCodeScanningAlerts).not.toHaveBeenCalled();
   });
 });
