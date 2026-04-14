@@ -4,6 +4,7 @@ import stringWidth from "string-width";
 import { t } from "../i18n/index.js";
 import type {
   PipelineEventEmitter,
+  ReviewPostedEvent,
   StageEnterEvent,
   StageExitEvent,
   StageNameOverrideEvent,
@@ -33,6 +34,10 @@ interface StatusBarProps {
   paused?: boolean;
   /** Timestamp (ms) when agentcoop started, for wall-clock elapsed time. */
   startedAt?: number;
+  /** Persisted self-check count from RunState (initial value on resume). */
+  initialSelfCheckCount?: number;
+  /** Persisted review count from RunState (initial value on resume). */
+  initialReviewCount?: number;
 }
 
 // ---- Elapsed time helpers ----------------------------------------------------
@@ -195,11 +200,15 @@ export function StatusBar({
   contentWidth,
   paused = false,
   startedAt,
+  initialSelfCheckCount,
+  initialReviewCount,
 }: StatusBarProps) {
   const [stage, setStage] = useState<StageEnterEvent | null>(null);
   const [lastOutcome, setLastOutcome] = useState<string | null>(null);
-  const [selfCheckCount, setSelfCheckCount] = useState(0);
-  const [reviewCount, setReviewCount] = useState(0);
+  const [selfCheckCount, setSelfCheckCount] = useState(
+    initialSelfCheckCount ?? 0,
+  );
+  const [reviewCount, setReviewCount] = useState(initialReviewCount ?? 0);
 
   useEffect(() => {
     const onEnter = (ev: StageEnterEvent) => {
@@ -210,19 +219,22 @@ export function StatusBar({
       setLastOutcome(ev.outcome);
       if (ev.stageNumber === SELF_CHECK_STAGE) {
         setSelfCheckCount((c) => c + 1);
-      } else if (ev.stageNumber === REVIEW_STAGE) {
-        setReviewCount((c) => c + 1);
       }
+    };
+    const onReviewPosted = (_ev: ReviewPostedEvent) => {
+      setReviewCount((c) => c + 1);
     };
     const onNameOverride = (ev: StageNameOverrideEvent) => {
       setStage((prev) => (prev ? { ...prev, stageName: ev.stageName } : prev));
     };
     emitter.on("stage:enter", onEnter);
     emitter.on("stage:exit", onExit);
+    emitter.on("review:posted", onReviewPosted);
     emitter.on("stage:name-override", onNameOverride);
     return () => {
       emitter.off("stage:enter", onEnter);
       emitter.off("stage:exit", onExit);
+      emitter.off("review:posted", onReviewPosted);
       emitter.off("stage:name-override", onNameOverride);
     };
   }, [emitter]);

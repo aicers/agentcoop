@@ -34,6 +34,17 @@ import { buildPrSyncInstructions } from "./issue-sync.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import { getPrBody as defaultGetPrBody } from "./pr.js";
 import {
+  authorRoundPattern,
+  fetchPrComments as defaultFetchPrComments,
+  postPrComment as defaultPostPrComment,
+  deriveReviewSubStep,
+  hasComment,
+  type PrComment,
+  parsePrReviewState,
+  reviewerRoundPattern,
+} from "./pr-comments.js";
+import type { ReviewSubStep } from "./run-state.js";
+import {
   buildDocConsistencyInstructions,
   drainToSink,
   invokeOrResume,
@@ -76,6 +87,35 @@ export interface ReviewStageOptions {
     repo: string,
     branch: string,
   ) => string | undefined;
+  /** Returns the current PR number, or undefined if not yet created. */
+  getPrNumber?: () => number | undefined;
+  /** Injected for testability. Defaults to `pr-comments.fetchPrComments`. */
+  fetchPrComments?: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ) => PrComment[];
+  /** Injected for testability. Defaults to `pr-comments.postPrComment`. */
+  postPrComment?: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+    body: string,
+  ) => void;
+  /**
+   * Called at each sub-step transition within a review round so the
+   * caller can persist progress for accurate resume.
+   */
+  onReviewProgress?: (
+    subStep: ReviewSubStep,
+    verdict?: "APPROVED" | "NOT_APPROVED",
+  ) => void;
+  /**
+   * Called when the review step actually posts a new reviewer comment,
+   * so the caller can update `reviewCount` only when a review was
+   * genuinely posted (not on every stage-7 exit).
+   */
+  onReviewPosted?: (round: number) => void;
 }
 
 // ---- prompt builders ---------------------------------------------------------
@@ -298,6 +338,36 @@ export function buildUnresolvedSummaryPrompt(round: number): string {
   ].join("\n");
 }
 
+/**
+ * Prompt for resuming the unresolved-summary step when Agent B has no
+ * saved session.  Gives B repository context and tells it to read its
+ * own review from the PR before deciding what is unresolved.
+ */
+export function buildResumeUnresolvedSummaryPrompt(
+  ctx: StageContext,
+  round: number,
+): string {
+  return [
+    `You previously reviewed a pull request and the review was approved.`,
+    `The process was interrupted before you could summarise unresolved items.`,
+    ``,
+    `## Repository`,
+    `- Owner: ${ctx.owner}`,
+    `- Repo: ${ctx.repo}`,
+    `- Branch: ${ctx.branch}`,
+    ``,
+    `1. Find the pull request for this branch (use \`gh pr view\`).`,
+    `2. Read your \`[Reviewer Round ${round}]\` review comment to`,
+    `   understand which items you raised.`,
+    `3. Check the code on the branch to see which items were addressed`,
+    `   and which remain unresolved.`,
+    `4. If there are unresolved items, post a PR comment prefixed with`,
+    `   \`**[Reviewer Unresolved Round ${round}]**\` listing each one.`,
+    `5. If there are no unresolved items, simply confirm that there is`,
+    `   nothing left to address.`,
+  ].join("\n");
+}
+
 export function buildPrFinalizationPrompt(
   ctx: StageContext,
   opts: ReviewStageOptions,
@@ -334,6 +404,37 @@ export function buildPrFinalizationPrompt(
 }
 
 /**
+ * Prompt for resuming when the reviewer comment was already posted but
+ * the process died before recording the verdict.  Agent B reads its
+ * own review and provides just the verdict keyword.
+ */
+export function buildResumeVerdictPrompt(
+  ctx: StageContext,
+  round: number,
+): string {
+  return [
+    `You previously posted a review on a pull request, prefixed with`,
+    `\`**[Reviewer Round ${round}]**\`.  The process was interrupted`,
+    `before your verdict was recorded.`,
+    ``,
+    `## Repository`,
+    `- Owner: ${ctx.owner}`,
+    `- Repo: ${ctx.repo}`,
+    `- Branch: ${ctx.branch}`,
+    ``,
+    `1. Find the pull request for this branch (use \`gh pr view\`).`,
+    `2. Read your \`[Reviewer Round ${round}]\` review comment.`,
+    `3. Based on your review, respond with exactly one of the`,
+    `   following keywords:`,
+    ``,
+    `   - APPROVED — if the changes are ready to merge`,
+    `   - NOT_APPROVED — if changes are needed`,
+    ``,
+    `   Do not include any other commentary — just the keyword.`,
+  ].join("\n");
+}
+
+/**
  * Check whether the response is exactly the PR_FINALIZED keyword.
  * Uses the strict verdict parser to reject extra commentary.
  */
@@ -354,96 +455,278 @@ export function createReviewStageHandler(
     handler: async (ctx: StageContext): Promise<StageResult> => {
       const round = ctx.iteration + 1; // 1-based for display
 
-      // Step 1: Agent B reviews (resume if saved session).
-      const reviewPrompt = buildReviewPrompt(ctx, opts, round);
-      ctx.promptSinks?.b?.(reviewPrompt);
-      const reviewResult = await invokeOrResume(
-        opts.agentB,
-        ctx.savedAgentBSessionId,
-        reviewPrompt,
-        ctx.worktreePath,
-        ctx.streamSinks?.b,
-        undefined,
-        ctx.usageSinks?.b,
-      );
+      // Fetch PR comments for sub-step derivation and validation.
+      const prNumber = opts.getPrNumber?.();
+      const fetchComments = opts.fetchPrComments ?? defaultFetchPrComments;
+      let comments: PrComment[] =
+        prNumber !== undefined
+          ? fetchComments(ctx.owner, ctx.repo, prNumber)
+          : [];
 
-      if (reviewResult.sessionId) {
-        ctx.onSessionId?.("b", reviewResult.sessionId);
+      // Derive where to resume from PR comments.
+      const prState = parsePrReviewState(comments);
+      let currentStep: ReviewSubStep = deriveReviewSubStep(
+        prState,
+        round,
+      ).subStep;
+
+      // Validate expected previous-round author comment when starting
+      // a fresh review (not resuming mid-round).
+      if (round > 1 && currentStep === "review") {
+        if (
+          prNumber !== undefined &&
+          !hasComment(comments, authorRoundPattern(round - 1))
+        ) {
+          return {
+            outcome: "error",
+            message: t()["review.missingAuthorComment"](round - 1),
+          };
+        }
       }
 
-      if (reviewResult.status === "error") {
-        return mapAgentError(reviewResult, "during review");
-      }
+      // Track Agent B's session across steps within this round.
+      // When resuming mid-round (skipping the review step), seed from
+      // the saved session so verdict / unresolved_summary can reuse it.
+      let agentBSessionId: string | undefined =
+        currentStep !== "review" ? ctx.savedAgentBSessionId : undefined;
+      // Whether the review step ran in this invocation, used to gate
+      // onReviewPosted until the PR comment is confirmed.
+      let reviewStepRan = false;
 
-      // Verdict follow-up: ask B for exactly APPROVED / NOT_APPROVED.
-      const verdictPrompt = buildReviewVerdictPrompt();
-      ctx.promptSinks?.b?.(verdictPrompt);
-      let verdictResult = await sendFollowUp(
-        opts.agentB,
-        reviewResult.sessionId,
-        verdictPrompt,
-        ctx.worktreePath,
-        ctx.streamSinks?.b,
-        undefined,
-        ctx.usageSinks?.b,
-      );
-
-      if (verdictResult.status === "error") {
-        return mapAgentError(verdictResult, "during review verdict");
-      }
-
-      let reviewVerdict = parseVerdictKeyword(
-        verdictResult.responseText,
-        REVIEW_VERDICT_KEYWORDS,
-      );
-
-      // Clarification retry if ambiguous, extra commentary, or
-      // multiple valid keywords.
-      if (reviewVerdict.keyword === undefined) {
-        const clarifyPrompt = buildClarificationPrompt(
-          verdictResult.responseText,
-          REVIEW_VERDICT_KEYWORDS,
-        );
-        ctx.promptSinks?.b?.(clarifyPrompt);
-        const retryResult = await sendFollowUp(
+      // ---- review --------------------------------------------------
+      if (currentStep === "review") {
+        opts.onReviewProgress?.("review");
+        const reviewPrompt = buildReviewPrompt(ctx, opts, round);
+        ctx.promptSinks?.b?.(reviewPrompt);
+        const reviewResult = await invokeOrResume(
           opts.agentB,
-          verdictResult.sessionId ?? reviewResult.sessionId,
-          clarifyPrompt,
+          ctx.savedAgentBSessionId,
+          reviewPrompt,
           ctx.worktreePath,
           ctx.streamSinks?.b,
           undefined,
           ctx.usageSinks?.b,
         );
 
-        if (retryResult.status === "error") {
-          return mapAgentError(
-            retryResult,
-            "during review verdict clarification",
-          );
+        if (reviewResult.sessionId) {
+          ctx.onSessionId?.("b", reviewResult.sessionId);
         }
 
-        verdictResult = retryResult;
-        reviewVerdict = parseVerdictKeyword(
+        if (reviewResult.status === "error") {
+          return mapAgentError(reviewResult, "during review");
+        }
+
+        agentBSessionId = reviewResult.sessionId;
+        // Defer onReviewPosted until after the reviewer comment is
+        // verified on the PR — see the validation block below.
+        reviewStepRan = true;
+
+        // Refetch comments so subsequent validations see the newly
+        // posted reviewer comment instead of skipping verification.
+        if (prNumber !== undefined) {
+          comments = fetchComments(ctx.owner, ctx.repo, prNumber);
+        }
+
+        currentStep = "verdict";
+      }
+
+      // ---- verdict -------------------------------------------------
+      if (currentStep === "verdict") {
+        opts.onReviewProgress?.("verdict");
+
+        let verdictResult: AgentResult;
+
+        if (agentBSessionId) {
+          // Follow-up on review session (normal flow).
+          const verdictPrompt = buildReviewVerdictPrompt();
+          ctx.promptSinks?.b?.(verdictPrompt);
+          verdictResult = await sendFollowUp(
+            opts.agentB,
+            agentBSessionId,
+            verdictPrompt,
+            ctx.worktreePath,
+            ctx.streamSinks?.b,
+            undefined,
+            ctx.usageSinks?.b,
+          );
+        } else {
+          // No review session — review was already posted on the PR.
+          // Verify the reviewer comment exists before asking Agent B
+          // to read it, so we never send a prompt based on a false
+          // premise (issue #208, item 5).
+          if (
+            prNumber !== undefined &&
+            !hasComment(comments, reviewerRoundPattern(round))
+          ) {
+            return {
+              outcome: "error",
+              message: t()["review.missingReviewerComment"](round),
+            };
+          }
+          // Invoke Agent B fresh to read its own review and provide
+          // the verdict keyword.
+          const resumePrompt = buildResumeVerdictPrompt(ctx, round);
+          ctx.promptSinks?.b?.(resumePrompt);
+          verdictResult = await invokeOrResume(
+            opts.agentB,
+            undefined,
+            resumePrompt,
+            ctx.worktreePath,
+            ctx.streamSinks?.b,
+            undefined,
+            ctx.usageSinks?.b,
+          );
+          if (verdictResult.sessionId) {
+            ctx.onSessionId?.("b", verdictResult.sessionId);
+          }
+        }
+
+        if (verdictResult.status === "error") {
+          return mapAgentError(verdictResult, "during review verdict");
+        }
+
+        let reviewVerdict = parseVerdictKeyword(
           verdictResult.responseText,
           REVIEW_VERDICT_KEYWORDS,
         );
+
+        // Clarification retry if ambiguous, extra commentary, or
+        // multiple valid keywords.
+        if (reviewVerdict.keyword === undefined) {
+          const clarifyPrompt = buildClarificationPrompt(
+            verdictResult.responseText,
+            REVIEW_VERDICT_KEYWORDS,
+          );
+          ctx.promptSinks?.b?.(clarifyPrompt);
+          const clarifySessionId = verdictResult.sessionId ?? agentBSessionId;
+          let retryResult: AgentResult;
+          if (clarifySessionId) {
+            retryResult = await sendFollowUp(
+              opts.agentB,
+              clarifySessionId,
+              clarifyPrompt,
+              ctx.worktreePath,
+              ctx.streamSinks?.b,
+              undefined,
+              ctx.usageSinks?.b,
+            );
+          } else {
+            // No session from either the fresh verdict invoke or a
+            // prior review step — invoke fresh again for clarification.
+            retryResult = await invokeOrResume(
+              opts.agentB,
+              undefined,
+              clarifyPrompt,
+              ctx.worktreePath,
+              ctx.streamSinks?.b,
+              undefined,
+              ctx.usageSinks?.b,
+            );
+          }
+
+          if (retryResult.status === "error") {
+            return mapAgentError(
+              retryResult,
+              "during review verdict clarification",
+            );
+          }
+
+          verdictResult = retryResult;
+          reviewVerdict = parseVerdictKeyword(
+            verdictResult.responseText,
+            REVIEW_VERDICT_KEYWORDS,
+          );
+        }
+
+        // Post review verdict as a PR comment so it can be recovered.
+        const reviewParsed = reviewVerdict.keyword
+          ? parseStepStatus(reviewVerdict.keyword)
+          : { status: "ambiguous" as const, keyword: undefined };
+        if (
+          reviewParsed.status === "approved" ||
+          reviewParsed.status === "not_approved"
+        ) {
+          // Verify the reviewer comment exists before posting the
+          // verdict.  If Agent B never got the review onto the PR,
+          // posting a verdict without the underlying review would
+          // make PR history misleading and confuse reconciliation.
+          if (prNumber !== undefined) {
+            if (!hasComment(comments, reviewerRoundPattern(round))) {
+              return {
+                outcome: "error",
+                message: t()["review.missingReviewerComment"](round),
+              };
+            }
+            const verdictText =
+              reviewParsed.status === "approved" ? "APPROVED" : "NOT_APPROVED";
+            const post = opts.postPrComment ?? defaultPostPrComment;
+            post(
+              ctx.owner,
+              ctx.repo,
+              prNumber,
+              `[Review Verdict Round ${round}: ${verdictText}]`,
+            );
+          }
+        }
+
+        agentBSessionId = verdictResult.sessionId ?? agentBSessionId;
+
+        if (reviewParsed.status === "approved") {
+          opts.onReviewProgress?.("unresolved_summary", "APPROVED");
+          currentStep = "unresolved_summary";
+        } else if (reviewParsed.status === "not_approved") {
+          opts.onReviewProgress?.("author_fix", "NOT_APPROVED");
+          currentStep = "author_fix";
+        } else {
+          return {
+            outcome: "needs_clarification",
+            message: verdictResult.responseText,
+            validVerdicts: REVIEW_VERDICT_KEYWORDS,
+          };
+        }
       }
 
-      // Step 2: If approved — ask B for unresolved summary, then complete.
-      const reviewParsed = reviewVerdict.keyword
-        ? parseStepStatus(reviewVerdict.keyword)
-        : { status: "ambiguous" as const, keyword: undefined };
-      if (reviewParsed.status === "approved") {
+      // ---- Validate reviewer comment on resume path ----------------
+      // When resuming at unresolved_summary or author_fix (verdict block
+      // was skipped), verify the reviewer comment still exists.  The
+      // fresh-verdict path already checks this before posting.
+      if (
+        (currentStep === "unresolved_summary" ||
+          currentStep === "author_fix") &&
+        prNumber !== undefined
+      ) {
+        if (!hasComment(comments, reviewerRoundPattern(round))) {
+          return {
+            outcome: "error",
+            message: t()["review.missingReviewerComment"](round),
+          };
+        }
+      }
+
+      // Fire onReviewPosted only after confirming the reviewer comment
+      // exists on the PR.  When there is no PR, the callback still
+      // fires — the PR is the only place we can verify.
+      if (reviewStepRan) {
+        opts.onReviewPosted?.(round);
+      }
+
+      // ---- APPROVED path: unresolved summary + PR finalization -----
+      if (currentStep === "unresolved_summary") {
+        opts.onReviewProgress?.("unresolved_summary", "APPROVED");
+
         const { error, summary } = await handleUnresolvedSummary(
           opts,
-          verdictResult.sessionId ?? reviewResult.sessionId,
+          agentBSessionId,
           round,
           ctx.worktreePath,
+          ctx,
           ctx.streamSinks?.b,
           ctx.promptSinks?.b,
           ctx.usageSinks?.b,
         );
         if (error) return error;
+
+        opts.onReviewProgress?.("pr_finalization", "APPROVED");
 
         // PR finalization: Agent A verifies issue reference and
         // "Not addressed" section before the pipeline advances.
@@ -539,11 +822,6 @@ export function createReviewStageHandler(
           const hasNotAddressed =
             body !== undefined && /^## Not addressed/im.test(body);
 
-          // The body must contain exactly one reference form.  Both
-          // present is self-contradictory (closes implies full fix,
-          // "Part of" implies partial).  Then validate the companion:
-          //   - Closes #N  → no "## Not addressed" section
-          //   - Part of #N → "## Not addressed" must be present
           const exclusiveRef = closesRef !== partOfRef;
           const bodyValid =
             exclusiveRef &&
@@ -566,154 +844,157 @@ export function createReviewStageHandler(
         return { outcome: "completed", message };
       }
 
-      // Treat anything other than not_approved as ambiguous → needs_clarification.
-      if (reviewParsed.status !== "not_approved") {
-        return {
-          outcome: "needs_clarification",
-          message: verdictResult.responseText,
-          validVerdicts: REVIEW_VERDICT_KEYWORDS,
-        };
-      }
+      // ---- NOT_APPROVED path: author fix + CI poll -----------------
+      if (currentStep === "author_fix") {
+        opts.onReviewProgress?.("author_fix", "NOT_APPROVED");
 
-      // Step 3: NOT_APPROVED — Agent A fixes (resume if saved session).
-      const fixPrompt = buildAuthorFixPrompt(ctx, opts, round);
-      ctx.promptSinks?.a?.(fixPrompt);
-      const fixResult = await invokeOrResume(
-        opts.agentA,
-        ctx.savedAgentASessionId,
-        fixPrompt,
-        ctx.worktreePath,
-        ctx.streamSinks?.a,
-        undefined,
-        ctx.usageSinks?.a,
-      );
-
-      if (fixResult.sessionId) {
-        ctx.onSessionId?.("a", fixResult.sessionId);
-      }
-
-      if (fixResult.status === "error") {
-        return mapAgentError(fixResult, "during author fix");
-      }
-
-      // Completion check on Agent A (with clarification retry,
-      // same pattern as stage 4 / stage 8).
-      const authorCheckPrompt = buildAuthorCompletionCheckPrompt();
-      ctx.promptSinks?.a?.(authorCheckPrompt);
-      let checkResult = await sendFollowUp(
-        opts.agentA,
-        fixResult.sessionId,
-        authorCheckPrompt,
-        ctx.worktreePath,
-        ctx.streamSinks?.a,
-        undefined,
-        ctx.usageSinks?.a,
-      );
-
-      if (checkResult.status === "error") {
-        return mapAgentError(checkResult, "during author completion check");
-      }
-
-      let checkMapped = mapResponseToResult(
-        checkResult.responseText,
-        undefined,
-        AUTHOR_CHECK_KEYWORDS,
-      );
-
-      if (checkMapped.outcome === "needs_clarification") {
-        const retryPrompt = buildClarificationPrompt(
-          checkResult.responseText,
-          AUTHOR_CHECK_KEYWORDS,
-        );
-        ctx.promptSinks?.a?.(retryPrompt);
-        const retryResult = await sendFollowUp(
+        const fixPrompt = buildAuthorFixPrompt(ctx, opts, round);
+        ctx.promptSinks?.a?.(fixPrompt);
+        const fixResult = await invokeOrResume(
           opts.agentA,
-          checkResult.sessionId ?? fixResult.sessionId,
-          retryPrompt,
+          ctx.savedAgentASessionId,
+          fixPrompt,
           ctx.worktreePath,
           ctx.streamSinks?.a,
           undefined,
           ctx.usageSinks?.a,
         );
 
-        if (retryResult.status === "error") {
-          return mapAgentError(
-            retryResult,
-            "during author completion clarification",
-          );
+        if (fixResult.sessionId) {
+          ctx.onSessionId?.("a", fixResult.sessionId);
         }
 
-        checkResult = retryResult;
-        checkMapped = mapResponseToResult(
+        if (fixResult.status === "error") {
+          return mapAgentError(fixResult, "during author fix");
+        }
+
+        // Completion check on Agent A (with clarification retry,
+        // same pattern as stage 4 / stage 8).
+        const authorCheckPrompt = buildAuthorCompletionCheckPrompt();
+        ctx.promptSinks?.a?.(authorCheckPrompt);
+        let checkResult = await sendFollowUp(
+          opts.agentA,
+          fixResult.sessionId,
+          authorCheckPrompt,
+          ctx.worktreePath,
+          ctx.streamSinks?.a,
+          undefined,
+          ctx.usageSinks?.a,
+        );
+
+        if (checkResult.status === "error") {
+          return mapAgentError(checkResult, "during author completion check");
+        }
+
+        let checkMapped = mapResponseToResult(
           checkResult.responseText,
           undefined,
           AUTHOR_CHECK_KEYWORDS,
         );
-      }
 
-      if (
-        checkMapped.outcome === "blocked" ||
-        checkMapped.outcome === "needs_clarification"
-      ) {
-        // Surface a blocked condition so the user can decide how to
-        // proceed.  Treating an ambiguous author-completion verdict as
-        // progress would poll stale CI on an unchanged head when the
-        // agent actually meant BLOCKED.
-        return {
-          outcome: "blocked",
-          message: `${fixResult.responseText}\n\n---\n\n${checkResult.responseText}`,
-        };
-      }
+        if (checkMapped.outcome === "needs_clarification") {
+          const retryPrompt = buildClarificationPrompt(
+            checkResult.responseText,
+            AUTHOR_CHECK_KEYWORDS,
+          );
+          ctx.promptSinks?.a?.(retryPrompt);
+          const retryResult = await sendFollowUp(
+            opts.agentA,
+            checkResult.sessionId ?? fixResult.sessionId,
+            retryPrompt,
+            ctx.worktreePath,
+            ctx.streamSinks?.a,
+            undefined,
+            ctx.usageSinks?.a,
+          );
 
-      if (
-        checkMapped.outcome !== "completed" &&
-        checkMapped.outcome !== "fixed" &&
-        checkMapped.outcome !== "approved"
-      ) {
-        return checkMapped;
-      }
+          if (retryResult.status === "error") {
+            return mapAgentError(
+              retryResult,
+              "during author completion clarification",
+            );
+          }
 
-      // Step 4: Poll CI after Agent A pushes.
-      const ciResult = await pollCiAndFix({
-        ctx,
-        agent: opts.agentA,
-        issueTitle: opts.issueTitle,
-        issueBody: opts.issueBody,
-        getCiStatus: opts.getCiStatus ?? defaultGetCiStatus,
-        collectFailureLogs:
-          opts.collectFailureLogs ?? defaultCollectFailureLogs,
-        getHeadSha: opts.getHeadSha,
-        emptyRunsGracePeriodMs: opts.emptyRunsGracePeriodMs,
-        pollIntervalMs: opts.pollIntervalMs,
-        pollTimeoutMs: opts.pollTimeoutMs,
-        maxFixAttempts: opts.maxFixAttempts,
-        delay: opts.delay,
-      });
-
-      if (!ciResult.passed) {
-        return { outcome: "error", message: ciResult.message };
-      }
-
-      // CI passed — return not_approved so the engine loops for next round.
-      let message = t()["review.fixesApplied"](round);
-
-      if (ctx.lastAutoIteration) {
-        const { error, summary } = await handleUnresolvedSummary(
-          opts,
-          verdictResult.sessionId ?? reviewResult.sessionId,
-          round,
-          ctx.worktreePath,
-          ctx.streamSinks?.b,
-          ctx.promptSinks?.b,
-          ctx.usageSinks?.b,
-        );
-        if (error) return error;
-        if (summary) {
-          message = t()["review.unresolvedItems"](message, summary);
+          checkResult = retryResult;
+          checkMapped = mapResponseToResult(
+            checkResult.responseText,
+            undefined,
+            AUTHOR_CHECK_KEYWORDS,
+          );
         }
+
+        if (
+          checkMapped.outcome === "blocked" ||
+          checkMapped.outcome === "needs_clarification"
+        ) {
+          return {
+            outcome: "blocked",
+            message: `${fixResult.responseText}\n\n---\n\n${checkResult.responseText}`,
+          };
+        }
+
+        if (
+          checkMapped.outcome !== "completed" &&
+          checkMapped.outcome !== "fixed" &&
+          checkMapped.outcome !== "approved"
+        ) {
+          return checkMapped;
+        }
+
+        opts.onReviewProgress?.("ci_poll", "NOT_APPROVED");
+        currentStep = "ci_poll";
       }
 
-      return { outcome: "not_approved", message };
+      // ---- CI poll (NOT_APPROVED path) -----------------------------
+      if (currentStep === "ci_poll") {
+        const ciResult = await pollCiAndFix({
+          ctx,
+          agent: opts.agentA,
+          issueTitle: opts.issueTitle,
+          issueBody: opts.issueBody,
+          getCiStatus: opts.getCiStatus ?? defaultGetCiStatus,
+          collectFailureLogs:
+            opts.collectFailureLogs ?? defaultCollectFailureLogs,
+          getHeadSha: opts.getHeadSha,
+          emptyRunsGracePeriodMs: opts.emptyRunsGracePeriodMs,
+          pollIntervalMs: opts.pollIntervalMs,
+          pollTimeoutMs: opts.pollTimeoutMs,
+          maxFixAttempts: opts.maxFixAttempts,
+          delay: opts.delay,
+        });
+
+        if (!ciResult.passed) {
+          return { outcome: "error", message: ciResult.message };
+        }
+
+        // CI passed — return not_approved so the engine loops for
+        // the next round.
+        let message = t()["review.fixesApplied"](round);
+
+        if (ctx.lastAutoIteration) {
+          const { error, summary } = await handleUnresolvedSummary(
+            opts,
+            agentBSessionId,
+            round,
+            ctx.worktreePath,
+            ctx,
+            ctx.streamSinks?.b,
+            ctx.promptSinks?.b,
+            ctx.usageSinks?.b,
+          );
+          if (error) return error;
+          if (summary) {
+            message = t()["review.unresolvedItems"](message, summary);
+          }
+        }
+
+        return { outcome: "not_approved", message };
+      }
+
+      return {
+        outcome: "error",
+        message: `Unexpected review sub-step: ${currentStep}`,
+      };
     },
   };
 }
@@ -737,11 +1018,18 @@ async function handleUnresolvedSummary(
   sessionId: string | undefined,
   round: number,
   cwd: string,
+  ctx: StageContext,
   sink?: StreamSink,
   promptSink?: PromptSink,
   usageSink?: UsageSink,
 ): Promise<UnresolvedSummaryResult> {
-  const summaryPrompt = buildUnresolvedSummaryPrompt(round);
+  // When resuming without a session, use the richer resume prompt
+  // that gives Agent B repository context and tells it to read its
+  // own review from the PR.  With a live session the agent already
+  // has full context from the review step.
+  const summaryPrompt = sessionId
+    ? buildUnresolvedSummaryPrompt(round)
+    : buildResumeUnresolvedSummaryPrompt(ctx, round);
   promptSink?.(summaryPrompt);
 
   // If we have a session, resume; otherwise invoke fresh.

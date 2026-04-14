@@ -227,6 +227,10 @@ export const en: Messages = {
     `Round ${round} fixes applied, CI passed. Proceeding to next review round.`,
   "review.finalizationUnverified": (issueNumber) =>
     `PR finalization verdict was ambiguous and the PR body does not reference issue #${issueNumber}. Manual verification required.`,
+  "review.missingAuthorComment": (round) =>
+    `Expected [Author Round ${round}] comment not found on PR. Cannot proceed with review.`,
+  "review.missingReviewerComment": (round) =>
+    `Expected [Reviewer Round ${round}] comment not found on PR. Cannot proceed with author fix.`,
 
   // ---- stage-util errors -------------------------------------------------
 

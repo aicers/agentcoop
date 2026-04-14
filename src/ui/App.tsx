@@ -259,6 +259,10 @@ export interface AppProps {
   onCancel?: () => void;
   /** Timestamp (ms) when agentcoop started, for wall-clock elapsed time. */
   startedAt?: number;
+  /** Persisted self-check count for StatusBar initialisation on resume. */
+  initialSelfCheckCount?: number;
+  /** Persisted review count for StatusBar initialisation on resume. */
+  initialReviewCount?: number;
 }
 
 export function App({
@@ -273,6 +277,8 @@ export function App({
   notifications,
   onCancel,
   startedAt,
+  initialSelfCheckCount,
+  initialReviewCount,
 }: AppProps) {
   const { height: terminalHeight, width: terminalWidth } =
     useTerminalDimensions();
@@ -503,6 +509,8 @@ export function App({
         contentWidth={borderedContentWidth}
         paused={inputRequest !== null}
         startedAt={startedAt}
+        initialSelfCheckCount={initialSelfCheckCount}
+        initialReviewCount={initialReviewCount}
       />
       <InputArea request={inputRequest} onSubmit={handleSubmit} />
     </Box>

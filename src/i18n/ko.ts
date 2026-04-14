@@ -261,6 +261,10 @@ export const ko: Messages = {
     `${round}라운드 수정 적용 완료, CI 통과. 다음 리뷰 라운드로 진행합니다.`,
   "review.finalizationUnverified": (issueNumber) =>
     `PR 마무리 판정이 모호하고 PR 본문에 이슈 #${issueNumber} 참조가 없습니다. 수동 확인이 필요합니다.`,
+  "review.missingAuthorComment": (round) =>
+    `PR에서 [Author Round ${round}] 코멘트를 찾을 수 없습니다. 리뷰를 진행할 수 없습니다.`,
+  "review.missingReviewerComment": (round) =>
+    `PR에서 [Reviewer Round ${round}] 코멘트를 찾을 수 없습니다. 작성자 수정을 진행할 수 없습니다.`,
 
   // ---- stage-util errors -------------------------------------------------
 

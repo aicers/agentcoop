@@ -20,6 +20,19 @@ import type { IssueChange, IssueSyncStatus } from "./issue-sync.js";
 
 // ---- public types --------------------------------------------------------
 
+/**
+ * Sub-step within stage 7 (review loop).  Used to track progress
+ * within a single review round so that resume can skip completed
+ * steps rather than re-running the entire round.
+ */
+export type ReviewSubStep =
+  | "review"
+  | "verdict"
+  | "unresolved_summary"
+  | "pr_finalization"
+  | "author_fix"
+  | "ci_poll";
+
 export interface AgentState {
   cli: string;
   model: string;
@@ -52,6 +65,14 @@ export interface RunState {
   currentStage: number;
   stageLoopCount: number;
   reviewRound: number;
+  /** Total number of self-check stage iterations completed. */
+  selfCheckCount: number;
+  /** Total number of review stage iterations completed. */
+  reviewCount: number;
+  /** Current sub-step within a review round.  Undefined outside stage 7. */
+  reviewSubStep: ReviewSubStep | undefined;
+  /** Last known review verdict for the current round. */
+  lastVerdict: "APPROVED" | "NOT_APPROVED" | undefined;
   executionMode: "auto" | "step";
   agentA: AgentState;
   agentB: AgentState;
@@ -123,6 +144,12 @@ function isValidRunState(
     typeof r.currentStage === "number" &&
     typeof r.stageLoopCount === "number" &&
     typeof r.reviewRound === "number" &&
+    (r.selfCheckCount === undefined || typeof r.selfCheckCount === "number") &&
+    (r.reviewCount === undefined || typeof r.reviewCount === "number") &&
+    (r.reviewSubStep === undefined || typeof r.reviewSubStep === "string") &&
+    (r.lastVerdict === undefined ||
+      r.lastVerdict === "APPROVED" ||
+      r.lastVerdict === "NOT_APPROVED") &&
     (r.executionMode === "auto" || r.executionMode === "step") &&
     isValidAgentState(r.agentA) &&
     isValidAgentState(r.agentB) &&
@@ -182,6 +209,11 @@ export function loadRunState(
     version: (r.version as number) ?? 1,
     baseSha: (r.baseSha as string | undefined) ?? undefined,
     prNumber: raw.prNumber ?? undefined,
+    selfCheckCount: (r.selfCheckCount as number | undefined) ?? 0,
+    reviewCount: (r.reviewCount as number | undefined) ?? 0,
+    reviewSubStep: (r.reviewSubStep as ReviewSubStep | undefined) ?? undefined,
+    lastVerdict:
+      (r.lastVerdict as "APPROVED" | "NOT_APPROVED" | undefined) ?? undefined,
     issueSyncStatus:
       (raw.issueSyncStatus as IssueSyncStatus | undefined) ?? "skipped",
     issueChanges: (raw.issueChanges as IssueChange[] | undefined) ?? [],

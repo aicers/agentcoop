@@ -33,6 +33,8 @@ function makeRunState(overrides: Partial<RunState> = {}): RunState {
     currentStage: 2,
     stageLoopCount: 0,
     reviewRound: 0,
+    selfCheckCount: 0,
+    reviewCount: 0,
     executionMode: "auto",
     agentA: {
       cli: "claude",
@@ -242,6 +244,30 @@ describe("loadRunState — migration from v1 (unversioned)", () => {
     saveRunState(makeRunState({ currentStage: 7 }));
     const loaded = loadRunState("org", "repo", 42);
     expect(loaded?.currentStage).toBe(7);
+  });
+});
+
+describe("selfCheckCount and reviewCount persistence", () => {
+  test("round-trips selfCheckCount and reviewCount", () => {
+    const state = makeRunState({ selfCheckCount: 3, reviewCount: 5 });
+    saveRunState(state);
+    const loaded = loadRunState("org", "repo", 42);
+    expect(loaded?.selfCheckCount).toBe(3);
+    expect(loaded?.reviewCount).toBe(5);
+  });
+
+  test("defaults to zero for old state files without count fields", () => {
+    const { selfCheckCount: _, reviewCount: __, ...raw } = makeRunState();
+    const path = runStatePath("org", "repo", 42);
+    mkdirSync(join(tmpHome, ".agentcoop", "runs", "org", "repo"), {
+      recursive: true,
+    });
+    writeFileSync(path, JSON.stringify(raw));
+    const loaded = loadRunState("org", "repo", 42);
+
+    expect(loaded).toBeDefined();
+    expect(loaded?.selfCheckCount).toBe(0);
+    expect(loaded?.reviewCount).toBe(0);
   });
 });
 

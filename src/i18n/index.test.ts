@@ -90,6 +90,8 @@ describe("catalogs are complete", () => {
       "review.unresolvedItems": ["Review approved.", "item 1"],
       "review.fixesApplied": [1],
       "review.finalizationUnverified": [42],
+      "review.missingAuthorComment": [2],
+      "review.missingReviewerComment": [3],
       "worktree.alreadyExists": ["/tmp/wt"],
     };
 
