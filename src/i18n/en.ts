@@ -272,6 +272,8 @@ export const en: Messages = {
   "cleanup.deletingRemoteBranch": "  Deleting remote branch...",
   "cleanup.closingPr": "  Closing PR...",
   "cleanup.done": "Cleanup complete.",
+  "cleanup.forceQuitWarning":
+    "Cleanup in progress. Press Ctrl+C again to force quit.",
   "prompt.yesCleanup": "Yes",
   "prompt.noSkipCleanup": "No",
 

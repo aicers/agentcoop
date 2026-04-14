@@ -312,7 +312,9 @@ export const ko: Messages = {
   "cleanup.deletingRemoteBranch":
     "  \uC6D0\uACA9 \uBE0C\uB79C\uCE58 \uC0AD\uC81C \uC911...",
   "cleanup.closingPr": "  PR \uB2EB\uB294 \uC911...",
-  "cleanup.done": "\uC815\uB9AC \uC644\uB8CC.",
+  "cleanup.done": "정리 완료.",
+  "cleanup.forceQuitWarning":
+    "정리가 진행 중입니다. 강제 종료하려면 Ctrl+C를 다시 누르세요.",
   "prompt.yesCleanup": "\uC608",
   "prompt.noSkipCleanup": "\uC544\uB2C8\uC624",
 
