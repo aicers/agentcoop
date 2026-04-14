@@ -12,9 +12,18 @@
  */
 
 import type { AgentAdapter } from "./agent.js";
-import type { CiFinding, CiRun, CiStatus, GetCiStatusFn } from "./ci.js";
+import type {
+  CiFinding,
+  CiRun,
+  CiStatus,
+  CorrelatedFinding,
+  FetchCodeScanningAlertsFn,
+  GetCiStatusFn,
+} from "./ci.js";
 import {
+  correlateFindings,
   collectFailureLogs as defaultCollectFailureLogs,
+  fetchCodeScanningAlerts as defaultFetchAlerts,
   getCiStatus as defaultGetCiStatus,
   normaliseCiConclusion,
 } from "./ci.js";
@@ -54,6 +63,8 @@ export interface CiCheckStageOptions {
    * Injected for testability.  Defaults to `worktree.getHeadSha`.
    */
   getHeadSha?: (cwd: string) => string;
+  /** Injected for testability. Defaults to `ci.fetchCodeScanningAlerts`. */
+  fetchCodeScanningAlerts?: FetchCodeScanningAlertsFn;
   /** Delay in ms between polls when CI is pending. Default 30 000. */
   pollIntervalMs?: number;
   /** Max time in ms to wait for pending CI. Default 600 000 (10 min). */
@@ -112,26 +123,114 @@ export function buildCiFixPrompt(
 
 /**
  * Format findings into a structured block for inclusion in the
- * findings-review prompt.
+ * findings-review prompt.  When correlated findings are available,
+ * each finding includes its alert number for dismiss operations.
  */
-function formatFindings(findings: CiFinding[]): string {
-  const byRun = new Map<string, CiFinding[]>();
-  for (const f of findings) {
+function formatFindings(findings: CiFinding[]): string;
+function formatFindings(correlated: CorrelatedFinding[]): string;
+function formatFindings(items: CiFinding[] | CorrelatedFinding[]): string {
+  // Normalise to CorrelatedFinding shape.
+  const correlated: CorrelatedFinding[] = items.map((item) =>
+    "finding" in item ? item : { finding: item },
+  );
+
+  const byRun = new Map<string, CorrelatedFinding[]>();
+  for (const cf of correlated) {
+    const f = cf.finding;
     const key = `${f.checkRunName} (check run ${f.checkRunId})`;
     const group = byRun.get(key) ?? [];
-    group.push(f);
+    group.push(cf);
     byRun.set(key, group);
   }
 
   const sections: string[] = [];
   for (const [header, group] of byRun) {
-    const lines = group.map((f) => {
+    const lines = group.map((cf) => {
+      const f = cf.finding;
       const rule = f.rule ? ` (${f.rule})` : "";
-      return `- ${f.file}:${f.line}: [${f.level}] ${f.message}${rule}`;
+      const alert = cf.alertNumber != null ? ` [alert #${cf.alertNumber}]` : "";
+      return `- ${f.file}:${f.line}: [${f.level}] ${f.message}${rule}${alert}`;
     });
     sections.push(`### ${header}\n${lines.join("\n")}`);
   }
   return sections.join("\n\n");
+}
+
+/**
+ * Build triage criteria and dismiss instructions for CodeQL findings.
+ * Only included when at least one finding is correlated to an alert.
+ */
+function buildTriageInstructions(
+  ctx: StageContext,
+  correlated: CorrelatedFinding[],
+): string {
+  const hasAlerts = correlated.some((cf) => cf.alertNumber != null);
+  if (!hasAlerts) return "";
+
+  const dismissible = correlated.filter((cf) => cf.alertNumber != null);
+
+  const lines = [
+    ``,
+    `## CodeQL Triage`,
+    ``,
+    `For each finding marked with an alert number (\`[alert #N]\`), evaluate`,
+    `whether it is a **real issue** or a **false positive**.`,
+    ``,
+    `### Evaluation criteria`,
+    ``,
+    `A finding is a **real issue** when:`,
+    `- The flagged code path is reachable in production.`,
+    `- An attacker-controlled or untrusted input can reach the sink`,
+    `  without adequate sanitisation or validation.`,
+    `- The reported weakness (e.g. SQL injection, XSS, path traversal)`,
+    `  is exploitable given the application's threat model.`,
+    ``,
+    `A finding is a **false positive** when:`,
+    `- The data is already sanitised or validated before it reaches the`,
+    `  flagged location, but CodeQL cannot see through the sanitiser.`,
+    `- The flagged code is dead, test-only, or unreachable in production.`,
+    `- The "source" is not actually attacker-controlled (e.g. a hardcoded`,
+    `  constant, an environment variable set at deploy time).`,
+    `- The framework or library provides built-in protection that makes`,
+    `  the flagged pattern safe (e.g. parameterised queries).`,
+    ``,
+    `### Actions`,
+    ``,
+    `- **Real issue:** Fix the code.  After fixing, commit and push.`,
+    `- **False positive:** For each false-positive alert, run these`,
+    `  commands (one pair per alert):`,
+    ``,
+    `  \`\`\``,
+    `  gh api -X PATCH "repos/${ctx.owner}/${ctx.repo}/code-scanning/alerts/{number}" \\`,
+    `    -f state=dismissed \\`,
+    `    -f "dismissed_reason=false positive" \\`,
+    `    -f "dismissed_comment={your brief explanation}"`,
+    `  \`\`\``,
+    ``,
+    `  Then leave one PR comment summarising all dismissed alerts and`,
+    `  the reasoning for each.  First, find the PR number:`,
+    ``,
+    `  \`\`\``,
+    `  gh pr view --repo ${ctx.owner}/${ctx.repo} ${ctx.branch} --json number --jq .number`,
+    `  \`\`\``,
+    ``,
+    `  Then post the comment:`,
+    ``,
+    `  \`\`\``,
+    `  gh pr comment --repo ${ctx.owner}/${ctx.repo} <pr_number> --body "..."`,
+    `  \`\`\``,
+    ``,
+    `### Dismissible alerts`,
+    ``,
+  ];
+
+  for (const cf of dismissible) {
+    const f = cf.finding;
+    const rule = f.rule ?? "(unknown rule)";
+    lines.push(`- Alert #${cf.alertNumber}: ${rule} at ${f.file}:${f.line}`);
+  }
+
+  return lines.join("\n");
 }
 
 export function buildCiFindingsPrompt(
@@ -139,6 +238,7 @@ export function buildCiFindingsPrompt(
   opts: Pick<CiCheckStageOptions, "issueTitle" | "issueBody">,
   findings: CiFinding[],
   findingsIncomplete?: boolean,
+  correlated?: CorrelatedFinding[],
 ): string {
   const lines = [
     `CI passed but check runs reported findings (annotations).`,
@@ -156,7 +256,7 @@ export function buildCiFindingsPrompt(
     ``,
     `## CI Findings`,
     ``,
-    formatFindings(findings),
+    correlated ? formatFindings(correlated) : formatFindings(findings),
   ];
 
   if (findingsIncomplete) {
@@ -166,6 +266,10 @@ export function buildCiFindingsPrompt(
       `The findings above may be incomplete.  Check the PR's Checks`,
       `tab for the full list of annotations.`,
     );
+  }
+
+  if (correlated) {
+    lines.push(buildTriageInstructions(ctx, correlated));
   }
 
   lines.push(
@@ -198,6 +302,7 @@ export function createCiCheckStageHandler(
   const getCiStatus = opts.getCiStatus ?? defaultGetCiStatus;
   const collectLogs = opts.collectFailureLogs ?? defaultCollectFailureLogs;
   const readHeadSha = opts.getHeadSha ?? defaultGetHeadSha;
+  const fetchAlerts = opts.fetchCodeScanningAlerts ?? defaultFetchAlerts;
   const pollInterval = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const pollTimeout = opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS;
   const emptyGrace =
@@ -270,11 +375,20 @@ export function createCiCheckStageHandler(
       if (ciStatus.verdict === "pass") {
         const shaBeforeReview = readHeadSha(ctx.worktreePath);
 
+        // Fetch code scanning alerts and correlate to findings so
+        // the agent can dismiss false positives by alert number.
+        const alerts = fetchAlerts(ctx.owner, ctx.repo, ctx.branch);
+        const correlated =
+          alerts.length > 0
+            ? correlateFindings(ciStatus.findings, alerts)
+            : undefined;
+
         const findingsPrompt = buildCiFindingsPrompt(
           ctx,
           opts,
           ciStatus.findings,
           ciStatus.findingsIncomplete,
+          correlated,
         );
         ctx.promptSinks?.a?.(findingsPrompt);
         const reviewResult = await invokeOrResume(

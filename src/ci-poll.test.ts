@@ -76,6 +76,7 @@ function makeOpts(overrides: Partial<CiPollOptions> = {}): CiPollOptions {
     getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
     collectFailureLogs: vi.fn().mockReturnValue(""),
     getHeadSha: vi.fn().mockReturnValue("abc123"),
+    fetchCodeScanningAlerts: vi.fn().mockReturnValue([]),
     delay: vi.fn().mockResolvedValue(undefined),
     pollIntervalMs: 100,
     pollTimeoutMs: 1000,
@@ -648,6 +649,7 @@ describe("pollCiAndFix", () => {
         rule: "no-unused-vars",
         checkRunId: 500,
         checkRunName: "ESLint",
+        commitSha: "abc123",
       },
     ];
     const getCiStatus = vi
@@ -677,6 +679,7 @@ describe("pollCiAndFix", () => {
         line: 1,
         checkRunId: 600,
         checkRunName: "Lint",
+        commitSha: "abc123",
       },
     ];
 
@@ -713,6 +716,7 @@ describe("pollCiAndFix", () => {
         line: 10,
         checkRunId: 500,
         checkRunName: "ESLint",
+        commitSha: "abc123",
       },
     ];
     const getCiStatus = vi
@@ -780,6 +784,7 @@ describe("pollCiAndFix", () => {
         line: 10,
         checkRunId: 500,
         checkRunName: "ESLint",
+        commitSha: "abc123",
       },
     ];
     const getCiStatus = vi
@@ -806,6 +811,7 @@ describe("pollCiAndFix", () => {
         line: 1,
         checkRunId: 600,
         checkRunName: "Lint",
+        commitSha: "abc123",
       },
     ];
     // First poll: pass with findings. After agent fix: pass clean.
@@ -838,6 +844,7 @@ describe("pollCiAndFix", () => {
         line: 10,
         checkRunId: 500,
         checkRunName: "ESLint",
+        commitSha: "abc123",
       },
     ];
 
@@ -895,6 +902,7 @@ describe("pollCiAndFix", () => {
         line: 10,
         checkRunId: 500,
         checkRunName: "ESLint",
+        commitSha: "abc123",
       },
     ];
 
@@ -949,6 +957,7 @@ describe("pollCiAndFix", () => {
         rule: "no-unused-vars",
         checkRunId: 500,
         checkRunName: "ESLint",
+        commitSha: "abc123",
       },
     ];
     const getCiStatus = vi
@@ -965,5 +974,117 @@ describe("pollCiAndFix", () => {
     expect(invokedPrompt).toContain("src/app.ts:10");
     expect(invokedPrompt).toContain("no-unused-vars");
     expect(invokedPrompt).toContain("ESLint (check run 500)");
+  });
+
+  // -- triage: code scanning alert correlation --------------------------------
+
+  test("fetches code scanning alerts when CI passes with findings", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "SQL injection",
+        file: "src/db.ts",
+        line: 42,
+        rule: "js/sql-injection",
+        checkRunId: 500,
+        checkRunName: "CodeQL",
+        commitSha: "abc123",
+      },
+    ];
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+    const getHeadSha = vi.fn().mockReturnValue("same-sha");
+    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([]);
+
+    const agent = makeAgent();
+    await pollCiAndFix(
+      makeOpts({ agent, getCiStatus, getHeadSha, fetchCodeScanningAlerts }),
+    );
+
+    expect(fetchCodeScanningAlerts).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      "issue-42",
+    );
+  });
+
+  test("includes triage instructions when alerts are correlated", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "SQL injection",
+        file: "src/db.ts",
+        line: 42,
+        rule: "js/sql-injection",
+        checkRunId: 500,
+        checkRunName: "CodeQL",
+        commitSha: "abc123",
+      },
+    ];
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+    const getHeadSha = vi.fn().mockReturnValue("same-sha");
+    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([
+      {
+        number: 10,
+        rule: { id: "js/sql-injection" },
+        tool: { name: "CodeQL" },
+        most_recent_instance: {
+          location: { path: "src/db.ts", start_line: 42 },
+          commit_sha: "abc123",
+        },
+        state: "open",
+        html_url: "https://github.com/org/repo/security/code-scanning/10",
+      },
+    ]);
+
+    const agent = makeAgent();
+    await pollCiAndFix(
+      makeOpts({ agent, getCiStatus, getHeadSha, fetchCodeScanningAlerts }),
+    );
+
+    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    expect(invokedPrompt).toContain("CodeQL Triage");
+    expect(invokedPrompt).toContain("Alert #10");
+    expect(invokedPrompt).toContain("[alert #10]");
+  });
+
+  test("does not fetch alerts on clean pass", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()]));
+    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([]);
+
+    await pollCiAndFix(makeOpts({ getCiStatus, fetchCodeScanningAlerts }));
+
+    expect(fetchCodeScanningAlerts).not.toHaveBeenCalled();
+  });
+
+  test("does not fetch alerts on CI failure", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      )
+      .mockReturnValueOnce(makeCiStatus("pass"));
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([]);
+
+    const agent = makeAgent();
+    await pollCiAndFix(
+      makeOpts({
+        agent,
+        getCiStatus,
+        collectFailureLogs,
+        fetchCodeScanningAlerts,
+      }),
+    );
+
+    // fetchCodeScanningAlerts should not be called during the failure fix
+    // phase — only during findings review.
+    expect(fetchCodeScanningAlerts).not.toHaveBeenCalled();
   });
 });

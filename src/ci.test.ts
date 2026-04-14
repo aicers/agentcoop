@@ -12,6 +12,9 @@ const {
   getCiStatus,
   collectFailureLogs,
   collectFindings,
+  fetchCodeScanningAlerts,
+  correlateFindings,
+  dismissCodeScanningAlert,
 } = await import("./ci.js");
 
 const mockExecFileSync = vi.mocked(execFileSync);
@@ -798,6 +801,7 @@ describe("collectFindings", () => {
       rule: "no-unused-vars",
       checkRunId: 500,
       checkRunName: "ESLint",
+      commitSha: "abc123",
     });
     expect(result.findings[1]).toEqual({
       level: "notice",
@@ -807,6 +811,7 @@ describe("collectFindings", () => {
       rule: undefined,
       checkRunId: 500,
       checkRunName: "ESLint",
+      commitSha: "abc123",
     });
   });
 
@@ -912,5 +917,232 @@ describe("edge cases", () => {
   test("fetchCiRuns throws on malformed check-runs JSON", () => {
     mockExecFileSync.mockReturnValueOnce("[]").mockReturnValueOnce("not json");
     expect(() => fetchCiRuns("org", "repo", "main")).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchCodeScanningAlerts
+// ---------------------------------------------------------------------------
+describe("fetchCodeScanningAlerts", () => {
+  test("fetches and flattens paginated alerts", () => {
+    const alerts = [
+      {
+        number: 1,
+        rule: { id: "js/sql-injection" },
+        tool: { name: "CodeQL" },
+        most_recent_instance: {
+          location: { path: "src/db.ts", start_line: 42 },
+          commit_sha: "abc123",
+        },
+        state: "open",
+        html_url: "https://github.com/org/repo/security/code-scanning/1",
+      },
+    ];
+    mockExecFileSync.mockReturnValueOnce(JSON.stringify([alerts]));
+
+    const result = fetchCodeScanningAlerts("org", "repo", "my-branch");
+    expect(result).toHaveLength(1);
+    expect(result[0].number).toBe(1);
+    expect(result[0].rule.id).toBe("js/sql-injection");
+
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "gh",
+      [
+        "api",
+        "--paginate",
+        "--slurp",
+        "repos/org/repo/code-scanning/alerts?ref=my-branch&state=open&per_page=100",
+      ],
+      { encoding: "utf-8" },
+    );
+  });
+
+  test("URL-encodes ref containing slashes", () => {
+    mockExecFileSync.mockReturnValueOnce(JSON.stringify([[]]));
+    fetchCodeScanningAlerts("org", "repo", "user/issue-42");
+    const args = mockExecFileSync.mock.calls[0][1] as string[];
+    expect(args[3]).toContain("ref=user%2Fissue-42");
+  });
+
+  test("returns empty array on API error", () => {
+    mockExecFileSync.mockImplementationOnce(() => {
+      throw new Error("404 Not Found");
+    });
+    const result = fetchCodeScanningAlerts("org", "repo", "main");
+    expect(result).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// correlateFindings
+// ---------------------------------------------------------------------------
+describe("correlateFindings", () => {
+  const makeAlert = (
+    overrides: Partial<{
+      number: number;
+      ruleId: string;
+      toolName: string;
+      path: string;
+      startLine: number;
+      commitSha: string;
+      htmlUrl: string;
+    }> = {},
+  ) => ({
+    number: overrides.number ?? 1,
+    rule: { id: overrides.ruleId ?? "js/sql-injection" },
+    tool: { name: overrides.toolName ?? "CodeQL" },
+    most_recent_instance: {
+      location: {
+        path: overrides.path ?? "src/db.ts",
+        start_line: overrides.startLine ?? 42,
+      },
+      commit_sha: overrides.commitSha ?? "abc123",
+    },
+    state: "open" as const,
+    html_url:
+      overrides.htmlUrl ??
+      "https://github.com/org/repo/security/code-scanning/1",
+  });
+
+  const makeFinding = (
+    overrides: Partial<{
+      rule: string;
+      checkRunName: string;
+      file: string;
+      line: number;
+      commitSha: string;
+    }> = {},
+  ) => ({
+    level: "warning",
+    message: "SQL injection vulnerability",
+    file: overrides.file ?? "src/db.ts",
+    line: overrides.line ?? 42,
+    rule: overrides.rule ?? "js/sql-injection",
+    checkRunId: 500,
+    checkRunName: overrides.checkRunName ?? "CodeQL",
+    commitSha: overrides.commitSha ?? "abc123",
+  });
+
+  test("matches finding to alert on all five fields", () => {
+    const findings = [makeFinding()];
+    const alerts = [makeAlert()];
+    const result = correlateFindings(findings, alerts);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].alertNumber).toBe(1);
+    expect(result[0].alertUrl).toContain("code-scanning/1");
+    expect(result[0].finding).toBe(findings[0]);
+  });
+
+  test("requires exact SHA match — mismatched SHA yields no alert", () => {
+    const findings = [makeFinding({ commitSha: "new-sha" })];
+    const alerts = [makeAlert({ commitSha: "old-sha" })];
+    const result = correlateFindings(findings, alerts);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].alertNumber).toBeUndefined();
+  });
+
+  test("returns undefined alertNumber when no match", () => {
+    const findings = [makeFinding({ rule: "js/xss" })];
+    const alerts = [makeAlert({ ruleId: "js/sql-injection" })];
+    const result = correlateFindings(findings, alerts);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].alertNumber).toBeUndefined();
+    expect(result[0].alertUrl).toBeUndefined();
+  });
+
+  test("handles multiple findings with mixed matches", () => {
+    const findings = [
+      makeFinding({ rule: "js/sql-injection", file: "src/db.ts", line: 42 }),
+      makeFinding({ rule: "js/xss", file: "src/ui.ts", line: 10 }),
+    ];
+    const alerts = [
+      makeAlert({
+        number: 1,
+        ruleId: "js/sql-injection",
+        path: "src/db.ts",
+        startLine: 42,
+      }),
+    ];
+    const result = correlateFindings(findings, alerts);
+
+    expect(result).toHaveLength(2);
+    expect(result[0].alertNumber).toBe(1);
+    expect(result[1].alertNumber).toBeUndefined();
+  });
+
+  test("matches correct alert among multiple alerts", () => {
+    const findings = [makeFinding({ rule: "js/xss", file: "src/ui.ts" })];
+    const alerts = [
+      makeAlert({
+        number: 1,
+        ruleId: "js/sql-injection",
+        path: "src/db.ts",
+      }),
+      makeAlert({
+        number: 2,
+        ruleId: "js/xss",
+        toolName: "CodeQL",
+        path: "src/ui.ts",
+        startLine: 42,
+      }),
+    ];
+    const result = correlateFindings(findings, alerts);
+
+    expect(result[0].alertNumber).toBe(2);
+  });
+
+  test("handles findings with no rule gracefully", () => {
+    const findings = [makeFinding({ rule: undefined as unknown as string })];
+    // Override: the finding's rule field is undefined.
+    findings[0].rule = undefined;
+    const alerts = [makeAlert({ ruleId: "" })];
+    const result = correlateFindings(findings, alerts);
+
+    // Should match: undefined rule maps to "" which matches alert's "".
+    expect(result[0].alertNumber).toBe(1);
+  });
+
+  test("returns empty array for empty inputs", () => {
+    expect(correlateFindings([], [])).toEqual([]);
+    expect(correlateFindings([], [makeAlert()])).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dismissCodeScanningAlert
+// ---------------------------------------------------------------------------
+describe("dismissCodeScanningAlert", () => {
+  test("calls gh api with correct PATCH arguments", () => {
+    mockExecFileSync.mockReturnValueOnce("{}");
+    dismissCodeScanningAlert("org", "repo", 42, "Test-only code");
+
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "gh",
+      [
+        "api",
+        "-X",
+        "PATCH",
+        "repos/org/repo/code-scanning/alerts/42",
+        "-f",
+        "state=dismissed",
+        "-f",
+        "dismissed_reason=false positive",
+        "-f",
+        "dismissed_comment=Test-only code",
+      ],
+      { encoding: "utf-8" },
+    );
+  });
+
+  test("propagates API error", () => {
+    mockExecFileSync.mockImplementationOnce(() => {
+      throw new Error("403 Forbidden");
+    });
+    expect(() => dismissCodeScanningAlert("org", "repo", 42, "reason")).toThrow(
+      "403 Forbidden",
+    );
   });
 });
