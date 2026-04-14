@@ -1837,6 +1837,7 @@ describe("viewport height constraint", () => {
         "Investigate the overflow in the real app layout.",
         "Keep the prompt block visible and clipped to the pane viewport.",
       ].join("\n"),
+      kind: "work",
     });
     await new Promise((r) => setTimeout(r, 50));
 
@@ -3080,7 +3081,11 @@ describe("AgentPane size-aware rendering", () => {
       </Box>,
     );
 
-    emitter.emit("agent:prompt", { agent: "a", prompt: "Do the task" });
+    emitter.emit("agent:prompt", {
+      agent: "a",
+      prompt: "Do the task",
+      kind: "work",
+    });
     await new Promise((r) => setTimeout(r, 50));
 
     const frame = lastFrame() ?? "";
@@ -3106,7 +3111,7 @@ describe("AgentPane size-aware rendering", () => {
       </Box>,
     );
 
-    emitter.emit("agent:prompt", { agent: "a", prompt: "hi" });
+    emitter.emit("agent:prompt", { agent: "a", prompt: "hi", kind: "work" });
     await new Promise((r) => setTimeout(r, 50));
 
     const frame = lastFrame() ?? "";

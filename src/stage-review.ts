@@ -54,6 +54,7 @@ import {
   type StreamSink,
   sendFollowUp,
   type UsageSink,
+  type VerdictContext,
 } from "./stage-util.js";
 import {
   buildClarificationPrompt,
@@ -434,16 +435,6 @@ export function buildResumeVerdictPrompt(
   ].join("\n");
 }
 
-/**
- * Check whether the response is exactly the PR_FINALIZED keyword.
- * Uses the strict verdict parser to reject extra commentary.
- */
-function hasFinalizationKeyword(text: string): boolean {
-  return (
-    parseVerdictKeyword(text, PR_FINALIZATION_KEYWORDS).keyword !== undefined
-  );
-}
-
 // ---- handler -----------------------------------------------------------------
 
 export function createReviewStageHandler(
@@ -497,7 +488,7 @@ export function createReviewStageHandler(
       if (currentStep === "review") {
         opts.onReviewProgress?.("review");
         const reviewPrompt = buildReviewPrompt(ctx, opts, round);
-        ctx.promptSinks?.b?.(reviewPrompt);
+        ctx.promptSinks?.b?.(reviewPrompt, "work");
         const reviewResult = await invokeOrResume(
           opts.agentB,
           ctx.savedAgentBSessionId,
@@ -539,7 +530,7 @@ export function createReviewStageHandler(
         if (agentBSessionId) {
           // Follow-up on review session (normal flow).
           const verdictPrompt = buildReviewVerdictPrompt();
-          ctx.promptSinks?.b?.(verdictPrompt);
+          ctx.promptSinks?.b?.(verdictPrompt, "verdict-followup");
           verdictResult = await sendFollowUp(
             opts.agentB,
             agentBSessionId,
@@ -566,7 +557,7 @@ export function createReviewStageHandler(
           // Invoke Agent B fresh to read its own review and provide
           // the verdict keyword.
           const resumePrompt = buildResumeVerdictPrompt(ctx, round);
-          ctx.promptSinks?.b?.(resumePrompt);
+          ctx.promptSinks?.b?.(resumePrompt, "verdict-followup");
           verdictResult = await invokeOrResume(
             opts.agentB,
             undefined,
@@ -589,6 +580,13 @@ export function createReviewStageHandler(
           verdictResult.responseText,
           REVIEW_VERDICT_KEYWORDS,
         );
+        if (reviewVerdict.keyword !== undefined) {
+          ctx.events?.emit("pipeline:verdict", {
+            agent: "b",
+            keyword: reviewVerdict.keyword,
+            raw: verdictResult.responseText,
+          });
+        }
 
         // Clarification retry if ambiguous, extra commentary, or
         // multiple valid keywords.
@@ -597,7 +595,7 @@ export function createReviewStageHandler(
             verdictResult.responseText,
             REVIEW_VERDICT_KEYWORDS,
           );
-          ctx.promptSinks?.b?.(clarifyPrompt);
+          ctx.promptSinks?.b?.(clarifyPrompt, "verdict-followup");
           const clarifySessionId = verdictResult.sessionId ?? agentBSessionId;
           let retryResult: AgentResult;
           if (clarifySessionId) {
@@ -636,6 +634,13 @@ export function createReviewStageHandler(
             verdictResult.responseText,
             REVIEW_VERDICT_KEYWORDS,
           );
+          if (reviewVerdict.keyword !== undefined) {
+            ctx.events?.emit("pipeline:verdict", {
+              agent: "b",
+              keyword: reviewVerdict.keyword,
+              raw: verdictResult.responseText,
+            });
+          }
         }
 
         // Post review verdict as a PR comment so it can be recovered.
@@ -731,7 +736,7 @@ export function createReviewStageHandler(
         // PR finalization: Agent A verifies issue reference and
         // "Not addressed" section before the pipeline advances.
         const finalizePrompt = buildPrFinalizationPrompt(ctx, opts);
-        ctx.promptSinks?.a?.(finalizePrompt);
+        ctx.promptSinks?.a?.(finalizePrompt, "work");
         const finalizeResult = await invokeOrResume(
           opts.agentA,
           ctx.savedAgentASessionId,
@@ -752,7 +757,7 @@ export function createReviewStageHandler(
 
         // Verdict follow-up: ask A for exactly PR_FINALIZED.
         const finalVerdictPrompt = buildPrFinalizationVerdictPrompt();
-        ctx.promptSinks?.a?.(finalVerdictPrompt);
+        ctx.promptSinks?.a?.(finalVerdictPrompt, "verdict-followup");
         let finalVerdictResult = await sendFollowUp(
           opts.agentA,
           finalizeResult.sessionId,
@@ -770,13 +775,25 @@ export function createReviewStageHandler(
           );
         }
 
-        if (!hasFinalizationKeyword(finalVerdictResult.responseText)) {
+        let finalKeyword = parseVerdictKeyword(
+          finalVerdictResult.responseText,
+          PR_FINALIZATION_KEYWORDS,
+        );
+        if (finalKeyword.keyword !== undefined) {
+          ctx.events?.emit("pipeline:verdict", {
+            agent: "a",
+            keyword: finalKeyword.keyword,
+            raw: finalVerdictResult.responseText,
+          });
+        }
+
+        if (finalKeyword.keyword === undefined) {
           // Clarification retry.
           const clarifyPrompt = buildClarificationPrompt(
             finalVerdictResult.responseText,
             PR_FINALIZATION_KEYWORDS,
           );
-          ctx.promptSinks?.a?.(clarifyPrompt);
+          ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup");
           const retryResult = await sendFollowUp(
             opts.agentA,
             finalVerdictResult.sessionId ?? finalizeResult.sessionId,
@@ -795,6 +812,17 @@ export function createReviewStageHandler(
           }
 
           finalVerdictResult = retryResult;
+          finalKeyword = parseVerdictKeyword(
+            finalVerdictResult.responseText,
+            PR_FINALIZATION_KEYWORDS,
+          );
+          if (finalKeyword.keyword !== undefined) {
+            ctx.events?.emit("pipeline:verdict", {
+              agent: "a",
+              keyword: finalKeyword.keyword,
+              raw: finalVerdictResult.responseText,
+            });
+          }
         }
 
         // If the keyword is still missing after the in-session retry,
@@ -809,7 +837,7 @@ export function createReviewStageHandler(
         // with the expected companion state:
         //   - Closes #N  → no "## Not addressed" (contradictory otherwise)
         //   - Part of #N → "## Not addressed" must be present
-        if (!hasFinalizationKeyword(finalVerdictResult.responseText)) {
+        if (finalKeyword.keyword === undefined) {
           const getPrBody = opts.getPrBody ?? defaultGetPrBody;
           const body = getPrBody(ctx.owner, ctx.repo, ctx.branch);
 
@@ -849,7 +877,7 @@ export function createReviewStageHandler(
         opts.onReviewProgress?.("author_fix", "NOT_APPROVED");
 
         const fixPrompt = buildAuthorFixPrompt(ctx, opts, round);
-        ctx.promptSinks?.a?.(fixPrompt);
+        ctx.promptSinks?.a?.(fixPrompt, "work");
         const fixResult = await invokeOrResume(
           opts.agentA,
           ctx.savedAgentASessionId,
@@ -871,7 +899,7 @@ export function createReviewStageHandler(
         // Completion check on Agent A (with clarification retry,
         // same pattern as stage 4 / stage 8).
         const authorCheckPrompt = buildAuthorCompletionCheckPrompt();
-        ctx.promptSinks?.a?.(authorCheckPrompt);
+        ctx.promptSinks?.a?.(authorCheckPrompt, "verdict-followup");
         let checkResult = await sendFollowUp(
           opts.agentA,
           fixResult.sessionId,
@@ -886,10 +914,15 @@ export function createReviewStageHandler(
           return mapAgentError(checkResult, "during author completion check");
         }
 
+        const authorVerdictCtx: VerdictContext | undefined = ctx.events
+          ? { events: ctx.events, agent: "a" }
+          : undefined;
+
         let checkMapped = mapResponseToResult(
           checkResult.responseText,
           undefined,
           AUTHOR_CHECK_KEYWORDS,
+          authorVerdictCtx,
         );
 
         if (checkMapped.outcome === "needs_clarification") {
@@ -897,7 +930,7 @@ export function createReviewStageHandler(
             checkResult.responseText,
             AUTHOR_CHECK_KEYWORDS,
           );
-          ctx.promptSinks?.a?.(retryPrompt);
+          ctx.promptSinks?.a?.(retryPrompt, "verdict-followup");
           const retryResult = await sendFollowUp(
             opts.agentA,
             checkResult.sessionId ?? fixResult.sessionId,
@@ -920,6 +953,7 @@ export function createReviewStageHandler(
             checkResult.responseText,
             undefined,
             AUTHOR_CHECK_KEYWORDS,
+            authorVerdictCtx,
           );
         }
 
@@ -1030,7 +1064,7 @@ async function handleUnresolvedSummary(
   const summaryPrompt = sessionId
     ? buildUnresolvedSummaryPrompt(round)
     : buildResumeUnresolvedSummaryPrompt(ctx, round);
-  promptSink?.(summaryPrompt);
+  promptSink?.(summaryPrompt, "summary");
 
   // If we have a session, resume; otherwise invoke fresh.
   let result: AgentResult;
@@ -1065,7 +1099,7 @@ async function handleUnresolvedSummary(
 
   // Verdict follow-up: ask for exactly NONE or COMPLETED.
   const verdictPrompt = buildUnresolvedVerdictPrompt();
-  promptSink?.(verdictPrompt);
+  promptSink?.(verdictPrompt, "verdict-followup");
   let verdictResult: AgentResult;
   const verdictSessionId = result.sessionId ?? sessionId;
 
@@ -1101,6 +1135,13 @@ async function handleUnresolvedSummary(
     verdictResult.responseText,
     UNRESOLVED_KEYWORDS,
   );
+  if (verdict.keyword !== undefined) {
+    ctx.events?.emit("pipeline:verdict", {
+      agent: "b",
+      keyword: verdict.keyword,
+      raw: verdictResult.responseText,
+    });
+  }
 
   // Clarification retry if the verdict is ambiguous or out-of-scope.
   if (verdict.keyword === undefined) {
@@ -1108,7 +1149,7 @@ async function handleUnresolvedSummary(
       verdictResult.responseText,
       UNRESOLVED_KEYWORDS,
     );
-    promptSink?.(clarifyPrompt);
+    promptSink?.(clarifyPrompt, "verdict-followup");
 
     const verdictSessionId2 = verdictResult.sessionId ?? sessionId;
     let retryResult: AgentResult;
@@ -1147,6 +1188,13 @@ async function handleUnresolvedSummary(
       retryResult.responseText,
       UNRESOLVED_KEYWORDS,
     );
+    if (verdict.keyword !== undefined) {
+      ctx.events?.emit("pipeline:verdict", {
+        agent: "b",
+        keyword: verdict.keyword,
+        raw: retryResult.responseText,
+      });
+    }
   }
 
   if (verdict.keyword?.toUpperCase() === "NONE") {

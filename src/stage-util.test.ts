@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
+import { PipelineEventEmitter } from "./pipeline-events.js";
 import {
   buildDocConsistencyInstructions,
   invokeOrResume,
@@ -8,6 +9,7 @@ import {
   mapParsedStepToResult,
   mapResponseToResult,
   sendFollowUp,
+  type VerdictContext,
 } from "./stage-util.js";
 
 afterEach(() => {
@@ -453,6 +455,42 @@ describe("mapResponseToResult", () => {
     ]);
     expect(result.outcome).toBe("completed");
   });
+
+  test("emits pipeline:verdict when verdictCtx is provided", () => {
+    const events = new PipelineEventEmitter();
+    const handler = vi.fn();
+    events.on("pipeline:verdict", handler);
+    const ctx: VerdictContext = { events, agent: "a" };
+
+    mapResponseToResult("COMPLETED", undefined, ["COMPLETED", "BLOCKED"], ctx);
+
+    expect(handler).toHaveBeenCalledWith({
+      agent: "a",
+      keyword: "COMPLETED",
+      raw: "COMPLETED",
+    });
+  });
+
+  test("does not emit pipeline:verdict without verdictCtx", () => {
+    const events = new PipelineEventEmitter();
+    const handler = vi.fn();
+    events.on("pipeline:verdict", handler);
+
+    mapResponseToResult("COMPLETED", undefined, ["COMPLETED", "BLOCKED"]);
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  test("does not emit pipeline:verdict when keyword is not parsed", () => {
+    const events = new PipelineEventEmitter();
+    const handler = vi.fn();
+    events.on("pipeline:verdict", handler);
+    const ctx: VerdictContext = { events, agent: "a" };
+
+    mapResponseToResult("I did some work.", undefined, ["COMPLETED"], ctx);
+
+    expect(handler).not.toHaveBeenCalled();
+  });
 });
 
 // ---- mapFixOrDoneResponse ---------------------------------------------------
@@ -557,6 +595,42 @@ describe("mapFixOrDoneResponse", () => {
       "DONE",
     ]);
     expect(result.outcome).toBe("needs_clarification");
+  });
+
+  test("emits pipeline:verdict when verdictCtx is provided", () => {
+    const events = new PipelineEventEmitter();
+    const handler = vi.fn();
+    events.on("pipeline:verdict", handler);
+    const ctx: VerdictContext = { events, agent: "b" };
+
+    mapFixOrDoneResponse("FIXED", ["FIXED", "DONE"], ctx);
+
+    expect(handler).toHaveBeenCalledWith({
+      agent: "b",
+      keyword: "FIXED",
+      raw: "FIXED",
+    });
+  });
+
+  test("does not emit pipeline:verdict without verdictCtx", () => {
+    const events = new PipelineEventEmitter();
+    const handler = vi.fn();
+    events.on("pipeline:verdict", handler);
+
+    mapFixOrDoneResponse("FIXED", ["FIXED", "DONE"]);
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  test("does not emit pipeline:verdict when keyword is not parsed", () => {
+    const events = new PipelineEventEmitter();
+    const handler = vi.fn();
+    events.on("pipeline:verdict", handler);
+    const ctx: VerdictContext = { events, agent: "a" };
+
+    mapFixOrDoneResponse("I looked at things.", ["FIXED", "DONE"], ctx);
+
+    expect(handler).not.toHaveBeenCalled();
   });
 });
 

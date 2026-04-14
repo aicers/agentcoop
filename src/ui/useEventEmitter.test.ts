@@ -200,7 +200,7 @@ describe("agent:prompt integration with line accumulator", () => {
       stageName: "Implement",
       iteration: 0,
     });
-    emitter.emit("agent:prompt", { agent: "a", prompt: "hello" });
+    emitter.emit("agent:prompt", { agent: "a", prompt: "hello", kind: "work" });
 
     const lines = acc.getLines();
     expect(lines[0]).toBe("output");
@@ -220,7 +220,11 @@ describe("agent:prompt integration with line accumulator", () => {
     emitter.emit("agent:chunk", { agent: "a", chunk: "partial" });
     expect(acc.getBuffer()).toBe("partial");
 
-    emitter.emit("agent:prompt", { agent: "a", prompt: "question" });
+    emitter.emit("agent:prompt", {
+      agent: "a",
+      prompt: "question",
+      kind: "work",
+    });
 
     const lines = acc.getLines();
     expect(lines[0]).toBe("partial");
@@ -238,7 +242,7 @@ describe("agent:prompt integration with line accumulator", () => {
     const emitter = new PipelineEventEmitter();
     const acc = createLineAccumulator(emitter, "a");
 
-    emitter.emit("agent:prompt", { agent: "a", prompt: "hi" });
+    emitter.emit("agent:prompt", { agent: "a", prompt: "hi", kind: "work" });
 
     const lines = acc.getLines();
     expect(lines[0]).toEqual({
@@ -254,7 +258,11 @@ describe("agent:prompt integration with line accumulator", () => {
     const emitter = new PipelineEventEmitter();
     const acc = createLineAccumulator(emitter, "a");
 
-    emitter.emit("agent:prompt", { agent: "b", prompt: "not mine" });
+    emitter.emit("agent:prompt", {
+      agent: "b",
+      prompt: "not mine",
+      kind: "work",
+    });
 
     expect(acc.getLines()).toEqual([]);
 

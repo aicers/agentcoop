@@ -148,6 +148,8 @@ export interface StageContext {
    * async operations to bail out early when the user presses Ctrl+C.
    */
   signal?: AbortSignal;
+  /** Pipeline event emitter for diagnostic events. */
+  events?: PipelineEventEmitter;
 }
 
 // ---- user interaction interface ------------------------------------------
@@ -506,6 +508,12 @@ export async function runPipeline(
       }
 
       const canContinue = advanceLoop(lc);
+      events?.emit("pipeline:loop", {
+        stageNumber: stage.number,
+        stageName: stage.name,
+        remaining: lc.autoRemaining,
+        exhausted: !canContinue,
+      });
       if (!canContinue) {
         const approved = await prompt.confirmContinueLoop(
           stage.name,
@@ -620,13 +628,19 @@ async function runStage(
   // and track which agent is currently running.
   const promptSinks = events
     ? {
-        a: (prompt: string) => {
+        a: (
+          prompt: string,
+          kind: import("./pipeline-events.js").AgentPromptKind,
+        ) => {
           events.emit("agent:invoke", { agent: "a", type: "invoke" });
-          events.emit("agent:prompt", { agent: "a", prompt });
+          events.emit("agent:prompt", { agent: "a", prompt, kind });
         },
-        b: (prompt: string) => {
+        b: (
+          prompt: string,
+          kind: import("./pipeline-events.js").AgentPromptKind,
+        ) => {
           events.emit("agent:invoke", { agent: "b", type: "invoke" });
-          events.emit("agent:prompt", { agent: "b", prompt });
+          events.emit("agent:prompt", { agent: "b", prompt, kind });
         },
       }
     : undefined;
@@ -668,6 +682,7 @@ async function runStage(
       promptSinks,
       usageSinks,
       signal,
+      events,
     };
 
     // Clear one-shot fields after use.
@@ -773,6 +788,12 @@ async function runStage(
     // ---- loop control ----------------------------------------------------
 
     const canContinue = advanceLoop(lc);
+    events?.emit("pipeline:loop", {
+      stageNumber: stage.number,
+      stageName: stage.name,
+      remaining: lc.autoRemaining,
+      exhausted: !canContinue,
+    });
     // Notify caller after loop counter change for persistence.
     onStageTransition?.(stage.number, lc.iteration);
     if (!canContinue) {

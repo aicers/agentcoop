@@ -22,6 +22,7 @@ import {
   mapAgentError,
   mapFixOrDoneResponse,
   sendFollowUp,
+  type VerdictContext,
 } from "./stage-util.js";
 import { buildClarificationPrompt } from "./step-parser.js";
 
@@ -127,7 +128,7 @@ export function createTestPlanStageHandler(
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send verification prompt (resume if saved session).
       const verifyPrompt = buildTestPlanVerifyPrompt(ctx, opts);
-      ctx.promptSinks?.a?.(verifyPrompt);
+      ctx.promptSinks?.a?.(verifyPrompt, "work");
       const verifyResult = await invokeOrResume(
         opts.agent,
         ctx.savedAgentASessionId,
@@ -148,7 +149,7 @@ export function createTestPlanStageHandler(
 
       // Step 2: Send self-check work prompt (resume the same session).
       const selfCheckPrompt = buildTestPlanSelfCheckPrompt();
-      ctx.promptSinks?.a?.(selfCheckPrompt);
+      ctx.promptSinks?.a?.(selfCheckPrompt, "work");
       const checkResult = await sendFollowUp(
         opts.agent,
         verifyResult.sessionId,
@@ -165,7 +166,7 @@ export function createTestPlanStageHandler(
 
       // Step 3: Verdict follow-up — ask for exactly FIXED or DONE.
       const verdictPrompt = buildTestPlanVerdictPrompt();
-      ctx.promptSinks?.a?.(verdictPrompt);
+      ctx.promptSinks?.a?.(verdictPrompt, "verdict-followup");
       const verdictResult = await sendFollowUp(
         opts.agent,
         checkResult.sessionId,
@@ -180,9 +181,14 @@ export function createTestPlanStageHandler(
         return mapAgentError(verdictResult, "during test plan verdict");
       }
 
+      const verdictCtx: VerdictContext | undefined = ctx.events
+        ? { events: ctx.events, agent: "a" }
+        : undefined;
+
       let result = mapFixOrDoneResponse(
         verdictResult.responseText,
         TEST_PLAN_VERDICT_KEYWORDS,
+        verdictCtx,
       );
 
       // Internal clarification retry (same pattern as other stages).
@@ -191,7 +197,7 @@ export function createTestPlanStageHandler(
           verdictResult.responseText,
           TEST_PLAN_VERDICT_KEYWORDS,
         );
-        ctx.promptSinks?.a?.(clarifyPrompt);
+        ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup");
         const retryResult = await sendFollowUp(
           opts.agent,
           verdictResult.sessionId ?? checkResult.sessionId,
@@ -212,6 +218,7 @@ export function createTestPlanStageHandler(
         result = mapFixOrDoneResponse(
           retryResult.responseText,
           TEST_PLAN_VERDICT_KEYWORDS,
+          verdictCtx,
         );
       }
 

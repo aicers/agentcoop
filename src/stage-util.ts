@@ -11,6 +11,10 @@ import type {
 } from "./agent.js";
 import { t } from "./i18n/index.js";
 import type { StageOutcome, StageResult } from "./pipeline.js";
+import type {
+  AgentPromptKind,
+  PipelineEventEmitter,
+} from "./pipeline-events.js";
 import {
   type ParsedStep,
   parseStepStatus,
@@ -25,8 +29,11 @@ export type StreamSink = (chunk: string) => void;
 /**
  * Callback that receives the full prompt text before it is sent to the agent.
  * Used by the UI to display outgoing prompts in the agent's pane.
+ *
+ * The optional `kind` parameter classifies the prompt type so that
+ * diagnostic consumers can distinguish prompts without inspecting text.
  */
-export type PromptSink = (prompt: string) => void;
+export type PromptSink = (prompt: string, kind: AgentPromptKind) => void;
 
 /**
  * Callback that receives token usage data after an agent invocation completes.
@@ -364,6 +371,12 @@ export async function sendFollowUp(
   );
 }
 
+/** Context for emitting `pipeline:verdict` events from utility helpers. */
+export interface VerdictContext {
+  events: PipelineEventEmitter;
+  agent: "a" | "b";
+}
+
 /**
  * Convenience: parse response text and convert to a `StageResult` in one
  * call.
@@ -373,11 +386,15 @@ export async function sendFollowUp(
  * commentary.  Responses with multiple valid keywords, out-of-scope
  * keywords, or significant extra text are rejected as
  * `needs_clarification`.
+ *
+ * When `verdictCtx` is supplied, a `pipeline:verdict` event is emitted
+ * after a keyword is successfully parsed.
  */
 export function mapResponseToResult(
   responseText: string,
   overrides?: Partial<Record<ParsedStep["status"], StageOutcome>>,
   validKeywords?: readonly string[],
+  verdictCtx?: VerdictContext,
 ): StageResult {
   if (validKeywords && validKeywords.length > 0) {
     const verdict = parseVerdictKeyword(responseText, validKeywords);
@@ -388,6 +405,11 @@ export function mapResponseToResult(
         validVerdicts: validKeywords,
       };
     }
+    verdictCtx?.events.emit("pipeline:verdict", {
+      agent: verdictCtx.agent,
+      keyword: verdict.keyword,
+      raw: responseText,
+    });
     // Feed the matched keyword through parseStepStatus for status mapping.
     return mapParsedStepToResult(
       parseStepStatus(verdict.keyword),
@@ -455,10 +477,14 @@ export function buildDocConsistencyInstructions(indent = ""): string {
  * When `validKeywords` is provided, the strict verdict parser is used:
  * the response must contain exactly one valid keyword with no extra
  * commentary.
+ *
+ * When `verdictCtx` is supplied, a `pipeline:verdict` event is emitted
+ * after a keyword is successfully parsed.
  */
 export function mapFixOrDoneResponse(
   responseText: string,
   validKeywords?: readonly string[],
+  verdictCtx?: VerdictContext,
 ): StageResult {
   if (validKeywords && validKeywords.length > 0) {
     const verdict = parseVerdictKeyword(responseText, validKeywords);
@@ -469,6 +495,11 @@ export function mapFixOrDoneResponse(
         validVerdicts: validKeywords,
       };
     }
+    verdictCtx?.events.emit("pipeline:verdict", {
+      agent: verdictCtx.agent,
+      keyword: verdict.keyword,
+      raw: responseText,
+    });
     // Feed the matched keyword through parseStepStatus for status mapping.
     const parsed = parseStepStatus(verdict.keyword);
     if (parsed.status === "fixed" && parsed.keyword === "FIXED") {

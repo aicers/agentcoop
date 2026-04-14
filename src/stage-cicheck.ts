@@ -390,7 +390,7 @@ export function createCiCheckStageHandler(
           ciStatus.findingsIncomplete,
           correlated,
         );
-        ctx.promptSinks?.a?.(findingsPrompt);
+        ctx.promptSinks?.a?.(findingsPrompt, "ci-fix");
         const reviewResult = await invokeOrResume(
           opts.agent,
           ctx.savedAgentASessionId,
@@ -445,7 +445,7 @@ export function createCiCheckStageHandler(
           : "No detailed failure logs available.";
 
       const prompt = buildCiFixPrompt(ctx, opts, failureLogs);
-      ctx.promptSinks?.a?.(prompt);
+      ctx.promptSinks?.a?.(prompt, "ci-fix");
       const fixResult = await invokeOrResume(
         opts.agent,
         ctx.savedAgentASessionId,

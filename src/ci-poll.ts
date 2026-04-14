@@ -23,6 +23,7 @@ import {
 } from "./ci.js";
 import { t } from "./i18n/index.js";
 import type { StageContext } from "./pipeline.js";
+import type { PipelineEventEmitter } from "./pipeline-events.js";
 import { buildCiFindingsPrompt, buildCiFixPrompt } from "./stage-cicheck.js";
 import {
   buildErrorDetail,
@@ -76,6 +77,8 @@ export interface CiPollOptions {
   emptyRunsGracePeriodMs?: number;
   /** Injected for testability. Defaults to a real delay function. */
   delay?: (ms: number) => Promise<void>;
+  /** Pipeline event emitter for diagnostic events. */
+  events?: PipelineEventEmitter;
 }
 
 export interface CiPollResult {
@@ -101,6 +104,7 @@ async function waitForCi(
   delay: (ms: number) => Promise<void>,
   commitSha?: string,
   emptyRunsGracePeriod?: number,
+  onStatus?: (verdict: string) => void,
 ): Promise<{ timedOut: boolean; ciStatus: CiStatus }> {
   const startTime = Date.now();
 
@@ -128,6 +132,8 @@ async function waitForCi(
       await delay(pollInterval);
       continue;
     }
+
+    onStatus?.(ciStatus.verdict);
 
     const elapsed = Date.now() - startTime;
 
@@ -177,6 +183,7 @@ export async function pollCiAndFix(
   const fetchAlerts = options.fetchCodeScanningAlerts ?? defaultFetchAlerts;
   const emptyGrace =
     options.emptyRunsGracePeriodMs ?? DEFAULT_EMPTY_RUNS_GRACE_PERIOD_MS;
+  const events = options.events ?? ctx.events;
 
   // Track failure-fix and findings-review attempts independently so
   // that "pass with findings" never exhausts the failure-fix budget.
@@ -190,6 +197,8 @@ export async function pollCiAndFix(
     // triggered by the most recent push (initial or fix).
     const commitSha = readHeadSha(ctx.worktreePath);
 
+    events?.emit("pipeline:ci-poll", { action: "start", sha: commitSha });
+
     const { timedOut, ciStatus } = await waitForCi(
       ctx.owner,
       ctx.repo,
@@ -200,7 +209,22 @@ export async function pollCiAndFix(
       delay,
       commitSha,
       emptyGrace,
+      (verdict) =>
+        events?.emit("pipeline:ci-poll", {
+          action: "status",
+          sha: commitSha,
+          verdict,
+        }),
     );
+
+    // Close the polling session for this SHA.  Every `start` gets
+    // exactly one matching `done`, regardless of what happens next
+    // (timeout, clean pass, findings review, or fix loop).
+    events?.emit("pipeline:ci-poll", {
+      action: "done",
+      sha: commitSha,
+      verdict: ciStatus.verdict,
+    });
 
     if (timedOut) {
       return {
@@ -242,7 +266,7 @@ export async function pollCiAndFix(
         ciStatus.findingsIncomplete,
         correlated,
       );
-      ctx.promptSinks?.a?.(findingsPrompt);
+      ctx.promptSinks?.a?.(findingsPrompt, "ci-fix");
       const reviewStream = agent.invoke(findingsPrompt, {
         cwd: ctx.worktreePath,
         onUsage: ctx.usageSinks?.a,
@@ -310,7 +334,7 @@ export async function pollCiAndFix(
       { agent, issueTitle, issueBody },
       failureLogs,
     );
-    ctx.promptSinks?.a?.(fixPrompt);
+    ctx.promptSinks?.a?.(fixPrompt, "ci-fix");
     const fixStream = agent.invoke(fixPrompt, {
       cwd: ctx.worktreePath,
       onUsage: ctx.usageSinks?.a,

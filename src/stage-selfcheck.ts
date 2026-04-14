@@ -29,6 +29,7 @@ import {
   mapAgentError,
   mapFixOrDoneResponse,
   sendFollowUp,
+  type VerdictContext,
 } from "./stage-util.js";
 import { buildClarificationPrompt } from "./step-parser.js";
 
@@ -137,7 +138,7 @@ export function createSelfCheckStageHandler(
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send self-check prompt (resume if saved session).
       const checkPrompt = buildSelfCheckPrompt(ctx, opts);
-      ctx.promptSinks?.a?.(checkPrompt);
+      ctx.promptSinks?.a?.(checkPrompt, "work");
       const checkResult = await invokeOrResume(
         opts.agent,
         ctx.savedAgentASessionId,
@@ -158,7 +159,7 @@ export function createSelfCheckStageHandler(
 
       // Step 2: Send fix-or-done work prompt (resume the same session).
       const fixPrompt = buildFixOrDonePrompt();
-      ctx.promptSinks?.a?.(fixPrompt);
+      ctx.promptSinks?.a?.(fixPrompt, "work");
       const fixResult = await sendFollowUp(
         opts.agent,
         checkResult.sessionId,
@@ -175,7 +176,7 @@ export function createSelfCheckStageHandler(
 
       // Step 3: Verdict follow-up — ask for exactly FIXED or DONE.
       const verdictPrompt = buildFixOrDoneVerdictPrompt();
-      ctx.promptSinks?.a?.(verdictPrompt);
+      ctx.promptSinks?.a?.(verdictPrompt, "verdict-followup");
       const verdictResult = await sendFollowUp(
         opts.agent,
         fixResult.sessionId,
@@ -190,10 +191,15 @@ export function createSelfCheckStageHandler(
         return mapAgentError(verdictResult, "during fix verdict");
       }
 
+      const verdictCtx: VerdictContext | undefined = ctx.events
+        ? { events: ctx.events, agent: "a" }
+        : undefined;
+
       let verdictCheckResult = verdictResult;
       let result = mapFixOrDoneResponse(
         verdictCheckResult.responseText,
         FIX_OR_DONE_KEYWORDS,
+        verdictCtx,
       );
 
       // Internal clarification retry (same pattern as other stages).
@@ -202,7 +208,7 @@ export function createSelfCheckStageHandler(
           verdictCheckResult.responseText,
           FIX_OR_DONE_KEYWORDS,
         );
-        ctx.promptSinks?.a?.(clarifyPrompt);
+        ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup");
         const retryResult = await sendFollowUp(
           opts.agent,
           verdictCheckResult.sessionId ?? fixResult.sessionId,
@@ -221,6 +227,7 @@ export function createSelfCheckStageHandler(
         result = mapFixOrDoneResponse(
           verdictCheckResult.responseText,
           FIX_OR_DONE_KEYWORDS,
+          verdictCtx,
         );
       }
 
@@ -237,7 +244,7 @@ export function createSelfCheckStageHandler(
       if (result.outcome === "completed" && verdictCheckResult.sessionId) {
         try {
           const syncPrompt = buildIssueSyncPrompt(ctx, opts);
-          ctx.promptSinks?.a?.(syncPrompt);
+          ctx.promptSinks?.a?.(syncPrompt, "work");
           const syncResult = await sendFollowUp(
             opts.agent,
             verdictCheckResult.sessionId,
@@ -251,7 +258,7 @@ export function createSelfCheckStageHandler(
           if (syncResult.status === "success") {
             // Verdict follow-up: ask for sync status report.
             const syncVerdictPrompt = buildIssueSyncVerdictPrompt();
-            ctx.promptSinks?.a?.(syncVerdictPrompt);
+            ctx.promptSinks?.a?.(syncVerdictPrompt, "verdict-followup");
             const syncVerdictResult = await sendFollowUp(
               opts.agent,
               syncResult.sessionId ?? verdictCheckResult.sessionId,
@@ -270,7 +277,7 @@ export function createSelfCheckStageHandler(
               // Clarification retry if the response was malformed.
               if (!parseResult.valid) {
                 const clarifyPrompt = buildIssueSyncClarificationPrompt();
-                ctx.promptSinks?.a?.(clarifyPrompt);
+                ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup");
                 const retryResult = await sendFollowUp(
                   opts.agent,
                   syncVerdictResult.sessionId ??
