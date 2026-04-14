@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
-import type { CiRun, CiStatus, CiVerdict } from "./ci.js";
+import type { CiFinding, CiRun, CiStatus, CiVerdict } from "./ci.js";
 import { type CiPollOptions, pollCiAndFix } from "./ci-poll.js";
 import type { StageContext } from "./pipeline.js";
 
@@ -40,8 +40,13 @@ function makeCiRun(overrides: Partial<CiRun> = {}): CiRun {
   };
 }
 
-function makeCiStatus(verdict: CiVerdict, runs: CiRun[] = []): CiStatus {
-  return { verdict, runs };
+function makeCiStatus(
+  verdict: CiVerdict,
+  runs: CiRun[] = [],
+  findings: CiFinding[] = [],
+  findingsIncomplete = false,
+): CiStatus {
+  return { verdict, runs, findings, findingsIncomplete };
 }
 
 const BASE_CTX: StageContext = {
@@ -629,5 +634,336 @@ describe("pollCiAndFix", () => {
     expect(result.message).toContain("still pending");
 
     vi.restoreAllMocks();
+  });
+
+  // -- CI passes with findings — agent reviews --------------------------------
+
+  test("presents findings to agent and returns passed when agent acknowledges", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "Unused variable",
+        file: "src/app.ts",
+        line: 10,
+        rule: "no-unused-vars",
+        checkRunId: 500,
+        checkRunName: "ESLint",
+      },
+    ];
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+    const getHeadSha = vi.fn().mockReturnValue("same-sha");
+
+    const agent = makeAgent();
+    const result = await pollCiAndFix(
+      makeOpts({ agent, getCiStatus, getHeadSha }),
+    );
+
+    expect(result.passed).toBe(true);
+    expect(result.message).toContain("Findings were reviewed");
+    expect(agent.invoke).toHaveBeenCalledWith(
+      expect.stringContaining("CI Findings"),
+      expect.any(Object),
+    );
+  });
+
+  test("re-polls CI when agent pushes a fix for findings", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "Unused import",
+        file: "src/index.ts",
+        line: 1,
+        checkRunId: 600,
+        checkRunName: "Lint",
+      },
+    ];
+
+    // First poll: pass with findings. After agent fix: pass clean.
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()], findings))
+      .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()]));
+
+    // SHA sequence: top-of-loop, shaBeforeReview, shaAfterReview (changed),
+    // top-of-loop again for second poll.
+    let shaCall = 0;
+    const shas = ["sha-1", "sha-1", "sha-2", "sha-2"];
+    const getHeadSha = vi.fn().mockImplementation(() => shas[shaCall++]);
+
+    const agent = makeAgent();
+    const result = await pollCiAndFix(
+      makeOpts({ agent, getCiStatus, getHeadSha }),
+    );
+
+    expect(result.passed).toBe(true);
+    expect(result.message).toContain("CI checks passed");
+    expect(agent.invoke).toHaveBeenCalledTimes(1);
+    // CI was polled twice: first with findings, then clean after fix.
+    expect(getCiStatus).toHaveBeenCalledTimes(2);
+  });
+
+  test("returns error when agent fails during findings review", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "Unused variable",
+        file: "src/app.ts",
+        line: 10,
+        checkRunId: 500,
+        checkRunName: "ESLint",
+      },
+    ];
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+    const getHeadSha = vi.fn().mockReturnValue("sha");
+
+    const agent = makeAgent(
+      makeResult({
+        status: "error",
+        errorType: "execution_error",
+        stderrText: "crash",
+        responseText: "",
+      }),
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await pollCiAndFix(
+      makeOpts({ agent, getCiStatus, getHeadSha }),
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.message).toContain("Agent error during CI fix");
+
+    errorSpy.mockRestore();
+  });
+
+  test("routes to findings review when findingsIncomplete even with no findings", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()], [], true))
+      .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()]));
+
+    // SHA sequence: top-of-loop, shaBeforeReview, shaAfterReview (unchanged).
+    const getHeadSha = vi.fn().mockReturnValue("same-sha");
+
+    const agent = makeAgent();
+    const result = await pollCiAndFix(
+      makeOpts({ agent, getCiStatus, getHeadSha }),
+    );
+
+    // Agent was invoked with the findings prompt (not the clean-pass exit).
+    expect(agent.invoke).toHaveBeenCalledWith(
+      expect.stringContaining("CI Findings"),
+      expect.any(Object),
+    );
+    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    expect(invokedPrompt).toContain("annotations could not be fetched");
+
+    // SHA unchanged → findings acknowledged.
+    expect(result.passed).toBe(true);
+    expect(result.message).toContain("Findings were reviewed");
+  });
+
+  // -- findings-review counter is decoupled from fix-attempt counter --------
+
+  test("maxFixAttempts=0 still allows findings review", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "Unused variable",
+        file: "src/app.ts",
+        line: 10,
+        checkRunId: 500,
+        checkRunName: "ESLint",
+      },
+    ];
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+    const getHeadSha = vi.fn().mockReturnValue("same-sha");
+
+    const agent = makeAgent();
+    const result = await pollCiAndFix(
+      makeOpts({ agent, getCiStatus, getHeadSha, maxFixAttempts: 0 }),
+    );
+
+    expect(result.passed).toBe(true);
+    expect(result.message).toContain("Findings were reviewed");
+    expect(agent.invoke).toHaveBeenCalledTimes(1);
+  });
+
+  test("maxFixAttempts=0 re-polls after findings-driven push", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "Unused import",
+        file: "src/index.ts",
+        line: 1,
+        checkRunId: 600,
+        checkRunName: "Lint",
+      },
+    ];
+    // First poll: pass with findings. After agent fix: pass clean.
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()], findings))
+      .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()]));
+
+    let shaCall = 0;
+    const shas = ["sha-1", "sha-1", "sha-2", "sha-2"];
+    const getHeadSha = vi.fn().mockImplementation(() => shas[shaCall++]);
+
+    const agent = makeAgent();
+    const result = await pollCiAndFix(
+      makeOpts({ agent, getCiStatus, getHeadSha, maxFixAttempts: 0 }),
+    );
+
+    // Should pass cleanly — not hit fixLoopExhausted.
+    expect(result.passed).toBe(true);
+    expect(result.message).toContain("CI checks passed");
+    expect(agent.invoke).toHaveBeenCalledTimes(1);
+  });
+
+  test("findings reviews do not consume failure-fix budget", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "Unused variable",
+        file: "src/app.ts",
+        line: 10,
+        checkRunId: 500,
+        checkRunName: "ESLint",
+      },
+    ];
+
+    // Sequence: pass with findings → agent pushes →
+    // CI fails → agent fixes → CI passes.
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()], findings))
+      .mockReturnValueOnce(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      )
+      .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()]));
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+
+    // SHA sequence: top-of-loop (sha-1), shaBeforeReview (sha-1),
+    // shaAfterReview (sha-2, agent pushed), top-of-loop (sha-2),
+    // top-of-loop after fix (sha-3).
+    let shaCall = 0;
+    const shas = ["sha-1", "sha-1", "sha-2", "sha-2", "sha-3"];
+    const getHeadSha = vi.fn().mockImplementation(() => shas[shaCall++]);
+
+    const invokeResults = [
+      makeStream(makeResult({ responseText: "Reviewed findings." })),
+      makeStream(makeResult({ responseText: "Fixed CI." })),
+    ];
+    let invokeCall = 0;
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockImplementation(() => invokeResults[invokeCall++]),
+      resume: vi.fn(),
+    };
+
+    const result = await pollCiAndFix(
+      makeOpts({
+        agent,
+        getCiStatus,
+        collectFailureLogs,
+        getHeadSha,
+        maxFixAttempts: 1,
+      }),
+    );
+
+    // Should succeed: findings review (1 review) + CI failure fix (1 fix).
+    // With the old coupled counter, this would have exhausted the budget.
+    expect(result.passed).toBe(true);
+    expect(result.message).toContain("CI checks passed");
+    expect(agent.invoke).toHaveBeenCalledTimes(2);
+  });
+
+  test("caps findings-review re-polls at maxFixAttempts", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "Unused variable",
+        file: "src/app.ts",
+        line: 10,
+        checkRunId: 500,
+        checkRunName: "ESLint",
+      },
+    ];
+
+    // Agent keeps pushing but findings persist.
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+
+    // SHA changes after every review to simulate agent pushing.
+    let shaCounter = 0;
+    const getHeadSha = vi.fn().mockImplementation(() => {
+      const sha = `sha-${Math.floor(shaCounter / 2)}`;
+      shaCounter++;
+      return sha;
+    });
+
+    const invokeResults = [
+      makeStream(makeResult()),
+      makeStream(makeResult()),
+      makeStream(makeResult()),
+    ];
+    let invokeCall = 0;
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockImplementation(() => invokeResults[invokeCall++]),
+      resume: vi.fn(),
+    };
+
+    const result = await pollCiAndFix(
+      makeOpts({
+        agent,
+        getCiStatus,
+        getHeadSha,
+        maxFixAttempts: 2,
+      }),
+    );
+
+    // Should return passedWithFindings after exhausting the review budget,
+    // not ci.stillFailing or ci.fixLoopExhausted.
+    expect(result.passed).toBe(true);
+    expect(result.message).toContain("Findings were reviewed");
+    // maxFixAttempts=2 → max(1,2)=2 findings reviews allowed.
+    expect(agent.invoke).toHaveBeenCalledTimes(2);
+  });
+
+  test("findings prompt includes structured finding details", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "Unused variable 'x'",
+        file: "src/app.ts",
+        line: 10,
+        rule: "no-unused-vars",
+        checkRunId: 500,
+        checkRunName: "ESLint",
+      },
+    ];
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+    const getHeadSha = vi.fn().mockReturnValue("same-sha");
+
+    const agent = makeAgent();
+    await pollCiAndFix(makeOpts({ agent, getCiStatus, getHeadSha }));
+
+    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    expect(invokedPrompt).toContain("Unused variable 'x'");
+    expect(invokedPrompt).toContain("src/app.ts:10");
+    expect(invokedPrompt).toContain("no-unused-vars");
+    expect(invokedPrompt).toContain("ESLint (check run 500)");
   });
 });

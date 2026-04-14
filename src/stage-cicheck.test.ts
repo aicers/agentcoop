@@ -1,8 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
 import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
-import type { CiRun, CiStatus, CiVerdict } from "./ci.js";
+import type { CiFinding, CiRun, CiStatus, CiVerdict } from "./ci.js";
 import type { StageContext } from "./pipeline.js";
 import {
+  buildCiFindingsPrompt,
   buildCiFixPrompt,
   type CiCheckStageOptions,
   createCiCheckStageHandler,
@@ -44,8 +45,13 @@ function makeCiRun(overrides: Partial<CiRun> = {}): CiRun {
   };
 }
 
-function makeCiStatus(verdict: CiVerdict, runs: CiRun[] = []): CiStatus {
-  return { verdict, runs };
+function makeCiStatus(
+  verdict: CiVerdict,
+  runs: CiRun[] = [],
+  findings: CiFinding[] = [],
+  findingsIncomplete = false,
+): CiStatus {
+  return { verdict, runs, findings, findingsIncomplete };
 }
 
 const BASE_CTX: StageContext = {
@@ -616,5 +622,320 @@ describe("createCiCheckStageHandler", () => {
     const result = await stage.handler(BASE_CTX);
 
     expect(result.message).toBe(fixResponse);
+  });
+
+  // -- CI passes with findings — agent reviews --------------------------------
+
+  test("presents findings to agent when CI passes with annotations", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "Unused variable",
+        file: "src/app.ts",
+        line: 10,
+        rule: "no-unused-vars",
+        checkRunId: 500,
+        checkRunName: "ESLint",
+      },
+    ];
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+    const getHeadSha = vi.fn().mockReturnValue("same-sha");
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
+      resume: vi.fn().mockReturnValue(makeStream(makeResult())),
+    };
+
+    const opts = makeOpts({ agent, getCiStatus, getHeadSha });
+    const stage = createCiCheckStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    // Agent was invoked with the findings prompt (not the fix prompt).
+    expect(agent.invoke).toHaveBeenCalledWith(
+      expect.stringContaining("CI Findings"),
+      expect.any(Object),
+    );
+    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    expect(invokedPrompt).toContain("Unused variable");
+    expect(invokedPrompt).toContain("src/app.ts:10");
+    expect(invokedPrompt).toContain("no-unused-vars");
+
+    // SHA unchanged → findings acknowledged, completed.
+    expect(result.outcome).toBe("completed");
+    expect(result.message).toContain("Findings were reviewed");
+  });
+
+  test("returns not_approved when agent pushes a fix for findings", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "Unused import",
+        file: "src/index.ts",
+        line: 1,
+        checkRunId: 600,
+        checkRunName: "Lint",
+      },
+    ];
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+
+    let shaCall = 0;
+    const shas = ["before-sha", "after-sha"];
+    const getHeadSha = vi.fn().mockImplementation(() => shas[shaCall++]);
+
+    const agent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "Fixed the import." })),
+        ),
+      resume: vi.fn(),
+    };
+
+    const opts = makeOpts({ agent, getCiStatus, getHeadSha });
+    const stage = createCiCheckStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("not_approved");
+    expect(result.message).toBe("Fixed the import.");
+  });
+
+  test("returns error when agent fails during findings review", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "Unused variable",
+        file: "src/app.ts",
+        line: 10,
+        checkRunId: 500,
+        checkRunName: "ESLint",
+      },
+    ];
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+    const getHeadSha = vi.fn().mockReturnValue("sha");
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            status: "error",
+            errorType: "execution_error",
+            stderrText: "crash",
+            responseText: "",
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+
+    const opts = makeOpts({ agent, getCiStatus, getHeadSha });
+    const stage = createCiCheckStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("findings review");
+  });
+
+  test("returns completed with clean pass when no findings", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()]));
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn(),
+    };
+
+    const opts = makeOpts({ agent, getCiStatus });
+    const stage = createCiCheckStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(result.message).toContain("CI checks passed");
+    expect(agent.invoke).not.toHaveBeenCalled();
+  });
+
+  test("routes to findings review when findingsIncomplete even with no findings", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], [], true));
+    const getHeadSha = vi.fn().mockReturnValue("same-sha");
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
+      resume: vi.fn().mockReturnValue(makeStream(makeResult())),
+    };
+
+    const opts = makeOpts({ agent, getCiStatus, getHeadSha });
+    const stage = createCiCheckStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    // Agent was invoked — not the clean-pass exit.
+    expect(agent.invoke).toHaveBeenCalledWith(
+      expect.stringContaining("CI Findings"),
+      expect.any(Object),
+    );
+    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    expect(invokedPrompt).toContain("annotations could not be fetched");
+
+    // SHA unchanged → findings acknowledged.
+    expect(result.outcome).toBe("completed");
+    expect(result.message).toContain("Findings were reviewed");
+  });
+
+  test("includes user instruction in findings prompt", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "Unused variable",
+        file: "src/app.ts",
+        line: 10,
+        checkRunId: 500,
+        checkRunName: "ESLint",
+      },
+    ];
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+    const getHeadSha = vi.fn().mockReturnValue("same-sha");
+
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
+      resume: vi.fn().mockReturnValue(makeStream(makeResult())),
+    };
+
+    const ctx = {
+      ...BASE_CTX,
+      userInstruction: "Ignore the unused variable warnings",
+    };
+    const opts = makeOpts({ agent, getCiStatus, getHeadSha });
+    const stage = createCiCheckStageHandler(opts);
+    await stage.handler(ctx);
+
+    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    expect(invokedPrompt).toContain("Ignore the unused variable warnings");
+  });
+});
+
+// ---- buildCiFindingsPrompt --------------------------------------------------
+
+describe("buildCiFindingsPrompt", () => {
+  const sampleFindings: CiFinding[] = [
+    {
+      level: "warning",
+      message: "Unused variable 'x'",
+      file: "src/app.ts",
+      line: 10,
+      rule: "no-unused-vars",
+      checkRunId: 500,
+      checkRunName: "ESLint",
+    },
+    {
+      level: "notice",
+      message: "Consider simplifying",
+      file: "src/util.ts",
+      line: 25,
+      checkRunId: 500,
+      checkRunName: "ESLint",
+    },
+  ];
+
+  test("includes repo context", () => {
+    const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), sampleFindings);
+    expect(prompt).toContain("Owner: org");
+    expect(prompt).toContain("Repo: repo");
+    expect(prompt).toContain("Branch: issue-42");
+  });
+
+  test("includes issue details", () => {
+    const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), sampleFindings);
+    expect(prompt).toContain("Issue #42: Fix the widget");
+    expect(prompt).toContain("The widget is broken.");
+  });
+
+  test("includes structured findings", () => {
+    const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), sampleFindings);
+    expect(prompt).toContain("CI Findings");
+    expect(prompt).toContain(
+      "src/app.ts:10: [warning] Unused variable 'x' (no-unused-vars)",
+    );
+    expect(prompt).toContain("src/util.ts:25: [notice] Consider simplifying");
+  });
+
+  test("groups findings by check run", () => {
+    const mixed: CiFinding[] = [
+      {
+        level: "warning",
+        message: "Issue A",
+        file: "a.ts",
+        line: 1,
+        checkRunId: 100,
+        checkRunName: "Lint",
+      },
+      {
+        level: "warning",
+        message: "Issue B",
+        file: "b.ts",
+        line: 2,
+        checkRunId: 200,
+        checkRunName: "CodeQL",
+      },
+    ];
+    const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), mixed);
+    expect(prompt).toContain("Lint (check run 100)");
+    expect(prompt).toContain("CodeQL (check run 200)");
+  });
+
+  test("includes doc consistency instructions", () => {
+    const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), sampleFindings);
+    expect(prompt).toContain("CHANGELOG");
+    expect(prompt).toContain("MkDocs");
+  });
+
+  test("includes PR sync instructions", () => {
+    const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), sampleFindings);
+    expect(prompt).toContain("gh pr view");
+    expect(prompt).toContain("gh pr edit");
+  });
+
+  test("includes incomplete note when findingsIncomplete is true", () => {
+    const prompt = buildCiFindingsPrompt(
+      BASE_CTX,
+      makeOpts(),
+      sampleFindings,
+      true,
+    );
+    expect(prompt).toContain("annotations could not be fetched");
+    expect(prompt).toContain("may be incomplete");
+  });
+
+  test("omits incomplete note when findingsIncomplete is false", () => {
+    const prompt = buildCiFindingsPrompt(
+      BASE_CTX,
+      makeOpts(),
+      sampleFindings,
+      false,
+    );
+    expect(prompt).not.toContain("annotations could not be fetched");
+  });
+
+  test("includes user instruction when present", () => {
+    const ctx = { ...BASE_CTX, userInstruction: "Focus on warnings only" };
+    const prompt = buildCiFindingsPrompt(ctx, makeOpts(), sampleFindings);
+    expect(prompt).toContain("Additional feedback");
+    expect(prompt).toContain("Focus on warnings only");
+  });
+
+  test("omits feedback section when no instruction", () => {
+    const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), sampleFindings);
+    expect(prompt).not.toContain("Additional feedback");
   });
 });

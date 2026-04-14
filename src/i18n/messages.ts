@@ -211,8 +211,8 @@ export interface Messages {
 
   "ci.pendingTimeout": (seconds: number) => string;
   "ci.passed": string;
+  "ci.passedWithFindings": string;
   "ci.stillFailing": (attempts: number) => string;
-  "ci.fixLoopExhausted": string;
   "ci.agentError": (detail: string) => string;
   "squash.completed": string;
   "squash.singleCommitSkip": string;

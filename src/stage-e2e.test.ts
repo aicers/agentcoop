@@ -568,7 +568,7 @@ function makeCiRun(overrides: Partial<CiRun> = {}): CiRun {
 const stubGetHeadSha = () => "abc123";
 
 function makeCiStatus(verdict: CiVerdict, runs: CiRun[] = []): CiStatus {
-  return { verdict, runs };
+  return { verdict, runs, findings: [] };
 }
 
 // ---- Stage 4 through pipeline ----------------------------------------------

@@ -46,7 +46,7 @@ function makeCiRun(overrides: Partial<CiRun> = {}): CiRun {
 }
 
 function makeCiStatus(verdict: CiVerdict, runs: CiRun[] = []): CiStatus {
-  return { verdict, runs };
+  return { verdict, runs, findings: [] };
 }
 
 const BASE_CTX: StageContext = {

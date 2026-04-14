@@ -214,9 +214,10 @@ export const en: Messages = {
     `CI checks still pending after ${seconds}s. ` +
     `The pipeline cannot proceed until CI completes.`,
   "ci.passed": "CI checks passed.",
+  "ci.passedWithFindings":
+    "CI checks passed. Findings were reviewed by the agent.",
   "ci.stillFailing": (attempts) =>
     `CI still failing after ${attempts} fix attempt(s).`,
-  "ci.fixLoopExhausted": "CI fix loop exhausted.",
   "ci.agentError": (detail) => `Agent error during CI fix: ${detail}`,
   "squash.completed": "Commits squashed and CI passed.",
   "squash.singleCommitSkip": "Single commit — skipping squash.",
