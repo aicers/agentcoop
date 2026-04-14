@@ -35,6 +35,7 @@ function makeCiRun(overrides: Partial<CiRun> = {}): CiRun {
     conclusion: "success",
     headBranch: "issue-42",
     headSha: "abc123",
+    source: "workflow",
     ...overrides,
   };
 }
@@ -161,7 +162,11 @@ describe("pollCiAndFix", () => {
 
     expect(result.passed).toBe(true);
     expect(agent.invoke).toHaveBeenCalledTimes(1);
-    expect(collectFailureLogs).toHaveBeenCalledWith("org", "repo", 200);
+    expect(collectFailureLogs).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      expect.objectContaining({ databaseId: 200 }),
+    );
     const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as string;
     expect(invokedPrompt).toContain("CI Failure Logs");
@@ -281,8 +286,16 @@ describe("pollCiAndFix", () => {
     await pollCiAndFix(makeOpts({ agent, getCiStatus, collectFailureLogs }));
 
     expect(collectFailureLogs).toHaveBeenCalledTimes(2);
-    expect(collectFailureLogs).toHaveBeenCalledWith("org", "repo", 200);
-    expect(collectFailureLogs).toHaveBeenCalledWith("org", "repo", 201);
+    expect(collectFailureLogs).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      expect.objectContaining({ databaseId: 200 }),
+    );
+    expect(collectFailureLogs).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      expect.objectContaining({ databaseId: 201 }),
+    );
 
     const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as string;
@@ -321,7 +334,43 @@ describe("pollCiAndFix", () => {
     const agent = makeAgent();
     await pollCiAndFix(makeOpts({ agent, getCiStatus, collectFailureLogs }));
 
-    expect(collectFailureLogs).toHaveBeenCalledWith("org", "repo", 300);
+    expect(collectFailureLogs).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      expect.objectContaining({ databaseId: 300 }),
+    );
+  });
+
+  // -- check run failure triggers fix -----------------------------------------
+
+  test("collects logs from failed check runs with source check", async () => {
+    const runs = [
+      makeCiRun({
+        databaseId: 500,
+        name: "CodeQL",
+        conclusion: "failure",
+        source: "check",
+      }),
+    ];
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(makeCiStatus("fail", runs))
+      .mockReturnValueOnce(makeCiStatus("pass"));
+    const collectFailureLogs = vi
+      .fn()
+      .mockReturnValue("CodeQL: SQL injection found");
+
+    const agent = makeAgent();
+    await pollCiAndFix(makeOpts({ agent, getCiStatus, collectFailureLogs }));
+
+    expect(collectFailureLogs).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      expect.objectContaining({ databaseId: 500, source: "check" }),
+    );
+    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    expect(invokedPrompt).toContain("CodeQL: SQL injection found");
   });
 
   // -- fix attempt 1 fails, attempt 2 succeeds -------------------------------
@@ -486,6 +535,61 @@ describe("pollCiAndFix", () => {
       "issue-42",
       "bbb222",
     );
+  });
+
+  // -- transient getCiStatus error retried ------------------------------------
+
+  test("retries on transient getCiStatus error then succeeds", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("502 Bad Gateway");
+      })
+      .mockReturnValueOnce(makeCiStatus("pass"));
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const delay = vi.fn().mockResolvedValue(undefined);
+
+    const result = await pollCiAndFix(makeOpts({ getCiStatus, delay }));
+
+    expect(result.passed).toBe(true);
+    expect(getCiStatus).toHaveBeenCalledTimes(2);
+    expect(delay).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain("502 Bad Gateway");
+
+    warnSpy.mockRestore();
+  });
+
+  test("returns timeout when getCiStatus keeps failing", async () => {
+    const getCiStatus = vi.fn().mockImplementation(() => {
+      throw new Error("persistent failure");
+    });
+
+    let elapsed = 0;
+    const startTime = Date.now();
+    const delay = vi.fn().mockImplementation(async () => {
+      elapsed += 500;
+    });
+    vi.spyOn(Date, "now").mockImplementation(() => startTime + elapsed);
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await pollCiAndFix(
+      makeOpts({
+        getCiStatus,
+        delay,
+        pollIntervalMs: 100,
+        pollTimeoutMs: 1000,
+      }),
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.message).toContain("still pending");
+    expect(warnSpy).toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+    vi.restoreAllMocks();
   });
 
   // -- timeout during fix loop (pending after agent pushes fix) ---------------

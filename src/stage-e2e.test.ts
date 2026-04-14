@@ -560,6 +560,7 @@ function makeCiRun(overrides: Partial<CiRun> = {}): CiRun {
     conclusion: "success",
     headBranch: "issue-5",
     headSha: "abc123",
+    source: "workflow",
     ...overrides,
   };
 }

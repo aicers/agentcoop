@@ -23,7 +23,7 @@
  */
 
 import type { AgentAdapter, AgentResult } from "./agent.js";
-import type { GetCiStatusFn } from "./ci.js";
+import type { CiRun, GetCiStatusFn } from "./ci.js";
 import {
   collectFailureLogs as defaultCollectFailureLogs,
   getCiStatus as defaultGetCiStatus,
@@ -71,7 +71,7 @@ export interface ReviewStageOptions {
   /** Injected for testability. */
   getCiStatus?: GetCiStatusFn;
   /** Injected for testability. */
-  collectFailureLogs?: (owner: string, repo: string, runId: number) => string;
+  collectFailureLogs?: (owner: string, repo: string, run: CiRun) => string;
   /** Injected for testability. Defaults to `worktree.getHeadSha`. */
   getHeadSha?: (cwd: string) => string;
   pollIntervalMs?: number;

@@ -39,6 +39,7 @@ function makeCiRun(overrides: Partial<CiRun> = {}): CiRun {
     conclusion: "success",
     headBranch: "issue-42",
     headSha: "abc123",
+    source: "workflow",
     ...overrides,
   };
 }
@@ -231,7 +232,11 @@ describe("createCiCheckStageHandler", () => {
     const stage = createCiCheckStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
 
-    expect(collectFailureLogs).toHaveBeenCalledWith("org", "repo", 200);
+    expect(collectFailureLogs).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      expect.objectContaining({ databaseId: 200 }),
+    );
     expect(agent.invoke).toHaveBeenCalledWith(
       expect.stringContaining("CI Failure Logs"),
       { cwd: "/tmp/wt" },
@@ -380,8 +385,16 @@ describe("createCiCheckStageHandler", () => {
 
     // Should collect from the two failed runs only
     expect(collectFailureLogs).toHaveBeenCalledTimes(2);
-    expect(collectFailureLogs).toHaveBeenCalledWith("org", "repo", 200);
-    expect(collectFailureLogs).toHaveBeenCalledWith("org", "repo", 201);
+    expect(collectFailureLogs).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      expect.objectContaining({ databaseId: 200 }),
+    );
+    expect(collectFailureLogs).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      expect.objectContaining({ databaseId: 201 }),
+    );
 
     const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as string;
@@ -409,15 +422,52 @@ describe("createCiCheckStageHandler", () => {
     expect(invokedPrompt).toContain("No detailed failure logs available");
   });
 
-  test("propagates getCiStatus exception as thrown error", async () => {
-    const getCiStatus = vi.fn().mockImplementation(() => {
-      throw new Error("network timeout");
-    });
+  test("retries on transient getCiStatus error then succeeds", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("network timeout");
+      })
+      .mockReturnValueOnce(makeCiStatus("pass"));
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const opts = makeOpts({ getCiStatus });
     const stage = createCiCheckStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
 
-    await expect(stage.handler(BASE_CTX)).rejects.toThrow("network timeout");
+    expect(result.outcome).toBe("completed");
+    expect(getCiStatus).toHaveBeenCalledTimes(2);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain("network timeout");
+
+    warnSpy.mockRestore();
+  });
+
+  test("returns timeout error when getCiStatus keeps failing", async () => {
+    const getCiStatus = vi.fn().mockImplementation(() => {
+      throw new Error("persistent API error");
+    });
+
+    let elapsed = 0;
+    const startTime = Date.now();
+    const delay = vi.fn().mockImplementation(async () => {
+      elapsed += 500;
+    });
+    vi.spyOn(Date, "now").mockImplementation(() => startTime + elapsed);
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const opts = makeOpts({ getCiStatus, delay, pollTimeoutMs: 1000 });
+    const stage = createCiCheckStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("still pending");
+    expect(warnSpy).toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+    vi.restoreAllMocks();
   });
 
   test("propagates collectFailureLogs exception as thrown error", async () => {
