@@ -253,6 +253,7 @@ export interface Messages {
   "cleanup.deletingRemoteBranch": string;
   "cleanup.closingPr": string;
   "cleanup.done": string;
+  "cleanup.forceQuitWarning": string;
   "prompt.yesCleanup": string;
   "prompt.noSkipCleanup": string;
 

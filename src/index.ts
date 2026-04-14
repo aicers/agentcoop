@@ -12,6 +12,10 @@ import {
   remoteBranchExists,
   stopDockerCompose,
 } from "./cleanup.js";
+import {
+  type CleanupInterruptState,
+  resilientConfirm,
+} from "./cleanup-confirm.js";
 import { createCodexAdapter } from "./codex-adapter.js";
 import type { NotificationSettings, PipelineSettings } from "./config.js";
 import { loadConfig } from "./config.js";
@@ -148,6 +152,10 @@ interface CleanupResult {
 
 /**
  * Run post-pipeline cancellation cleanup using interactive prompts.
+ *
+ * Each `confirm()` call is wrapped with {@link resilientConfirm} so that
+ * Ctrl+C during a prompt increments the shared interrupt counter instead
+ * of silently aborting the whole cleanup flow.
  */
 async function runCancellationCleanup(opts: {
   owner: string;
@@ -156,8 +164,10 @@ async function runCancellationCleanup(opts: {
   branch: string;
   worktreePath: string;
   prNumber: number | undefined;
+  interruptState: CleanupInterruptState;
 }): Promise<CleanupResult> {
   const m = t();
+  const warn = m["cleanup.forceQuitWarning"];
   const result: CleanupResult = {
     deletedWorktree: false,
     deletedRemoteBranch: false,
@@ -168,10 +178,11 @@ async function runCancellationCleanup(opts: {
 
   // Stop docker compose services.
   if (hasDockerComposeRunning(opts.worktreePath)) {
-    const stop = await confirm({
-      message: m["cleanup.stopDockerCompose"],
-      default: true,
-    });
+    const stop = await resilientConfirm(
+      { message: m["cleanup.stopDockerCompose"], default: true },
+      opts.interruptState,
+      warn,
+    );
     if (stop) {
       console.log(m["cleanup.stoppingServices"]);
       stopDockerCompose(opts.worktreePath);
@@ -179,10 +190,11 @@ async function runCancellationCleanup(opts: {
   }
 
   // Delete local worktree and branch.
-  const deleteWt = await confirm({
-    message: m["cleanup.deleteWorktree"],
-    default: false,
-  });
+  const deleteWt = await resilientConfirm(
+    { message: m["cleanup.deleteWorktree"], default: false },
+    opts.interruptState,
+    warn,
+  );
   if (deleteWt) {
     console.log(m["cleanup.deletingWorktree"]);
     removeWorktree(opts.owner, opts.repo, opts.issueNumber, opts.branch);
@@ -191,10 +203,11 @@ async function runCancellationCleanup(opts: {
 
   // Delete remote branch (only if one was pushed).
   if (remoteBranchExists(opts.owner, opts.repo, opts.branch)) {
-    const delRemote = await confirm({
-      message: m["cleanup.deleteRemoteBranch"](opts.branch),
-      default: false,
-    });
+    const delRemote = await resilientConfirm(
+      { message: m["cleanup.deleteRemoteBranch"](opts.branch), default: false },
+      opts.interruptState,
+      warn,
+    );
     if (delRemote) {
       console.log(m["cleanup.deletingRemoteBranch"]);
       try {
@@ -208,10 +221,11 @@ async function runCancellationCleanup(opts: {
 
   // Close PR (only if one exists).
   if (opts.prNumber !== undefined) {
-    const close = await confirm({
-      message: m["cleanup.closePr"](opts.prNumber),
-      default: false,
-    });
+    const close = await resilientConfirm(
+      { message: m["cleanup.closePr"](opts.prNumber), default: false },
+      opts.interruptState,
+      warn,
+    );
     if (close) {
       console.log(m["cleanup.closingPr"]);
       try {
@@ -817,8 +831,7 @@ try {
     });
   });
 
-  // Remove the SIGINT suppressor so the default handler takes over
-  // (allows Ctrl+C to kill during cleanup prompts).
+  // Remove the SIGINT suppressor installed for the TUI phase.
   process.off("SIGINT", sigintHandler);
 
   console.log();
@@ -835,6 +848,25 @@ try {
     }
     process.stdin.ref();
 
+    // Guard cleanup prompts against accidental Ctrl+C.  The first
+    // Ctrl+C already cancelled the pipeline; during cleanup the user
+    // gets one warning before a second Ctrl+C force-quits.
+    //
+    // The counter is shared between the process-level SIGINT handler
+    // (for interrupts between prompts) and the prompt-level
+    // ExitPromptError handler inside resilientConfirm (for interrupts
+    // during a prompt, which @inquirer/core intercepts on its readline
+    // interface before the process handler can fire).
+    const interruptState: CleanupInterruptState = { count: 0 };
+    const cleanupSigint = () => {
+      interruptState.count++;
+      if (interruptState.count >= 2) {
+        process.exit(1);
+      }
+      console.log(`\n${m["cleanup.forceQuitWarning"]}`);
+    };
+    process.on("SIGINT", cleanupSigint);
+
     try {
       const cleanup = await runCancellationCleanup({
         owner,
@@ -843,6 +875,7 @@ try {
         branch: wt.branch,
         worktreePath: wt.path,
         prNumber: runState.prNumber ?? findPrNumber(owner, repo, wt.branch),
+        interruptState,
       });
 
       // If the user destroyed resume prerequisites (worktree, remote
@@ -858,6 +891,8 @@ try {
       }
     } catch {
       // If cleanup prompts fail (e.g. second Ctrl+C), just exit.
+    } finally {
+      process.off("SIGINT", cleanupSigint);
     }
   } else {
     console.log();
