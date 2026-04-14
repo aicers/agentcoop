@@ -994,7 +994,27 @@ describe("StatusBar", () => {
     expect(frame).not.toContain("completed");
   });
 
-  test("increments review count on stage:exit for review stage", async () => {
+  test("increments review count on review:posted event", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box width={200}>
+        <StatusBar
+          emitter={emitter}
+          owner="aicers"
+          repo="agentcoop"
+          issueNumber={49}
+        />
+      </Box>,
+    );
+
+    emitter.emit("review:posted", { round: 1 });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame();
+    expect(frame).toContain("Completed: self-check \u00d70, review \u00d71");
+  });
+
+  test("does not increment review count on stage-7 exit alone", async () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(
       <Box width={200}>
@@ -1016,7 +1036,8 @@ describe("StatusBar", () => {
     await new Promise((r) => setTimeout(r, 50));
 
     const frame = lastFrame();
-    expect(frame).toContain("Completed: self-check \u00d70, review \u00d71");
+    // Review count stays 0 — no review:posted event was emitted.
+    expect(frame).not.toContain("review \u00d71");
   });
 
   test("hides cumulative counts when both are zero", () => {

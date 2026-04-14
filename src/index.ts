@@ -30,6 +30,12 @@ import type {
 import { createDoneStageHandler } from "./pipeline.js";
 import { PipelineEventEmitter } from "./pipeline-events.js";
 import { checkMergeable, findPrNumber } from "./pr.js";
+import {
+  fetchPrComments,
+  type PrComment,
+  parsePrReviewState,
+  reconcileWithPr,
+} from "./pr-comments.js";
 import { createRebaseHandler } from "./rebase.js";
 import {
   deleteRunState,
@@ -423,6 +429,41 @@ try {
     startFromStage = 5;
   }
 
+  // Reconcile local review-loop state with PR comments on resume.
+  if (resuming && savedState) {
+    // Ensure PR number is up to date.
+    if (savedState.prNumber === undefined) {
+      savedState.prNumber = findPrNumber(owner, repo, wt.branch);
+    }
+    if (savedState.prNumber !== undefined) {
+      let prComments: PrComment[];
+      try {
+        prComments = fetchPrComments(owner, repo, savedState.prNumber);
+      } catch (err) {
+        console.error(
+          `\n  PR comment fetch failed for PR #${savedState.prNumber}.`,
+        );
+        console.error(
+          "  Cannot reconcile local state with PR — aborting resume.",
+        );
+        console.error(
+          `  Cause: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        process.exit(1);
+      }
+      const prState = parsePrReviewState(prComments);
+      const { warnings } = reconcileWithPr(savedState, prState);
+      for (const w of warnings) {
+        console.warn(`  ${w}`);
+      }
+      // Update startFromStage if reconciliation demoted currentStage.
+      if (startFromStage !== undefined) {
+        startFromStage = savedState.currentStage;
+      }
+      saveRunState(savedState);
+    }
+  }
+
   console.log();
   console.log(m["boot.startingPipeline"](owner, repo, issueNumber, resuming));
   console.log(m["boot.agentA"](modelDisplayName(agentAConfig)));
@@ -502,6 +543,24 @@ try {
       agentA,
       agentB,
       ...issueCtx,
+      getPrNumber: () => runState.prNumber,
+      onReviewProgress: (subStep, verdict) => {
+        runState.reviewSubStep = subStep;
+        if (verdict !== undefined) {
+          runState.lastVerdict = verdict;
+        } else if (subStep === "review" || subStep === "verdict") {
+          // Entering a pre-verdict step for a (possibly new) round —
+          // clear the stale verdict from the previous round so that
+          // reconciliation does not falsely invalidate sessions.
+          runState.lastVerdict = undefined;
+        }
+        saveRunState(runState);
+      },
+      onReviewPosted: (round) => {
+        runState.reviewCount = round;
+        saveRunState(runState);
+        emitter.emit("review:posted", { round });
+      },
     }),
     autoBudget: pipelineSettings.reviewAutoRounds,
   };
@@ -519,6 +578,10 @@ try {
     currentStage: 2,
     stageLoopCount: 0,
     reviewRound: 0,
+    selfCheckCount: 0,
+    reviewCount: 0,
+    reviewSubStep: undefined,
+    lastVerdict: undefined,
     executionMode,
     agentA: {
       cli: agentAConfig.cli,
@@ -555,6 +618,14 @@ try {
     | undefined;
 
   const emitter = new PipelineEventEmitter();
+
+  // Persist selfCheckCount on stage-3 exit.
+  emitter.on("stage:exit", (ev) => {
+    if (ev.stageNumber === 3) {
+      runState.selfCheckCount += 1;
+      saveRunState(runState);
+    }
+  });
 
   const doneStage = createDoneStageHandler({
     events: emitter,
@@ -741,6 +812,8 @@ try {
       cliTypeA: agentAConfig.cli,
       cliTypeB: agentBConfig.cli,
       notifications,
+      initialSelfCheckCount: runState.selfCheckCount,
+      initialReviewCount: runState.reviewCount,
     });
   });
 
@@ -748,9 +821,6 @@ try {
   // (allows Ctrl+C to kill during cleanup prompts).
   process.off("SIGINT", sigintHandler);
 
-  console.error(
-    `[done-stage-debug] pipelineResult: ${JSON.stringify(pipelineResult)}`,
-  );
   console.log();
   console.log(pipelineResult.message);
 

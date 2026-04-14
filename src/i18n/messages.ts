@@ -220,6 +220,8 @@ export interface Messages {
   "review.unresolvedItems": (base: string, summary: string) => string;
   "review.fixesApplied": (round: number) => string;
   "review.finalizationUnverified": (issueNumber: number) => string;
+  "review.missingAuthorComment": (round: number) => string;
+  "review.missingReviewerComment": (round: number) => string;
 
   // ---- stage-util errors -------------------------------------------------
 

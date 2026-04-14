@@ -7,6 +7,7 @@ import {
   buildAuthorFixPrompt,
   buildPrFinalizationPrompt,
   buildPrFinalizationVerdictPrompt,
+  buildResumeUnresolvedSummaryPrompt,
   buildReviewPrompt,
   buildReviewVerdictPrompt,
   buildUnresolvedSummaryPrompt,
@@ -116,6 +117,7 @@ function makeOpts(
     pollIntervalMs: 100,
     pollTimeoutMs: 1000,
     emptyRunsGracePeriodMs: 0,
+    postPrComment: vi.fn(),
     ...overrides,
   };
 }
@@ -285,6 +287,17 @@ describe("buildUnresolvedSummaryPrompt", () => {
     // in the dedicated verdict follow-up.
     expect(prompt).not.toContain("NONE");
     expect(prompt).not.toContain("COMPLETED");
+  });
+});
+
+describe("buildResumeUnresolvedSummaryPrompt", () => {
+  test("includes repo context and instructs B to read its review", () => {
+    const prompt = buildResumeUnresolvedSummaryPrompt(BASE_CTX, 2);
+    expect(prompt).toContain("Owner: org");
+    expect(prompt).toContain("Repo: repo");
+    expect(prompt).toContain("Branch: issue-42");
+    expect(prompt).toContain("[Reviewer Round 2]");
+    expect(prompt).toContain("[Reviewer Unresolved Round 2]");
   });
 });
 
@@ -1105,6 +1118,61 @@ describe("createReviewStageHandler", () => {
     expect(result.message).toContain("review verdict clarification");
   });
 
+  test("ambiguous fresh verdict without sessionId invokes B fresh for clarification", async () => {
+    // Regression: when B is invoked fresh for the verdict (no prior
+    // session) and returns an ambiguous response without a sessionId,
+    // the clarification retry must invoke fresh again instead of
+    // crashing with "no session ID".
+    const agentB: AgentAdapter = {
+      invoke: vi
+        .fn()
+        // 1st invoke: review (returns no sessionId)
+        .mockReturnValueOnce(
+          makeStream(
+            makeResult({
+              sessionId: undefined,
+              responseText: "Some review text.",
+            }),
+          ),
+        )
+        // 2nd invoke: fresh verdict (ambiguous, no sessionId)
+        .mockReturnValueOnce(
+          makeStream(
+            makeResult({
+              sessionId: undefined,
+              responseText: "I think it looks okay.",
+            }),
+          ),
+        )
+        // 3rd invoke: fresh clarification → APPROVED
+        .mockReturnValueOnce(
+          makeStream(
+            makeResult({
+              sessionId: "sess-b-fresh",
+              responseText: "APPROVED",
+            }),
+          ),
+        )
+        // subsequent invokes: unresolved summary + verdict
+        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+    };
+
+    const opts = makeOpts({ agentB });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    // Should complete without throwing "no session ID".
+    expect(result.outcome).toBe("completed");
+    // B.invoke called at least 3 times: review, fresh verdict,
+    // fresh clarification.
+    expect(
+      (agentB.invoke as ReturnType<typeof vi.fn>).mock.calls.length,
+    ).toBeGreaterThanOrEqual(3);
+  });
+
   // -- PR finalization clarification paths ----------------------------------------
 
   test("ambiguous finalization verdict → clarification → PR_FINALIZED completes", async () => {
@@ -1532,7 +1600,7 @@ describe("createReviewStageHandler", () => {
     expect(calls[1][0]).toBe("sess-b-after-verdict");
   });
 
-  test("throws when B returns no sessionId (verdict follow-up needs session)", async () => {
+  test("invokes B fresh for verdict when B returns no sessionId", async () => {
     const agentB: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(
         makeStream(
@@ -1547,7 +1615,65 @@ describe("createReviewStageHandler", () => {
 
     const opts = makeOpts({ agentB });
     const stage = createReviewStageHandler(opts);
-    await expect(stage.handler(BASE_CTX)).rejects.toThrow("no session ID");
+    const result = await stage.handler(BASE_CTX);
+
+    // Handler recovers by invoking B fresh for the verdict instead
+    // of crashing.  B is invoked at least twice: review + fresh
+    // verdict (plus further invocations for unresolved summary).
+    expect(
+      (agentB.invoke as ReturnType<typeof vi.fn>).mock.calls.length,
+    ).toBeGreaterThanOrEqual(2);
+    expect(result.outcome).toBe("completed");
+  });
+
+  test("uses resume prompt with repo context for unresolved summary when no B session", async () => {
+    // When PR comments show an APPROVED verdict for the current round,
+    // the handler skips straight to unresolved_summary with no B session.
+    // It should invoke B fresh with the resume prompt that includes
+    // repo context and instructions to read the review from the PR.
+    const agentB: AgentAdapter = {
+      invoke: vi
+        .fn()
+        // 1st invoke: unresolved summary work step (fresh, no session)
+        .mockReturnValueOnce(
+          makeStream(
+            makeResult({
+              sessionId: "sess-b-fresh",
+              responseText: "No unresolved items.",
+            }),
+          ),
+        )
+        // 2nd invoke: unresolved summary verdict
+        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+    };
+
+    const opts = makeOpts({
+      agentB,
+      getPrNumber: () => 99,
+      fetchPrComments: () => [
+        // APPROVED verdict already posted — handler enters at
+        // unresolved_summary with no B session.
+        { body: "**[Reviewer Round 1]** Review.", user: { login: "bot" } },
+        {
+          body: "[Review Verdict Round 1: APPROVED]",
+          user: { login: "bot" },
+        },
+      ],
+    });
+    const stage = createReviewStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    // B.invoke should have been called (not resume) since there's
+    // no session, and the prompt should contain repo context.
+    const invokeCall = (agentB.invoke as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    const prompt: string = invokeCall[0];
+    expect(prompt).toContain("Owner: org");
+    expect(prompt).toContain("Repo: repo");
+    expect(prompt).toContain("[Reviewer Round 1]");
   });
 
   // -- PR finalization on approval ---------------------------------------------
@@ -2202,7 +2328,7 @@ describe("createReviewStageHandler", () => {
     expect(result.message).not.toContain("Unresolved items:");
   });
 
-  test("throws when B returns no sessionId on lastAutoIteration (verdict follow-up needs session)", async () => {
+  test("invokes B fresh for verdict when B returns no sessionId on lastAutoIteration", async () => {
     const agentB: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(
         makeStream(
@@ -2218,7 +2344,12 @@ describe("createReviewStageHandler", () => {
     const opts = makeOpts({ agentB });
     const stage = createReviewStageHandler(opts);
     const ctx = { ...BASE_CTX, lastAutoIteration: true };
-    await expect(stage.handler(ctx)).rejects.toThrow("no session ID");
+    const result = await stage.handler(ctx);
+
+    // Handler recovers by invoking B fresh instead of crashing.
+    expect(agentB.invoke).toHaveBeenCalledTimes(2);
+    // Result depends on downstream mocks, but should not throw.
+    expect(result).toBeDefined();
   });
 
   // -- CI passes after fix on second attempt ----------------------------------
@@ -2375,5 +2506,526 @@ describe("onSessionId", () => {
     await stage.handler(ctx);
     expect(sessionCalls).toContainEqual(["b", "sess-b-1"]);
     expect(sessionCalls).toContainEqual(["a", "sess-a-1"]);
+  });
+});
+
+// ---- verdict posting ---------------------------------------------------------
+
+describe("verdict posting", () => {
+  test("posts APPROVED verdict as PR comment", async () => {
+    const postPrComment = vi.fn();
+    const opts = makeOpts({
+      getPrNumber: () => 99,
+      postPrComment,
+      fetchPrComments: () => [
+        { body: "**[Reviewer Round 1]** LGTM.", user: { login: "bot" } },
+      ],
+    });
+    const stage = createReviewStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    expect(postPrComment).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      99,
+      "[Review Verdict Round 1: APPROVED]",
+    );
+  });
+
+  test("posts NOT_APPROVED verdict as PR comment", async () => {
+    const postPrComment = vi.fn();
+    const agentB: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-b", responseText: "Needs work." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
+    };
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-a", responseText: "Fixed." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+    const opts = makeOpts({
+      agentA,
+      agentB,
+      getPrNumber: () => 99,
+      postPrComment,
+      fetchPrComments: () => [
+        { body: "**[Reviewer Round 1]** Review.", user: { login: "bot" } },
+      ],
+    });
+    const stage = createReviewStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    expect(postPrComment).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      99,
+      "[Review Verdict Round 1: NOT_APPROVED]",
+    );
+  });
+
+  test("skips verdict posting when getPrNumber returns undefined", async () => {
+    const postPrComment = vi.fn();
+    const opts = makeOpts({
+      getPrNumber: () => undefined,
+      postPrComment,
+    });
+    const stage = createReviewStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    expect(postPrComment).not.toHaveBeenCalled();
+  });
+
+  test("propagates error when verdict posting throws", async () => {
+    const postPrComment = vi.fn().mockImplementation(() => {
+      throw new Error("network error");
+    });
+    const opts = makeOpts({
+      getPrNumber: () => 99,
+      postPrComment,
+      fetchPrComments: () => [
+        { body: "**[Reviewer Round 1]** Review.", user: { login: "bot" } },
+      ],
+    });
+    const stage = createReviewStageHandler(opts);
+
+    // Verdict posting is required — failure must propagate so the
+    // pipeline can retry or surface the error.
+    await expect(stage.handler(BASE_CTX)).rejects.toThrow("network error");
+  });
+});
+
+// ---- comment validation ------------------------------------------------------
+
+describe("comment validation", () => {
+  test("returns error when expected author comment is missing for round > 1", async () => {
+    const opts = makeOpts({
+      getPrNumber: () => 99,
+      fetchPrComments: () => [
+        // Only reviewer round 1 — no author round 1 comment.
+        { body: "**[Reviewer Round 1]** Review.", user: { login: "bot" } },
+      ],
+    });
+    const stage = createReviewStageHandler(opts);
+    const ctx: StageContext = { ...BASE_CTX, iteration: 1 }; // round 2
+    const result = await stage.handler(ctx);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("[Author Round 1]");
+  });
+
+  test("refetches comments after review step so reviewer comment is validated", async () => {
+    // After posting the review, the handler refetches PR comments
+    // so the reviewer comment validation sees the newly posted
+    // comment instead of skipping verification.
+    const agentB: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-b", responseText: "Needs work." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
+    };
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-a", responseText: "Fixed." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(
+          makeStream(makeResult({ responseText: "COMPLETED" })),
+        ),
+    };
+    const fetchPrComments = vi
+      .fn()
+      // First call: no comments yet (sub-step derivation).
+      .mockReturnValueOnce([])
+      // Second call (refetch after review): reviewer comment now exists.
+      .mockReturnValueOnce([
+        {
+          body: "**[Reviewer Round 1]** Needs work.",
+          user: { login: "bot" },
+        },
+      ]);
+    const opts = makeOpts({
+      agentA,
+      agentB,
+      getPrNumber: () => 99,
+      fetchPrComments,
+      getCiStatus: () => ({
+        verdict: "pass" as const,
+        runs: [makeCiRun()],
+      }),
+    });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("not_approved");
+    // The handler called fetchPrComments twice: once for derivation,
+    // once as a refetch after posting the review.
+    expect(fetchPrComments).toHaveBeenCalledTimes(2);
+  });
+
+  test("returns error when refetch after review does not find reviewer comment", async () => {
+    // If the reviewer comment was never actually posted (e.g., agent
+    // error on the PR side), the refetch should catch the gap.
+    const agentB: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-b", responseText: "Needs work." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
+    };
+    const fetchPrComments = vi.fn().mockReturnValue([]);
+    const postPrComment = vi.fn();
+    const opts = makeOpts({
+      agentB,
+      getPrNumber: () => 99,
+      fetchPrComments,
+      postPrComment,
+    });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("[Reviewer Round 1]");
+    expect(postPrComment).not.toHaveBeenCalled();
+  });
+
+  test("returns error on APPROVED path when reviewer comment is missing", async () => {
+    // Even when the verdict is APPROVED, the handler must verify
+    // that the reviewer comment actually made it onto the PR.
+    const agentB: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-b", responseText: "LGTM." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "APPROVED" }))),
+    };
+    const fetchPrComments = vi.fn().mockReturnValue([]);
+    const postPrComment = vi.fn();
+    const opts = makeOpts({
+      agentB,
+      getPrNumber: () => 99,
+      fetchPrComments,
+      postPrComment,
+    });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("[Reviewer Round 1]");
+    expect(postPrComment).not.toHaveBeenCalled();
+  });
+
+  test("skips comment validation when getPrNumber returns undefined", async () => {
+    const fetchPrComments = vi.fn();
+    const agentB: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-b", responseText: "Needs work." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
+    };
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-a", responseText: "Fixed." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+    const opts = makeOpts({
+      agentA,
+      agentB,
+      getPrNumber: () => undefined,
+      fetchPrComments,
+    });
+    const stage = createReviewStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    // fetchPrComments should not be called when PR number is undefined.
+    expect(fetchPrComments).not.toHaveBeenCalled();
+  });
+
+  test("proceeds when expected author comment exists for round > 1", async () => {
+    const agentB: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-b", responseText: "Still issues." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        )
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+        ),
+    };
+    const agentA: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-a", responseText: "Fixed again." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+    };
+    const opts = makeOpts({
+      agentA,
+      agentB,
+      getPrNumber: () => 99,
+      fetchPrComments: () => [
+        { body: "**[Reviewer Round 1]** Review.", user: { login: "bot" } },
+        { body: "**[Author Round 1]** Fixes.", user: { login: "bot" } },
+        { body: "**[Reviewer Round 2]** More issues.", user: { login: "bot" } },
+      ],
+    });
+    const stage = createReviewStageHandler(opts);
+    const ctx: StageContext = { ...BASE_CTX, iteration: 1 }; // round 2
+    const result = await stage.handler(ctx);
+
+    // Should proceed (not return error about missing comment).
+    expect(result.outcome).not.toBe("error");
+  });
+
+  test("resume at verdict returns error before invoking Agent B when reviewer comment is missing for current round", async () => {
+    // Regression: if deriveReviewSubStep determines we're at the
+    // verdict sub-step (maxReviewerRound >= round) but the specific
+    // round's reviewer comment is absent (e.g., round 2 exists but
+    // round 1 does not), the handler must NOT invoke Agent B with
+    // buildResumeVerdictPrompt referencing the missing comment.
+    const agentB: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn(),
+    };
+    const opts = makeOpts({
+      agentB,
+      getPrNumber: () => 99,
+      fetchPrComments: () => [
+        // Round 2 reviewer comment exists but round 1 is missing.
+        // parsePrReviewState returns maxReviewerRound=2, so
+        // deriveReviewSubStep(prState, 1) yields subStep="verdict"
+        // (hasReview is true since 2 >= 1, but no verdict exists).
+        // However, hasComment(reviewerRoundPattern(1)) is false.
+        { body: "**[Reviewer Round 2]** Review.", user: { login: "bot" } },
+      ],
+    });
+    const stage = createReviewStageHandler(opts);
+    // No saved session — handler takes the fresh-invoke branch for
+    // the verdict prompt, which is where the guard must fire.
+    const ctx: StageContext = { ...BASE_CTX, savedAgentBSessionId: undefined };
+    const result = await stage.handler(ctx);
+
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("[Reviewer Round 1]");
+    // Agent B must not have been called at all.
+    expect(agentB.invoke).not.toHaveBeenCalled();
+    expect(agentB.resume).not.toHaveBeenCalled();
+  });
+});
+
+// ---- onReviewPosted callback --------------------------------------------------
+
+describe("onReviewPosted", () => {
+  test("fires with correct round when review step posts a comment", async () => {
+    const onReviewPosted = vi.fn();
+    const fetchPrComments = vi
+      .fn()
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([
+        {
+          body: "**[Reviewer Round 1]** Looks good.",
+          user: { login: "bot" },
+        },
+      ]);
+    const opts = makeOpts({
+      getPrNumber: () => 99,
+      fetchPrComments,
+      onReviewPosted,
+    });
+    const stage = createReviewStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    expect(onReviewPosted).toHaveBeenCalledWith(1);
+  });
+
+  test("does not fire when resuming at verdict (no new review posted)", async () => {
+    const onReviewPosted = vi.fn();
+    const opts = makeOpts({
+      getPrNumber: () => 99,
+      fetchPrComments: () => [
+        {
+          body: "**[Reviewer Round 1]** Needs work.",
+          user: { login: "bot" },
+        },
+      ],
+      onReviewPosted,
+    });
+    const stage = createReviewStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    expect(onReviewPosted).not.toHaveBeenCalled();
+  });
+
+  test("does not fire when refetch still cannot find the reviewer comment", async () => {
+    const onReviewPosted = vi.fn();
+    // Both initial fetch and refetch return no reviewer comment.
+    const fetchPrComments = vi.fn().mockReturnValue([]);
+    const opts = makeOpts({
+      getPrNumber: () => 99,
+      fetchPrComments,
+      onReviewPosted,
+    });
+    const stage = createReviewStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(onReviewPosted).not.toHaveBeenCalled();
+    expect(result.outcome).toBe("error");
+  });
+});
+
+// ---- saved Agent B session reuse on resume ------------------------------------
+
+describe("saved Agent B session reuse on resume", () => {
+  test("resume at verdict reuses saved Agent B session", async () => {
+    const agentB: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi
+        .fn()
+        // 1st resume: review verdict
+        .mockReturnValueOnce(
+          makeStream(makeResult({ responseText: "APPROVED" })),
+        )
+        // 2nd resume: unresolved summary
+        .mockReturnValueOnce(
+          makeStream(
+            makeResult({
+              sessionId: "sess-b-verdict",
+              responseText: "No unresolved items.",
+            }),
+          ),
+        )
+        // 3rd resume: unresolved verdict
+        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+    };
+
+    const opts = makeOpts({
+      agentB,
+      getPrNumber: () => 99,
+      fetchPrComments: () => [
+        // Reviewer comment present — handler derives currentStep=verdict.
+        { body: "**[Reviewer Round 1]** Review.", user: { login: "bot" } },
+      ],
+    });
+    const stage = createReviewStageHandler(opts);
+    await stage.handler({
+      ...BASE_CTX,
+      savedAgentBSessionId: "saved-b-sess",
+    });
+
+    // The verdict step should resume the saved B session, not invoke fresh.
+    expect(agentB.invoke).not.toHaveBeenCalled();
+    const firstResumeCall = (agentB.resume as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(firstResumeCall[0]).toBe("saved-b-sess");
+  });
+
+  test("resume at unresolved_summary reuses saved Agent B session", async () => {
+    const agentB: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi
+        .fn()
+        // 1st resume: unresolved summary
+        .mockReturnValueOnce(
+          makeStream(
+            makeResult({
+              sessionId: "sess-b-unresolved",
+              responseText: "No unresolved items.",
+            }),
+          ),
+        )
+        // 2nd resume: unresolved verdict
+        .mockReturnValue(makeStream(makeResult({ responseText: "NONE" }))),
+    };
+
+    const opts = makeOpts({
+      agentB,
+      getPrNumber: () => 99,
+      fetchPrComments: () => [
+        { body: "**[Reviewer Round 1]** Review.", user: { login: "bot" } },
+        {
+          body: "[Review Verdict Round 1: APPROVED]",
+          user: { login: "bot" },
+        },
+      ],
+    });
+    const stage = createReviewStageHandler(opts);
+    await stage.handler({
+      ...BASE_CTX,
+      savedAgentBSessionId: "saved-b-sess",
+    });
+
+    // The unresolved summary step should resume the saved B session.
+    expect(agentB.invoke).not.toHaveBeenCalled();
+    const firstResumeCall = (agentB.resume as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(firstResumeCall[0]).toBe("saved-b-sess");
   });
 });

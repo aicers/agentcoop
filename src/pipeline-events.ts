@@ -21,6 +21,10 @@ export interface StageNameOverrideEvent {
   stageName: string;
 }
 
+export interface ReviewPostedEvent {
+  round: number;
+}
+
 export interface AgentInvokeEvent {
   agent: "a" | "b";
   type: "invoke" | "resume";
@@ -43,6 +47,7 @@ interface PipelineEventMap {
   "stage:enter": [StageEnterEvent];
   "stage:exit": [StageExitEvent];
   "stage:name-override": [StageNameOverrideEvent];
+  "review:posted": [ReviewPostedEvent];
   "agent:invoke": [AgentInvokeEvent];
 }
 
