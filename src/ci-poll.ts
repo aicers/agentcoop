@@ -16,7 +16,7 @@ import {
 } from "./ci.js";
 import { t } from "./i18n/index.js";
 import type { StageContext } from "./pipeline.js";
-import { buildCiFixPrompt } from "./stage-cicheck.js";
+import { buildCiFindingsPrompt, buildCiFixPrompt } from "./stage-cicheck.js";
 import {
   buildErrorDetail,
   drainToSink,
@@ -108,7 +108,12 @@ async function waitForCi(
       if (elapsed >= pollTimeout) {
         return {
           timedOut: true,
-          ciStatus: { verdict: "pending" as const, runs: [] },
+          ciStatus: {
+            verdict: "pending" as const,
+            runs: [],
+            findings: [],
+            findingsIncomplete: false,
+          },
         };
       }
       await delay(pollInterval);
@@ -163,7 +168,14 @@ export async function pollCiAndFix(
   const emptyGrace =
     options.emptyRunsGracePeriodMs ?? DEFAULT_EMPTY_RUNS_GRACE_PERIOD_MS;
 
-  for (let attempt = 0; attempt <= maxFix; attempt++) {
+  // Track failure-fix and findings-review attempts independently so
+  // that "pass with findings" never exhausts the failure-fix budget.
+  // Always allow at least one findings review even with maxFix = 0.
+  const maxFindingsReviews = Math.max(1, maxFix);
+  let fixAttempts = 0;
+  let findingsReviews = 0;
+
+  while (true) {
     // Read HEAD SHA from the worktree so we only consider CI runs
     // triggered by the most recent push (initial or fix).
     const commitSha = readHeadSha(ctx.worktreePath);
@@ -187,17 +199,73 @@ export async function pollCiAndFix(
       };
     }
 
-    if (ciStatus.verdict === "pass") {
+    if (
+      ciStatus.verdict === "pass" &&
+      ciStatus.findings.length === 0 &&
+      !ciStatus.findingsIncomplete
+    ) {
       return { passed: true, message: t()["ci.passed"] };
     }
 
+    // CI passed with findings — present for agent review.
+    if (ciStatus.verdict === "pass") {
+      if (findingsReviews >= maxFindingsReviews) {
+        // Findings-review budget exhausted — accept as passed.
+        return { passed: true, message: t()["ci.passedWithFindings"] };
+      }
+      findingsReviews++;
+
+      const shaBeforeReview = readHeadSha(ctx.worktreePath);
+
+      const findingsPrompt = buildCiFindingsPrompt(
+        ctx,
+        { issueTitle, issueBody },
+        ciStatus.findings,
+        ciStatus.findingsIncomplete,
+      );
+      ctx.promptSinks?.a?.(findingsPrompt);
+      const reviewStream = agent.invoke(findingsPrompt, {
+        cwd: ctx.worktreePath,
+        onUsage: ctx.usageSinks?.a,
+      });
+      const drained = ctx.streamSinks?.a
+        ? drainToSink(reviewStream, ctx.streamSinks.a)
+        : undefined;
+      const reviewResult = await reviewStream.result;
+      if (drained) await drained;
+
+      if (reviewResult.sessionId) {
+        ctx.onSessionId?.("a", reviewResult.sessionId);
+      }
+
+      if (reviewResult.status === "error") {
+        logAgentFailure(reviewResult, "during CI findings review");
+        const detail = buildErrorDetail(reviewResult);
+        return {
+          passed: false,
+          message: t()["ci.agentError"](detail),
+        };
+      }
+
+      const shaAfterReview = readHeadSha(ctx.worktreePath);
+      if (shaBeforeReview !== shaAfterReview) {
+        // Agent pushed changes — re-poll CI without consuming
+        // the failure-fix budget.
+        continue;
+      }
+
+      // Agent reviewed but did not push — findings acknowledged.
+      return { passed: true, message: t()["ci.passedWithFindings"] };
+    }
+
     // CI failed — if we've exhausted fix attempts, give up.
-    if (attempt >= maxFix) {
+    if (fixAttempts >= maxFix) {
       return {
         passed: false,
         message: t()["ci.stillFailing"](maxFix),
       };
     }
+    fixAttempts++;
 
     // Collect failure logs and send fix prompt to the agent.
     const failedRuns = ciStatus.runs.filter((r) => {
@@ -249,7 +317,4 @@ export async function pollCiAndFix(
 
     // Agent pushed a fix — loop back to poll CI again.
   }
-
-  // Should not reach here, but guard.
-  return { passed: false, message: t()["ci.fixLoopExhausted"] };
 }

@@ -11,6 +11,7 @@ const {
   fetchCiRuns,
   getCiStatus,
   collectFailureLogs,
+  collectFindings,
 } = await import("./ci.js");
 
 const mockExecFileSync = vi.mocked(execFileSync);
@@ -393,25 +394,30 @@ describe("fetchCiRuns", () => {
 // getCiStatus
 // ---------------------------------------------------------------------------
 describe("getCiStatus", () => {
-  test("returns pass verdict for successful runs", () => {
+  test("returns pass verdict for successful runs with empty findings", () => {
     mockExecFileSync.mockReturnValue(JSON.stringify([run()]));
     const status = getCiStatus("org", "repo", "main");
     expect(status.verdict).toBe("pass");
     expect(status.runs).toHaveLength(1);
+    expect(status.findings).toEqual([]);
   });
 
-  test("returns fail verdict for failed runs", () => {
+  test("returns fail verdict with empty findings for failed runs", () => {
     mockExecFileSync.mockReturnValue(
       JSON.stringify([run({ conclusion: "failure" })]),
     );
-    expect(getCiStatus("org", "repo", "main").verdict).toBe("fail");
+    const status = getCiStatus("org", "repo", "main");
+    expect(status.verdict).toBe("fail");
+    expect(status.findings).toEqual([]);
   });
 
-  test("returns pending verdict for in-progress runs", () => {
+  test("returns pending verdict with empty findings for in-progress runs", () => {
     mockExecFileSync.mockReturnValue(
       JSON.stringify([run({ status: "in_progress" })]),
     );
-    expect(getCiStatus("org", "repo", "main").verdict).toBe("pending");
+    const status = getCiStatus("org", "repo", "main");
+    expect(status.verdict).toBe("pending");
+    expect(status.findings).toEqual([]);
   });
 
   test("passes commitSha to fetchCiRuns and evaluates filtered result", () => {
@@ -433,6 +439,38 @@ describe("getCiStatus", () => {
     const status = getCiStatus("org", "repo", "main", "zzz");
     expect(status.verdict).toBe("pass");
     expect(status.runs).toEqual([]);
+  });
+
+  test("sets findingsIncomplete when annotation fetch fails on pass", () => {
+    const checkRunsResponse = {
+      check_runs: [
+        {
+          id: 800,
+          name: "Linter",
+          status: "completed",
+          conclusion: "success",
+          head_sha: "abc123",
+          output: { title: null, summary: null, text: null },
+          annotations_count: 2,
+          app: { slug: "some-linter" },
+        },
+      ],
+    };
+
+    mockExecFileSync
+      // gh run list → no workflow runs
+      .mockReturnValueOnce("[]")
+      // gh api check-runs → one check run with annotations
+      .mockReturnValueOnce(JSON.stringify(checkRunsResponse))
+      // gh api annotations → fails
+      .mockImplementationOnce(() => {
+        throw new Error("transient API error");
+      });
+
+    const status = getCiStatus("org", "repo", "main");
+    expect(status.verdict).toBe("pass");
+    expect(status.findings).toEqual([]);
+    expect(status.findingsIncomplete).toBe(true);
   });
 
   test("failing check run causes fail verdict", () => {
@@ -698,6 +736,125 @@ describe("collectFailureLogs", () => {
 });
 
 // ---------------------------------------------------------------------------
+// collectFindings
+// ---------------------------------------------------------------------------
+describe("collectFindings", () => {
+  test("returns empty findings for workflow-only runs", () => {
+    const runs = [run({ source: "workflow" })];
+    const result = collectFindings("org", "repo", runs);
+    expect(result.findings).toEqual([]);
+    expect(result.incomplete).toBe(false);
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+
+  test("returns empty findings when annotationsCount is 0", () => {
+    const runs = [
+      run({ source: "check", annotationsCount: 0, databaseId: 100 }),
+    ];
+    const result = collectFindings("org", "repo", runs);
+    expect(result.findings).toEqual([]);
+    expect(result.incomplete).toBe(false);
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+
+  test("collects findings from check run with annotations", () => {
+    const annotations = [
+      {
+        path: "src/app.ts",
+        start_line: 10,
+        end_line: 10,
+        annotation_level: "warning",
+        message: "Unused variable",
+        title: "no-unused-vars",
+      },
+      {
+        path: "src/util.ts",
+        start_line: 25,
+        end_line: 25,
+        annotation_level: "notice",
+        message: "Consider simplifying",
+      },
+    ];
+
+    mockExecFileSync.mockReturnValueOnce(JSON.stringify([annotations]));
+
+    const runs = [
+      run({
+        databaseId: 500,
+        name: "ESLint",
+        source: "check",
+        annotationsCount: 2,
+      }),
+    ];
+    const result = collectFindings("org", "repo", runs);
+
+    expect(result.findings).toHaveLength(2);
+    expect(result.incomplete).toBe(false);
+    expect(result.findings[0]).toEqual({
+      level: "warning",
+      message: "Unused variable",
+      file: "src/app.ts",
+      line: 10,
+      rule: "no-unused-vars",
+      checkRunId: 500,
+      checkRunName: "ESLint",
+    });
+    expect(result.findings[1]).toEqual({
+      level: "notice",
+      message: "Consider simplifying",
+      file: "src/util.ts",
+      line: 25,
+      rule: undefined,
+      checkRunId: 500,
+      checkRunName: "ESLint",
+    });
+  });
+
+  test("sets incomplete flag when annotation fetch fails", () => {
+    mockExecFileSync.mockImplementationOnce(() => {
+      throw new Error("API error");
+    });
+
+    const runs = [
+      run({ databaseId: 600, source: "check", annotationsCount: 1 }),
+    ];
+    const result = collectFindings("org", "repo", runs);
+    expect(result.findings).toEqual([]);
+    expect(result.incomplete).toBe(true);
+  });
+
+  test("skips workflow runs and collects from check runs only", () => {
+    const annotations = [
+      {
+        path: "src/index.ts",
+        start_line: 1,
+        end_line: 1,
+        annotation_level: "warning",
+        message: "Missing return type",
+        title: "explicit-return-type",
+      },
+    ];
+
+    mockExecFileSync.mockReturnValueOnce(JSON.stringify([annotations]));
+
+    const runs = [
+      run({ databaseId: 1, source: "workflow" }),
+      run({
+        databaseId: 700,
+        name: "TypeCheck",
+        source: "check",
+        annotationsCount: 1,
+      }),
+    ];
+    const result = collectFindings("org", "repo", runs);
+
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].checkRunId).toBe(700);
+    expect(result.incomplete).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // edge cases
 // ---------------------------------------------------------------------------
 describe("edge cases", () => {
@@ -719,11 +876,12 @@ describe("edge cases", () => {
     ).toBe("fail");
   });
 
-  test("getCiStatus with empty runs returns pass", () => {
+  test("getCiStatus with empty runs returns pass with empty findings", () => {
     mockExecFileSync.mockReturnValue("[]");
     const status = getCiStatus("org", "repo", "main");
     expect(status.verdict).toBe("pass");
     expect(status.runs).toEqual([]);
+    expect(status.findings).toEqual([]);
   });
 
   test("normaliseCiConclusion handles null status", () => {

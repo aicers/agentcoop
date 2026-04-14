@@ -39,10 +39,36 @@ export interface CiRun {
 
 export type CiVerdict = "pass" | "fail" | "pending";
 
+/** A single annotation-level finding from a check run. */
+export interface CiFinding {
+  /** Annotation level: "notice", "warning", or "failure". */
+  level: string;
+  /** Human-readable message from the annotation. */
+  message: string;
+  /** File path relative to the repository root. */
+  file: string;
+  /** Start line in the file. */
+  line: number;
+  /** Optional annotation title (often a rule ID). */
+  rule?: string;
+  /** Database ID of the check run that produced this finding. */
+  checkRunId: number;
+  /** Name of the check run that produced this finding. */
+  checkRunName: string;
+}
+
 export interface CiStatus {
   verdict: CiVerdict;
   /** Individual check runs used to compute the verdict. */
   runs: CiRun[];
+  /** Annotation findings from passing check runs. */
+  findings: CiFinding[];
+  /**
+   * True when at least one annotation fetch failed for a check run
+   * that reported a non-zero annotation count.  Consumers must not
+   * treat an empty `findings` array as "clean" when this is set.
+   */
+  findingsIncomplete?: boolean;
 }
 
 /**
@@ -140,6 +166,80 @@ interface CheckRunAnnotation {
   title?: string;
 }
 
+// ---- annotation collection -----------------------------------------------
+
+/**
+ * Fetch annotations for a single check run from the GitHub Checks API.
+ * Paginates automatically to collect all pages.
+ */
+function fetchCheckRunAnnotations(
+  owner: string,
+  repo: string,
+  checkRunId: number,
+): CheckRunAnnotation[] {
+  const raw = execFileSync(
+    "gh",
+    [
+      "api",
+      "--paginate",
+      "--slurp",
+      `repos/${owner}/${repo}/check-runs/${checkRunId}/annotations?per_page=100`,
+    ],
+    { encoding: "utf-8" },
+  );
+  const pages: CheckRunAnnotation[][] = JSON.parse(raw);
+  return pages.flat();
+}
+
+/**
+ * Collect annotation-level findings from a set of CI runs.
+ *
+ * Only check runs (source = "check") with a non-zero annotation count
+ * are inspected.  Returns an empty array when no annotations exist.
+ */
+export function collectFindings(
+  owner: string,
+  repo: string,
+  runs: CiRun[],
+): { findings: CiFinding[]; incomplete: boolean } {
+  const findings: CiFinding[] = [];
+  let incomplete = false;
+
+  for (const run of runs) {
+    if (
+      run.source !== "check" ||
+      run.annotationsCount == null ||
+      run.annotationsCount === 0
+    ) {
+      continue;
+    }
+
+    let annotations: CheckRunAnnotation[];
+    try {
+      annotations = fetchCheckRunAnnotations(owner, repo, run.databaseId);
+    } catch {
+      // Annotation fetch failed — flag as incomplete so callers
+      // do not treat an empty findings list as a clean pass.
+      incomplete = true;
+      continue;
+    }
+
+    for (const a of annotations) {
+      findings.push({
+        level: a.annotation_level,
+        message: a.message,
+        file: a.path,
+        line: a.start_line,
+        rule: a.title,
+        checkRunId: run.databaseId,
+        checkRunName: run.name,
+      });
+    }
+  }
+
+  return { findings, incomplete };
+}
+
 // ---- gh CLI wrappers -----------------------------------------------------
 
 /**
@@ -220,23 +320,10 @@ function collectCheckRunLogs(owner: string, repo: string, run: CiRun): string {
     if (text) sections.push(`Details: ${text}`);
   }
 
-  // Fetch annotations when present, paginating to collect all pages.
-  // --slurp wraps each page into an outer JSON array so the entire
-  // output is valid JSON even when multiple pages are returned.
+  // Fetch annotations when present via the shared helper.
   if (annotationsCount != null && annotationsCount > 0) {
     try {
-      const raw = execFileSync(
-        "gh",
-        [
-          "api",
-          "--paginate",
-          "--slurp",
-          `repos/${owner}/${repo}/check-runs/${checkRunId}/annotations?per_page=100`,
-        ],
-        { encoding: "utf-8" },
-      );
-      const pages: CheckRunAnnotation[][] = JSON.parse(raw);
-      const annotations: CheckRunAnnotation[] = pages.flat();
+      const annotations = fetchCheckRunAnnotations(owner, repo, checkRunId);
       if (annotations.length > 0) {
         const lines = annotations.map(
           (a) =>
@@ -317,7 +404,14 @@ export function getCiStatus(
   commitSha?: string,
 ): CiStatus {
   const runs = fetchCiRuns(owner, repo, branch, commitSha);
-  return { verdict: evaluateCiRuns(runs), runs };
+  const verdict = evaluateCiRuns(runs);
+  // Collect annotation findings only when CI passes — avoids
+  // redundant API calls during pending/failing polls.
+  const { findings, incomplete } =
+    verdict === "pass"
+      ? collectFindings(owner, repo, runs)
+      : { findings: [] as CiFinding[], incomplete: false };
+  return { verdict, runs, findings, findingsIncomplete: incomplete };
 }
 
 /**

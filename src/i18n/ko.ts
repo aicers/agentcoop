@@ -248,9 +248,10 @@ export const ko: Messages = {
     `CI 검사가 ${seconds}초 후에도 보류 중입니다. ` +
     `CI가 완료될 때까지 파이프라인을 진행할 수 없습니다.`,
   "ci.passed": "CI 검사를 통과했습니다.",
+  "ci.passedWithFindings":
+    "CI 검사를 통과했습니다. 에이전트가 발견 사항을 검토했습니다.",
   "ci.stillFailing": (attempts) =>
     `${attempts}회 수정 시도 후에도 CI가 여전히 실패합니다.`,
-  "ci.fixLoopExhausted": "CI 수정 반복이 소진되었습니다.",
   "ci.agentError": (detail) => `CI 수정 중 에이전트 오류: ${detail}`,
   "squash.completed": "커밋이 스쿼시되고 CI를 통과했습니다.",
   "squash.singleCommitSkip": "커밋이 하나뿐이므로 스쿼시를 건너뜁니다.",

@@ -12,7 +12,7 @@
  */
 
 import type { AgentAdapter } from "./agent.js";
-import type { CiRun, CiStatus, GetCiStatusFn } from "./ci.js";
+import type { CiFinding, CiRun, CiStatus, GetCiStatusFn } from "./ci.js";
 import {
   collectFailureLogs as defaultCollectFailureLogs,
   getCiStatus as defaultGetCiStatus,
@@ -110,6 +110,86 @@ export function buildCiFixPrompt(
   return lines.join("\n");
 }
 
+/**
+ * Format findings into a structured block for inclusion in the
+ * findings-review prompt.
+ */
+function formatFindings(findings: CiFinding[]): string {
+  const byRun = new Map<string, CiFinding[]>();
+  for (const f of findings) {
+    const key = `${f.checkRunName} (check run ${f.checkRunId})`;
+    const group = byRun.get(key) ?? [];
+    group.push(f);
+    byRun.set(key, group);
+  }
+
+  const sections: string[] = [];
+  for (const [header, group] of byRun) {
+    const lines = group.map((f) => {
+      const rule = f.rule ? ` (${f.rule})` : "";
+      return `- ${f.file}:${f.line}: [${f.level}] ${f.message}${rule}`;
+    });
+    sections.push(`### ${header}\n${lines.join("\n")}`);
+  }
+  return sections.join("\n\n");
+}
+
+export function buildCiFindingsPrompt(
+  ctx: StageContext,
+  opts: Pick<CiCheckStageOptions, "issueTitle" | "issueBody">,
+  findings: CiFinding[],
+  findingsIncomplete?: boolean,
+): string {
+  const lines = [
+    `CI passed but check runs reported findings (annotations).`,
+    `Review the findings below and decide whether any should be addressed.`,
+    ``,
+    `## Repository`,
+    `- Owner: ${ctx.owner}`,
+    `- Repo: ${ctx.repo}`,
+    `- Branch: ${ctx.branch}`,
+    `- Worktree: ${ctx.worktreePath}`,
+    ``,
+    `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
+    ``,
+    opts.issueBody,
+    ``,
+    `## CI Findings`,
+    ``,
+    formatFindings(findings),
+  ];
+
+  if (findingsIncomplete) {
+    lines.push(
+      ``,
+      `**Note:** Some check run annotations could not be fetched.`,
+      `The findings above may be incomplete.  Check the PR's Checks`,
+      `tab for the full list of annotations.`,
+    );
+  }
+
+  lines.push(
+    ``,
+    `## Instructions`,
+    ``,
+    `For each finding, decide whether it should be fixed or can be`,
+    `safely ignored.  If you fix any findings:`,
+    ``,
+    buildDocConsistencyInstructions(),
+    ``,
+    `${buildPrSyncInstructions(ctx.issueNumber)}`,
+    ``,
+    `Then commit and push the branch so a new CI run is triggered.`,
+    `If all findings are acceptable as-is, explain your reasoning.`,
+  );
+
+  if (ctx.userInstruction) {
+    lines.push(``, `## Additional feedback`, ``, ctx.userInstruction);
+  }
+
+  return lines.join("\n");
+}
+
 // ---- handler ---------------------------------------------------------------
 
 export function createCiCheckStageHandler(
@@ -175,10 +255,57 @@ export function createCiCheckStageHandler(
         await delay(pollInterval);
       }
 
-      // ---- CI passed -------------------------------------------------------
+      // ---- CI passed (clean) ------------------------------------------------
+
+      if (
+        ciStatus.verdict === "pass" &&
+        ciStatus.findings.length === 0 &&
+        !ciStatus.findingsIncomplete
+      ) {
+        return { outcome: "completed", message: t()["ci.passed"] };
+      }
+
+      // ---- CI passed with findings — present for review -------------------
 
       if (ciStatus.verdict === "pass") {
-        return { outcome: "completed", message: t()["ci.passed"] };
+        const shaBeforeReview = readHeadSha(ctx.worktreePath);
+
+        const findingsPrompt = buildCiFindingsPrompt(
+          ctx,
+          opts,
+          ciStatus.findings,
+          ciStatus.findingsIncomplete,
+        );
+        ctx.promptSinks?.a?.(findingsPrompt);
+        const reviewResult = await invokeOrResume(
+          opts.agent,
+          ctx.savedAgentASessionId,
+          findingsPrompt,
+          ctx.worktreePath,
+          ctx.streamSinks?.a,
+          undefined,
+          ctx.usageSinks?.a,
+        );
+
+        if (reviewResult.sessionId) {
+          ctx.onSessionId?.("a", reviewResult.sessionId);
+        }
+
+        if (reviewResult.status === "error") {
+          return mapAgentError(reviewResult, "during CI findings review");
+        }
+
+        const shaAfterReview = readHeadSha(ctx.worktreePath);
+        if (shaBeforeReview !== shaAfterReview) {
+          // Agent pushed changes — loop back to re-check CI.
+          return {
+            outcome: "not_approved",
+            message: reviewResult.responseText,
+          };
+        }
+
+        // Agent reviewed but did not push — findings acknowledged.
+        return { outcome: "completed", message: t()["ci.passedWithFindings"] };
       }
 
       // ---- CI failed — collect logs and send to agent ----------------------
