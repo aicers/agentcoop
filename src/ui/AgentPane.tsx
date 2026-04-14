@@ -320,7 +320,7 @@ export function AgentPane({
         </Text>
       </Box>
       {showSeparator && (
-        <Box flexShrink={0}>
+        <Box flexShrink={0} overflow="hidden" height={1}>
           <Text dimColor>
             {contentWidth > 0 ? "\u2500".repeat(contentWidth) : ""}
           </Text>
