@@ -27,6 +27,7 @@ import {
   mapAgentError,
   mapResponseToResult,
   sendFollowUp,
+  type VerdictContext,
 } from "./stage-util.js";
 import { buildClarificationPrompt } from "./step-parser.js";
 import { countBranchCommits as defaultCountBranchCommits } from "./worktree.js";
@@ -145,7 +146,7 @@ export function createSquashStageHandler(
 
       // Step 1: Send the squash prompt (resume if saved session).
       const prompt = buildSquashPrompt(ctx, opts);
-      ctx.promptSinks?.a?.(prompt);
+      ctx.promptSinks?.a?.(prompt, "work");
       const squashResult = await invokeOrResume(
         opts.agent,
         ctx.savedAgentASessionId,
@@ -167,7 +168,7 @@ export function createSquashStageHandler(
       // Step 2: Completion check (same internal-clarification pattern as
       // stage 4).
       const squashCheckPrompt = buildSquashCompletionCheckPrompt();
-      ctx.promptSinks?.a?.(squashCheckPrompt);
+      ctx.promptSinks?.a?.(squashCheckPrompt, "verdict-followup");
       let checkResult = await sendFollowUp(
         opts.agent,
         squashResult.sessionId,
@@ -182,10 +183,15 @@ export function createSquashStageHandler(
         return mapAgentError(checkResult, "during squash completion check");
       }
 
+      const verdictCtx: VerdictContext | undefined = ctx.events
+        ? { events: ctx.events, agent: "a" }
+        : undefined;
+
       let result = mapResponseToResult(
         checkResult.responseText,
         undefined,
         SQUASH_CHECK_KEYWORDS,
+        verdictCtx,
       );
 
       if (result.outcome === "needs_clarification") {
@@ -193,7 +199,7 @@ export function createSquashStageHandler(
           checkResult.responseText,
           SQUASH_CHECK_KEYWORDS,
         );
-        ctx.promptSinks?.a?.(clarifyPrompt);
+        ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup");
         const retryResult = await sendFollowUp(
           opts.agent,
           checkResult.sessionId ?? squashResult.sessionId,
@@ -216,6 +222,7 @@ export function createSquashStageHandler(
           checkResult.responseText,
           undefined,
           SQUASH_CHECK_KEYWORDS,
+          verdictCtx,
         );
       }
 

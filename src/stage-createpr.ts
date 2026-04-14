@@ -29,6 +29,7 @@ import {
   mapAgentError,
   mapResponseToResult,
   sendFollowUp,
+  type VerdictContext,
 } from "./stage-util.js";
 import { buildClarificationPrompt } from "./step-parser.js";
 
@@ -111,7 +112,7 @@ export function createCreatePrStageHandler(
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send the PR creation prompt (resume if saved session).
       const prompt = buildCreatePrPrompt(ctx, opts);
-      ctx.promptSinks?.a?.(prompt);
+      ctx.promptSinks?.a?.(prompt, "work");
       const prResult = await invokeOrResume(
         opts.agent,
         ctx.savedAgentASessionId,
@@ -135,7 +136,7 @@ export function createCreatePrStageHandler(
       // session, because re-entering the handler would re-run the
       // side-effectful PR creation step.
       const prCheckPrompt = buildPrCompletionCheckPrompt();
-      ctx.promptSinks?.a?.(prCheckPrompt);
+      ctx.promptSinks?.a?.(prCheckPrompt, "verdict-followup");
       let checkResult = await sendFollowUp(
         opts.agent,
         prResult.sessionId,
@@ -150,10 +151,15 @@ export function createCreatePrStageHandler(
         return mapAgentError(checkResult, "during PR completion check");
       }
 
+      const verdictCtx: VerdictContext | undefined = ctx.events
+        ? { events: ctx.events, agent: "a" }
+        : undefined;
+
       let result = mapResponseToResult(
         checkResult.responseText,
         undefined,
         PR_CHECK_KEYWORDS,
+        verdictCtx,
       );
 
       if (result.outcome === "needs_clarification") {
@@ -161,7 +167,7 @@ export function createCreatePrStageHandler(
           checkResult.responseText,
           PR_CHECK_KEYWORDS,
         );
-        ctx.promptSinks?.a?.(clarifyPrompt);
+        ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup");
         const retryResult = await sendFollowUp(
           opts.agent,
           checkResult.sessionId ?? prResult.sessionId,
@@ -184,6 +190,7 @@ export function createCreatePrStageHandler(
           checkResult.responseText,
           undefined,
           PR_CHECK_KEYWORDS,
+          verdictCtx,
         );
       }
 

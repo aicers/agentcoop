@@ -3,6 +3,10 @@ import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
 import type { CiFinding, CiRun, CiStatus, CiVerdict } from "./ci.js";
 import { type CiPollOptions, pollCiAndFix } from "./ci-poll.js";
 import type { StageContext } from "./pipeline.js";
+import {
+  type PipelineCiPollEvent,
+  PipelineEventEmitter,
+} from "./pipeline-events.js";
 
 // ---- helpers ---------------------------------------------------------------
 
@@ -1086,5 +1090,212 @@ describe("pollCiAndFix", () => {
     // fetchCodeScanningAlerts should not be called during the failure fix
     // phase — only during findings review.
     expect(fetchCodeScanningAlerts).not.toHaveBeenCalled();
+  });
+
+  // -- pipeline:ci-poll event emission ----------------------------------------
+
+  test("emits start, status, done events on clean pass", async () => {
+    const events = new PipelineEventEmitter();
+    const collected: PipelineCiPollEvent[] = [];
+    events.on("pipeline:ci-poll", (e) => collected.push(e));
+
+    await pollCiAndFix(makeOpts({ events }));
+
+    expect(collected).toEqual([
+      { action: "start", sha: "abc123" },
+      { action: "status", sha: "abc123", verdict: "pass" },
+      { action: "done", sha: "abc123", verdict: "pass" },
+    ]);
+  });
+
+  test("emits done with pending verdict on timeout", async () => {
+    const events = new PipelineEventEmitter();
+    const collected: PipelineCiPollEvent[] = [];
+    events.on("pipeline:ci-poll", (e) => collected.push(e));
+
+    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pending"));
+    let elapsed = 0;
+    const startTime = Date.now();
+    const delay = vi.fn().mockImplementation(async () => {
+      elapsed += 500;
+    });
+    vi.spyOn(Date, "now").mockImplementation(() => startTime + elapsed);
+
+    await pollCiAndFix(
+      makeOpts({
+        events,
+        getCiStatus,
+        delay,
+        pollIntervalMs: 100,
+        pollTimeoutMs: 1000,
+      }),
+    );
+
+    expect(collected[0]).toEqual({ action: "start", sha: "abc123" });
+    const done = collected[collected.length - 1];
+    expect(done.action).toBe("done");
+    expect(done.verdict).toBe("pending");
+
+    vi.restoreAllMocks();
+  });
+
+  test("emits events across fix loop", async () => {
+    const events = new PipelineEventEmitter();
+    const collected: PipelineCiPollEvent[] = [];
+    events.on("pipeline:ci-poll", (e) => collected.push(e));
+
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      )
+      .mockReturnValueOnce(makeCiStatus("pass"));
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+    const agent = makeAgent();
+
+    await pollCiAndFix(
+      makeOpts({ events, agent, getCiStatus, collectFailureLogs }),
+    );
+
+    // Each polling round gets start → status → done, even when
+    // transitioning into a fix loop.
+    const actions = collected.map((e) => e.action);
+    expect(actions).toEqual([
+      "start",
+      "status",
+      "done",
+      "start",
+      "status",
+      "done",
+    ]);
+    expect(collected[1].verdict).toBe("fail");
+    expect(collected[2]).toEqual({
+      action: "done",
+      sha: "abc123",
+      verdict: "fail",
+    });
+    expect(collected[5].verdict).toBe("pass");
+  });
+
+  test("emits done on fix attempts exhausted", async () => {
+    const events = new PipelineEventEmitter();
+    const collected: PipelineCiPollEvent[] = [];
+    events.on("pipeline:ci-poll", (e) => collected.push(e));
+
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      );
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+
+    const invokeResults = [makeStream(makeResult())];
+    let call = 0;
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockImplementation(() => invokeResults[call++]),
+      resume: vi.fn(),
+    };
+
+    await pollCiAndFix(
+      makeOpts({
+        events,
+        agent,
+        getCiStatus,
+        collectFailureLogs,
+        maxFixAttempts: 1,
+      }),
+    );
+
+    const done = collected[collected.length - 1];
+    expect(done.action).toBe("done");
+    expect(done.verdict).toBe("fail");
+  });
+
+  test("emits done on agent error during CI fix", async () => {
+    const events = new PipelineEventEmitter();
+    const collected: PipelineCiPollEvent[] = [];
+    events.on("pipeline:ci-poll", (e) => collected.push(e));
+
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      );
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+    const agent = makeAgent(
+      makeResult({
+        status: "error",
+        errorType: "execution_error",
+        stderrText: "crash",
+        responseText: "",
+      }),
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await pollCiAndFix(
+      makeOpts({ events, agent, getCiStatus, collectFailureLogs }),
+    );
+
+    const done = collected[collected.length - 1];
+    expect(done.action).toBe("done");
+    expect(done.verdict).toBe("fail");
+
+    errorSpy.mockRestore();
+  });
+
+  test("emits done on agent error during findings review", async () => {
+    const events = new PipelineEventEmitter();
+    const collected: PipelineCiPollEvent[] = [];
+    events.on("pipeline:ci-poll", (e) => collected.push(e));
+
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "Unused variable",
+        file: "src/app.ts",
+        line: 10,
+        checkRunId: 500,
+        checkRunName: "ESLint",
+        commitSha: "abc123",
+      },
+    ];
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+    const agent = makeAgent(
+      makeResult({
+        status: "error",
+        errorType: "execution_error",
+        stderrText: "crash",
+        responseText: "",
+      }),
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await pollCiAndFix(makeOpts({ events, agent, getCiStatus }));
+
+    const done = collected[collected.length - 1];
+    expect(done.action).toBe("done");
+    expect(done.verdict).toBe("pass");
+
+    errorSpy.mockRestore();
+  });
+
+  test("falls back to ctx.events when options.events is not provided", async () => {
+    const events = new PipelineEventEmitter();
+    const collected: PipelineCiPollEvent[] = [];
+    events.on("pipeline:ci-poll", (e) => collected.push(e));
+
+    const ctxWithEvents: StageContext = { ...BASE_CTX, events };
+
+    await pollCiAndFix(makeOpts({ ctx: ctxWithEvents }));
+
+    expect(collected).toEqual([
+      { action: "start", sha: "abc123" },
+      { action: "status", sha: "abc123", verdict: "pass" },
+      { action: "done", sha: "abc123", verdict: "pass" },
+    ]);
   });
 });

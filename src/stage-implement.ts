@@ -16,6 +16,7 @@ import {
   mapAgentError,
   mapResponseToResult,
   sendFollowUp,
+  type VerdictContext,
 } from "./stage-util.js";
 import { buildClarificationPrompt } from "./step-parser.js";
 
@@ -87,7 +88,7 @@ export function createImplementStageHandler(
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send the implementation prompt (resume if saved session).
       const prompt = buildImplementPrompt(ctx, opts);
-      ctx.promptSinks?.a?.(prompt);
+      ctx.promptSinks?.a?.(prompt, "work");
       const implResult = await invokeOrResume(
         opts.agent,
         ctx.savedAgentASessionId,
@@ -108,7 +109,7 @@ export function createImplementStageHandler(
 
       // Step 2: Resume the session and ask for completion status.
       const checkPrompt = buildCompletionCheckPrompt();
-      ctx.promptSinks?.a?.(checkPrompt);
+      ctx.promptSinks?.a?.(checkPrompt, "verdict-followup");
       const checkResult = await sendFollowUp(
         opts.agent,
         implResult.sessionId,
@@ -123,10 +124,15 @@ export function createImplementStageHandler(
         return mapAgentError(checkResult, "during completion check");
       }
 
+      const verdictCtx: VerdictContext | undefined = ctx.events
+        ? { events: ctx.events, agent: "a" }
+        : undefined;
+
       let result = mapResponseToResult(
         checkResult.responseText,
         undefined,
         IMPLEMENT_CHECK_KEYWORDS,
+        verdictCtx,
       );
 
       // Internal clarification retry (same pattern as stage 4 / stage 8).
@@ -135,7 +141,7 @@ export function createImplementStageHandler(
           checkResult.responseText,
           IMPLEMENT_CHECK_KEYWORDS,
         );
-        ctx.promptSinks?.a?.(clarifyPrompt);
+        ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup");
         const retryResult = await sendFollowUp(
           opts.agent,
           checkResult.sessionId ?? implResult.sessionId,
@@ -154,6 +160,7 @@ export function createImplementStageHandler(
           retryResult.responseText,
           undefined,
           IMPLEMENT_CHECK_KEYWORDS,
+          verdictCtx,
         );
       }
 

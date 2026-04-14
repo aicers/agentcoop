@@ -83,7 +83,7 @@ export function createRebaseHandler(
 ): (ctx: StageContext) => Promise<RebaseResult> {
   return async (ctx) => {
     const rebasePrompt = buildRebasePrompt(ctx, defaultBranch);
-    ctx.promptSinks?.a?.(rebasePrompt);
+    ctx.promptSinks?.a?.(rebasePrompt, "work");
     const stream = agent.invoke(rebasePrompt, {
       cwd: ctx.worktreePath,
       onUsage: ctx.usageSinks?.a,
@@ -104,7 +104,7 @@ export function createRebaseHandler(
 
     // Verdict follow-up: ask for exactly COMPLETED or BLOCKED.
     const verdictPrompt = buildRebaseVerdictPrompt();
-    ctx.promptSinks?.a?.(verdictPrompt);
+    ctx.promptSinks?.a?.(verdictPrompt, "verdict-followup");
     let verdictResult = await sendFollowUp(
       agent,
       result.sessionId,
@@ -123,6 +123,13 @@ export function createRebaseHandler(
       verdictResult.responseText,
       REBASE_KEYWORDS,
     );
+    if (verdict.keyword !== undefined) {
+      ctx.events?.emit("pipeline:verdict", {
+        agent: "a",
+        keyword: verdict.keyword,
+        raw: verdictResult.responseText,
+      });
+    }
 
     // Clarification retry if ambiguous, extra commentary, or
     // multiple valid keywords.
@@ -131,7 +138,7 @@ export function createRebaseHandler(
         verdictResult.responseText,
         REBASE_KEYWORDS,
       );
-      ctx.promptSinks?.a?.(clarifyPrompt);
+      ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup");
       const retryResult = await sendFollowUp(
         agent,
         verdictResult.sessionId ?? result.sessionId,
@@ -151,6 +158,13 @@ export function createRebaseHandler(
         verdictResult.responseText,
         REBASE_KEYWORDS,
       );
+      if (verdict.keyword !== undefined) {
+        ctx.events?.emit("pipeline:verdict", {
+          agent: "a",
+          keyword: verdict.keyword,
+          raw: verdictResult.responseText,
+        });
+      }
     }
 
     const success = verdict.keyword?.toUpperCase() === "COMPLETED";

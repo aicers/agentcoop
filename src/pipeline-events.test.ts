@@ -4,7 +4,10 @@ import {
   type AgentInvokeEvent,
   type AgentPromptEvent,
   type AgentUsageEvent,
+  type PipelineCiPollEvent,
   PipelineEventEmitter,
+  type PipelineLoopEvent,
+  type PipelineVerdictEvent,
   type StageEnterEvent,
   type StageExitEvent,
   type StageNameOverrideEvent,
@@ -64,7 +67,11 @@ describe("PipelineEventEmitter", () => {
     const handler = vi.fn();
     emitter.on("agent:prompt", handler);
 
-    const event: AgentPromptEvent = { agent: "a", prompt: "Do the thing" };
+    const event: AgentPromptEvent = {
+      agent: "a",
+      prompt: "Do the thing",
+      kind: "work",
+    };
     emitter.emit("agent:prompt", event);
 
     expect(handler).toHaveBeenCalledWith(event);
@@ -131,5 +138,80 @@ describe("PipelineEventEmitter", () => {
 
     expect(chunkHandler).toHaveBeenCalledTimes(1);
     expect(enterHandler).not.toHaveBeenCalled();
+  });
+
+  test("emits and receives agent:prompt events with kind", () => {
+    const emitter = new PipelineEventEmitter();
+    const handler = vi.fn();
+    emitter.on("agent:prompt", handler);
+
+    const event: AgentPromptEvent = {
+      agent: "a",
+      prompt: "Fix it",
+      kind: "ci-fix",
+    };
+    emitter.emit("agent:prompt", event);
+
+    expect(handler).toHaveBeenCalledWith(event);
+  });
+
+  test("emits and receives pipeline:verdict events", () => {
+    const emitter = new PipelineEventEmitter();
+    const handler = vi.fn();
+    emitter.on("pipeline:verdict", handler);
+
+    const event: PipelineVerdictEvent = {
+      agent: "a",
+      keyword: "COMPLETED",
+      raw: "All done.\n\nCOMPLETED",
+    };
+    emitter.emit("pipeline:verdict", event);
+
+    expect(handler).toHaveBeenCalledWith(event);
+  });
+
+  test("emits and receives pipeline:loop events", () => {
+    const emitter = new PipelineEventEmitter();
+    const handler = vi.fn();
+    emitter.on("pipeline:loop", handler);
+
+    const event: PipelineLoopEvent = {
+      stageNumber: 2,
+      stageName: "Implement",
+      remaining: 1,
+      exhausted: false,
+    };
+    emitter.emit("pipeline:loop", event);
+
+    expect(handler).toHaveBeenCalledWith(event);
+  });
+
+  test("emits and receives pipeline:ci-poll events", () => {
+    const emitter = new PipelineEventEmitter();
+    const handler = vi.fn();
+    emitter.on("pipeline:ci-poll", handler);
+
+    const event: PipelineCiPollEvent = {
+      action: "start",
+      sha: "abc123",
+    };
+    emitter.emit("pipeline:ci-poll", event);
+
+    expect(handler).toHaveBeenCalledWith(event);
+  });
+
+  test("pipeline:ci-poll done event includes verdict", () => {
+    const emitter = new PipelineEventEmitter();
+    const handler = vi.fn();
+    emitter.on("pipeline:ci-poll", handler);
+
+    const event: PipelineCiPollEvent = {
+      action: "done",
+      sha: "abc123",
+      verdict: "pass",
+    };
+    emitter.emit("pipeline:ci-poll", event);
+
+    expect(handler).toHaveBeenCalledWith(event);
   });
 });
