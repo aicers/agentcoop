@@ -41,6 +41,7 @@ import {
   reconcileWithPr,
 } from "./pr-comments.js";
 import { createRebaseHandler } from "./rebase.js";
+import { createRunLog, type RunLogWriter } from "./run-log.js";
 import {
   deleteRunState,
   loadRunState,
@@ -641,6 +642,31 @@ try {
     }
   });
 
+  // Persistent run log for post-mortem debugging.
+  const runLog: RunLogWriter = createRunLog(emitter, {
+    owner,
+    repo,
+    issueNumber,
+    worktreePath: wt.path,
+    executionMode,
+    agentA: {
+      cli: agentAConfig.cli,
+      model: agentAConfig.model,
+      contextWindow: agentAConfig.contextWindow,
+      effortLevel: agentAConfig.effortLevel,
+    },
+    agentB: {
+      cli: agentBConfig.cli,
+      model: agentBConfig.model,
+      contextWindow: agentBConfig.contextWindow,
+      effortLevel: agentBConfig.effortLevel,
+    },
+    selfCheckAutoIterations: pipelineSettings.selfCheckAutoIterations,
+    reviewAutoRounds: pipelineSettings.reviewAutoRounds,
+    inactivityTimeoutMinutes: pipelineSettings.inactivityTimeoutMinutes,
+    autoResumeAttempts: pipelineSettings.autoResumeAttempts,
+  });
+
   const doneStage = createDoneStageHandler({
     events: emitter,
     checkMergeable: async () => checkMergeable(owner, repo, wt.branch),
@@ -804,7 +830,8 @@ try {
     const { unmount } = renderApp({
       emitter,
       pipelineOptions: pipelineOpts,
-      onExit: (result: PipelineResult) => {
+      onExit: async (result: PipelineResult) => {
+        await runLog.close();
         unmount();
         resolve(result);
       },

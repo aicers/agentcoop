@@ -632,14 +632,22 @@ async function runStage(
           prompt: string,
           kind: import("./pipeline-events.js").AgentPromptKind,
         ) => {
-          events.emit("agent:invoke", { agent: "a", type: "invoke" });
+          events.emit("agent:invoke", {
+            agent: "a",
+            type: "invoke",
+            promptKind: kind,
+          });
           events.emit("agent:prompt", { agent: "a", prompt, kind });
         },
         b: (
           prompt: string,
           kind: import("./pipeline-events.js").AgentPromptKind,
         ) => {
-          events.emit("agent:invoke", { agent: "b", type: "invoke" });
+          events.emit("agent:invoke", {
+            agent: "b",
+            type: "invoke",
+            promptKind: kind,
+          });
           events.emit("agent:prompt", { agent: "b", prompt, kind });
         },
       }
