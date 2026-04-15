@@ -700,60 +700,54 @@ describe("CodexStreamTransformer", () => {
 // buildCodexInvokeArgs
 // ---------------------------------------------------------------------------
 describe("buildCodexInvokeArgs", () => {
-  test("builds invoke args with default options", () => {
-    const args = buildCodexInvokeArgs("do something", {});
+  test("builds invoke args with '-' placeholder for stdin", () => {
+    const args = buildCodexInvokeArgs({});
 
-    expect(args).toEqual([
-      "exec",
-      "-s",
-      "danger-full-access",
-      "--json",
-      "do something",
-    ]);
+    expect(args).toEqual(["exec", "-s", "danger-full-access", "--json", "-"]);
   });
 
   test("includes -m when model is specified", () => {
-    const args = buildCodexInvokeArgs("prompt", { model: "gpt-5.4" });
+    const args = buildCodexInvokeArgs({ model: "gpt-5.4" });
 
     expect(args).toContain("-m");
     expect(args).toContain("gpt-5.4");
-    // prompt comes after model
-    expect(args.indexOf("gpt-5.4")).toBeLessThan(args.indexOf("prompt"));
+    // '-' comes after model
+    expect(args.indexOf("gpt-5.4")).toBeLessThan(args.indexOf("-"));
   });
 
   test("omits -m when model is undefined", () => {
-    const args = buildCodexInvokeArgs("prompt", {});
+    const args = buildCodexInvokeArgs({});
     expect(args).not.toContain("-m");
     expect(args).not.toContain("--model");
   });
 
   test("does not include -a flag (not supported by CLI)", () => {
-    const args = buildCodexInvokeArgs("prompt", {});
+    const args = buildCodexInvokeArgs({});
     expect(args).not.toContain("-a");
     expect(args).not.toContain("never");
   });
 
   test("includes -c reasoning effort when specified", () => {
-    const args = buildCodexInvokeArgs("prompt", {
+    const args = buildCodexInvokeArgs({
       reasoningEffort: "high",
     });
 
     expect(args).toContain("-c");
     expect(args).toContain("model_reasoning_effort=high");
-    // -c value comes before the prompt
+    // -c value comes before the '-' placeholder
     expect(args.indexOf("model_reasoning_effort=high")).toBeLessThan(
-      args.indexOf("prompt"),
+      args.indexOf("-"),
     );
   });
 
   test("omits reasoning effort when undefined", () => {
-    const args = buildCodexInvokeArgs("prompt", {});
+    const args = buildCodexInvokeArgs({});
     const reArgs = args.filter((a) => a.includes("model_reasoning_effort"));
     expect(reArgs).toHaveLength(0);
   });
 
   test("passes xhigh reasoning effort through to CLI", () => {
-    const args = buildCodexInvokeArgs("prompt", {
+    const args = buildCodexInvokeArgs({
       reasoningEffort: "xhigh",
     });
 
@@ -766,19 +760,19 @@ describe("buildCodexInvokeArgs", () => {
 // ---------------------------------------------------------------------------
 describe("buildCodexResumeArgs", () => {
   test("always includes -c sandbox_mode=danger-full-access", () => {
-    const args = buildCodexResumeArgs("sess-abc", "continue", {});
+    const args = buildCodexResumeArgs("sess-abc", {});
 
     expect(args).toContain("-c");
     expect(args).toContain("sandbox_mode=danger-full-access");
   });
 
   test("does not include --json (resume outputs plain text)", () => {
-    const args = buildCodexResumeArgs("sess-abc", "continue", {});
+    const args = buildCodexResumeArgs("sess-abc", {});
     expect(args).not.toContain("--json");
   });
 
   test("includes -c model override when model is specified", () => {
-    const args = buildCodexResumeArgs("sess-abc", "continue", {
+    const args = buildCodexResumeArgs("sess-abc", {
       model: "gpt-5.3-codex",
     });
 
@@ -787,40 +781,40 @@ describe("buildCodexResumeArgs", () => {
   });
 
   test("omits model override when model is undefined", () => {
-    const args = buildCodexResumeArgs("sess-abc", "continue", {});
+    const args = buildCodexResumeArgs("sess-abc", {});
 
     const modelArgs = args.filter((a) => a.startsWith('model="'));
     expect(modelArgs).toHaveLength(0);
   });
 
-  test("places session ID and prompt after config flags", () => {
-    const args = buildCodexResumeArgs("sess-abc", "continue", {
+  test("places session ID and '-' after config flags", () => {
+    const args = buildCodexResumeArgs("sess-abc", {
       model: "gpt-5.4",
     });
 
     const sessIdx = args.indexOf("sess-abc");
-    const promptIdx = args.indexOf("continue");
+    const dashIdx = args.lastIndexOf("-");
     expect(sessIdx).toBeGreaterThan(0);
-    expect(promptIdx).toBe(sessIdx + 1);
+    expect(dashIdx).toBe(sessIdx + 1);
     // Both should come after all -c flags
     const lastCIdx = args.lastIndexOf("-c");
     expect(sessIdx).toBeGreaterThan(lastCIdx + 1);
   });
 
   test("does not include -s flag (uses -c for sandbox instead)", () => {
-    const args = buildCodexResumeArgs("sess-1", "prompt", {});
+    const args = buildCodexResumeArgs("sess-1", {});
     expect(args).not.toContain("-s");
   });
 
   test("does not include -m flag (uses -c for model instead)", () => {
-    const args = buildCodexResumeArgs("sess-1", "prompt", {
+    const args = buildCodexResumeArgs("sess-1", {
       model: "gpt-5.4",
     });
     expect(args).not.toContain("-m");
   });
 
   test("includes -c reasoning effort when specified", () => {
-    const args = buildCodexResumeArgs("sess-1", "prompt", {
+    const args = buildCodexResumeArgs("sess-1", {
       reasoningEffort: "medium",
     });
 
@@ -828,13 +822,13 @@ describe("buildCodexResumeArgs", () => {
   });
 
   test("omits reasoning effort when undefined", () => {
-    const args = buildCodexResumeArgs("sess-1", "prompt", {});
+    const args = buildCodexResumeArgs("sess-1", {});
     const reArgs = args.filter((a) => a.includes("model_reasoning_effort"));
     expect(reArgs).toHaveLength(0);
   });
 
   test("passes xhigh reasoning effort through to CLI", () => {
-    const args = buildCodexResumeArgs("sess-1", "prompt", {
+    const args = buildCodexResumeArgs("sess-1", {
       reasoningEffort: "xhigh",
     });
 

@@ -360,10 +360,10 @@ export interface CodexAdapterOptions {
   inactivityTimeoutMs?: number;
 }
 
-export function buildCodexInvokeArgs(
-  prompt: string,
-  opts: { model?: string; reasoningEffort?: CodexReasoningEffort },
-): string[] {
+export function buildCodexInvokeArgs(opts: {
+  model?: string;
+  reasoningEffort?: CodexReasoningEffort;
+}): string[] {
   const args = ["exec", "-s", "danger-full-access", "--json"];
   if (opts.model) {
     args.push("-m", opts.model);
@@ -371,13 +371,12 @@ export function buildCodexInvokeArgs(
   if (opts.reasoningEffort) {
     args.push("-c", `model_reasoning_effort=${opts.reasoningEffort}`);
   }
-  args.push(prompt);
+  args.push("-");
   return args;
 }
 
 export function buildCodexResumeArgs(
   sessionId: string,
-  prompt: string,
   opts: { model?: string; reasoningEffort?: CodexReasoningEffort },
 ): string[] {
   // Note: `codex exec resume` does not support --json; output is plain text.
@@ -388,7 +387,7 @@ export function buildCodexResumeArgs(
   if (opts.reasoningEffort) {
     args.push("-c", `model_reasoning_effort=${opts.reasoningEffort}`);
   }
-  args.push(sessionId, prompt);
+  args.push(sessionId, "-");
   return args;
 }
 
@@ -494,17 +493,18 @@ export function createCodexAdapter(
       }
       const stream = spawnAgent({
         command: "codex",
-        args: buildCodexInvokeArgs(prompt, { model, reasoningEffort }),
+        args: buildCodexInvokeArgs({ model, reasoningEffort }),
         cwd: options?.cwd,
         parseResult: parseCodexInvokeOutput,
         chunkTransformer: makeTransformer(),
         inactivityTimeoutMs,
+        stdin: prompt,
       });
       if (reasoningEffort !== "xhigh") return stream;
       return withXhighFallback(stream, () =>
         spawnAgent({
           command: "codex",
-          args: buildCodexInvokeArgs(prompt, {
+          args: buildCodexInvokeArgs({
             model,
             reasoningEffort: "high",
           }),
@@ -512,6 +512,7 @@ export function createCodexAdapter(
           parseResult: parseCodexInvokeOutput,
           chunkTransformer: makeTransformer(),
           inactivityTimeoutMs,
+          stdin: prompt,
         }),
       );
     },
@@ -533,7 +534,7 @@ export function createCodexAdapter(
       // codex exec resume outputs plain text, not JSONL.
       const stream = spawnAgent({
         command: "codex",
-        args: buildCodexResumeArgs(sessionId, prompt, {
+        args: buildCodexResumeArgs(sessionId, {
           model,
           reasoningEffort,
         }),
@@ -542,18 +543,20 @@ export function createCodexAdapter(
         // No chunkTransformer for resume — plain text is already
         // human-readable and can go directly to the UI.
         inactivityTimeoutMs,
+        stdin: prompt,
       });
       if (reasoningEffort !== "xhigh") return stream;
       return withXhighFallback(stream, () =>
         spawnAgent({
           command: "codex",
-          args: buildCodexResumeArgs(sessionId, prompt, {
+          args: buildCodexResumeArgs(sessionId, {
             model,
             reasoningEffort: "high",
           }),
           cwd: options?.cwd,
           parseResult: parseResume,
           inactivityTimeoutMs,
+          stdin: prompt,
         }),
       );
     },

@@ -709,12 +709,11 @@ describe("ClaudeStreamTransformer", () => {
 // buildClaudeArgs
 // ---------------------------------------------------------------------------
 describe("buildClaudeArgs", () => {
-  test("builds basic args with bypassPermissions and --verbose", () => {
-    const args = buildClaudeArgs("do something", {});
+  test("builds basic args with -p, bypassPermissions, and --verbose", () => {
+    const args = buildClaudeArgs({});
 
     expect(args).toEqual([
       "-p",
-      "do something",
       "--output-format",
       "stream-json",
       "--verbose",
@@ -723,20 +722,27 @@ describe("buildClaudeArgs", () => {
     ]);
   });
 
+  test("does not include prompt text in args (prompt goes via stdin)", () => {
+    const args = buildClaudeArgs({});
+    // -p is a flag only; no prompt text follows it
+    expect(args[0]).toBe("-p");
+    expect(args[1]).toBe("--output-format");
+  });
+
   test("always includes --verbose (required by stream-json)", () => {
-    const args = buildClaudeArgs("prompt", {});
+    const args = buildClaudeArgs({});
     expect(args).toContain("--verbose");
   });
 
   test("always passes bypassPermissions", () => {
-    const args = buildClaudeArgs("prompt", {});
+    const args = buildClaudeArgs({});
 
     expect(args).toContain("--permission-mode");
     expect(args).toContain("bypassPermissions");
   });
 
   test("includes --model when model is specified", () => {
-    const args = buildClaudeArgs("prompt", {
+    const args = buildClaudeArgs({
       model: "opus",
     });
 
@@ -745,13 +751,13 @@ describe("buildClaudeArgs", () => {
   });
 
   test("omits --model when model is undefined", () => {
-    const args = buildClaudeArgs("prompt", {});
+    const args = buildClaudeArgs({});
 
     expect(args).not.toContain("--model");
   });
 
   test("includes --effort when effortLevel is set", () => {
-    const args = buildClaudeArgs("prompt", {
+    const args = buildClaudeArgs({
       effortLevel: "high",
     });
 
@@ -760,7 +766,7 @@ describe("buildClaudeArgs", () => {
   });
 
   test("includes --effort max for Opus max effort", () => {
-    const args = buildClaudeArgs("prompt", {
+    const args = buildClaudeArgs({
       model: "opus",
       effortLevel: "max",
     });
@@ -770,13 +776,13 @@ describe("buildClaudeArgs", () => {
   });
 
   test("omits --effort when effortLevel is undefined", () => {
-    const args = buildClaudeArgs("prompt", {});
+    const args = buildClaudeArgs({});
 
     expect(args).not.toContain("--effort");
   });
 
   test("appends [1m] to model when contextWindow is 1m", () => {
-    const args = buildClaudeArgs("prompt", {
+    const args = buildClaudeArgs({
       model: "opus",
       contextWindow: "1m",
     });
@@ -785,7 +791,7 @@ describe("buildClaudeArgs", () => {
   });
 
   test("does not modify model when contextWindow is 200k", () => {
-    const args = buildClaudeArgs("prompt", {
+    const args = buildClaudeArgs({
       model: "opus",
       contextWindow: "200k",
     });
@@ -795,28 +801,23 @@ describe("buildClaudeArgs", () => {
   });
 
   test("includes --resume when sessionId is given", () => {
-    const args = buildClaudeArgs("continue", {}, "sess-123");
+    const args = buildClaudeArgs({}, "sess-123");
 
     expect(args).toContain("--resume");
     expect(args).toContain("sess-123");
   });
 
   test("omits --resume when sessionId is undefined", () => {
-    const args = buildClaudeArgs("prompt", {});
+    const args = buildClaudeArgs({});
 
     expect(args).not.toContain("--resume");
   });
 
   test("combines all options together", () => {
-    const args = buildClaudeArgs(
-      "full prompt",
-      { model: "sonnet" },
-      "sess-xyz",
-    );
+    const args = buildClaudeArgs({ model: "sonnet" }, "sess-xyz");
 
     expect(args).toEqual([
       "-p",
-      "full prompt",
       "--output-format",
       "stream-json",
       "--verbose",
