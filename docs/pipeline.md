@@ -18,14 +18,14 @@ the [README](../README.md).
   - [Additional feedback injection](#additional-feedback-injection)
   - [Ambiguous response clarification](#ambiguous-response-clarification)
 - [Stage reference](#stage-reference)
-  - [Stage 1: Implement](#stage-1-implement)
-  - [Stage 2: Self-check loop](#stage-2-self-check-loop)
-  - [Stage 3: Create PR](#stage-3-create-pr)
-  - [Stage 4: CI check loop](#stage-4-ci-check-loop)
-  - [Stage 5: Test plan verification loop](#stage-5-test-plan-verification-loop)
-  - [Stage 6: Review loop](#stage-6-review-loop)
-  - [Stage 7: Squash commits](#stage-7-squash-commits)
-  - [Stage 8: Done](#stage-8-done)
+  - [Stage 2: Implement](#stage-2-implement)
+  - [Stage 3: Self-check loop](#stage-3-self-check-loop)
+  - [Stage 4: Create PR](#stage-4-create-pr)
+  - [Stage 5: CI check loop](#stage-5-ci-check-loop)
+  - [Stage 6: Test plan verification loop](#stage-6-test-plan-verification-loop)
+  - [Stage 7: Review loop](#stage-7-review-loop)
+  - [Stage 8: Squash commits](#stage-8-squash-commits)
+  - [Stage 9: Done](#stage-9-done)
 - [Orchestrator-managed operations](#orchestrator-managed-operations)
 
 ## Pipeline overview
@@ -91,6 +91,7 @@ Do not include any other commentary — just the keyword.
 | Self-check verdict | `FIXED` / `DONE` | `DONE` | `FIXED` → repeat |
 | Test plan verdict | `FIXED` / `DONE` | `DONE` | `FIXED` → repeat |
 | PR creation check | `COMPLETED` / `BLOCKED` | `COMPLETED` | `BLOCKED` → user chooses |
+| CI findings review | _(no verdict keyword)_ | SHA unchanged | SHA changed → re-poll CI |
 | Squash check | `COMPLETED` / `BLOCKED` | `COMPLETED` | `BLOCKED` → user chooses |
 | Reviewer verdict | `APPROVED` / `NOT_APPROVED` | `APPROVED` | `NOT_APPROVED` → repeat |
 | Author completion | `COMPLETED` / `BLOCKED` | `COMPLETED` | `BLOCKED` → user chooses |
@@ -125,7 +126,7 @@ description before pushing. The PR body is treated as a living
 document that must accurately reflect the current state of the
 implementation at all times, not just at creation time.
 
-The standard PR sync instructions appear in stages 4 through 7:
+The standard PR sync instructions appear in stages 5 through 8:
 
 > Before pushing, check whether the PR description still
 > accurately reflects the current code changes. Run
@@ -188,9 +189,9 @@ two contexts:
   re-run side-effectful work steps or route the clarification
   to the wrong agent in multi-agent stages).  The fallback
   depends on the substep's keyword contract:
-  - *FIXED / DONE* loops (self-check, test-plan): `not_approved`
+  - _FIXED / DONE_ loops (self-check, test-plan): `not_approved`
     — the pipeline loops the stage again.
-  - *COMPLETED / BLOCKED* substeps (implement, author
+  - _COMPLETED / BLOCKED_ substeps (implement, author
     completion, create-pr, squash): `blocked` — the user is
     asked how to proceed.
 - **Pipeline loop injection** — used only when the ambiguous
@@ -222,7 +223,7 @@ Do not include any other commentary — just the keyword.
 
 ## Stage reference
 
-### Stage 1: Implement
+### Stage 2: Implement
 
 **Agent:** A\
 **Purpose:** Implement the changes described in the GitHub issue.
@@ -283,7 +284,7 @@ Do not include any other commentary — just the keyword.
 
 ---
 
-### Stage 2: Self-check loop
+### Stage 3: Self-check loop
 
 **Agent:** A\
 **Purpose:** Review the implementation against quality criteria.
@@ -430,7 +431,7 @@ or if any step fails, the pipeline continues.
 
 ---
 
-### Stage 3: Create PR
+### Stage 4: Create PR
 
 **Agent:** A\
 **Purpose:** Create a pull request from the implementation branch.
@@ -497,16 +498,22 @@ subsequent stages depend on the PR.
 
 ---
 
-### Stage 4: CI check loop
+### Stage 5: CI check loop
 
-**Agent:** A (only on failure)\
+**Agent:** A (only on failure or findings review)\
 **Purpose:** Wait for CI to pass. If CI fails, collect failure
-logs and send them to Agent A for a fix.
+logs and send them to Agent A for a fix. If CI passes but check
+runs report findings (annotations), present them to Agent A for
+review.
 
-The orchestrator polls CI status at 30-second intervals. While
-CI is pending, the handler waits internally without consuming
-the loop budget. When CI passes, the stage
-completes immediately.
+The orchestrator polls CI status at 30-second intervals. The CI
+verdict includes both **workflow runs** (Actions API) and **check
+runs** (Checks API). A run's `source` field (`"workflow"` or
+`"check"`) determines how failure logs are collected. While CI
+is pending, the handler waits internally without consuming the
+loop budget.
+
+When CI passes with no findings, the stage completes immediately.
 
 **CI fix prompt** (sent only when CI fails):
 
@@ -562,9 +569,166 @@ Then commit and push the branch so a new CI run is triggered.
 auto-budget (default: 3). When the budget is exhausted, the user
 is asked whether to continue.
 
+#### CI findings review
+
+When CI passes but check runs have **annotations** (e.g., lint
+warnings, CodeQL alerts), the orchestrator enters a findings-review
+sub-path instead of completing immediately. The findings are
+presented to Agent A for review.
+
+**Findings-review prompt:**
+
+````text
+CI passed but check runs reported findings (annotations).
+Review the findings below and decide whether any should be addressed.
+
+## Repository
+- Owner: {owner}
+- Repo: {repo}
+- Branch: {branch}
+- Worktree: {worktree_path}
+
+## Issue #{number}: {title}
+
+{issue_body}
+
+## CI Findings
+
+{formatted_findings}
+
+{if annotations incomplete →}
+**Note:** Some check run annotations could not be fetched.
+The findings above may be incomplete.  Check the PR's Checks
+tab for the full list of annotations.
+
+{if correlated alerts →}
+
+## CodeQL Triage
+
+For each finding marked with an alert number (`[alert #N]`), evaluate
+whether it is a **real issue** or a **false positive**.
+
+### Evaluation criteria
+
+A finding is a **real issue** when:
+- The flagged code path is reachable in production.
+- An attacker-controlled or untrusted input can reach the sink
+  without adequate sanitisation or validation.
+- The reported weakness (e.g. SQL injection, XSS, path traversal)
+  is exploitable given the application's threat model.
+
+A finding is a **false positive** when:
+- The data is already sanitised or validated before it reaches the
+  flagged location, but CodeQL cannot see through the sanitiser.
+- The flagged code is dead, test-only, or unreachable in production.
+- The "source" is not actually attacker-controlled (e.g. a hardcoded
+  constant, an environment variable set at deploy time).
+- The framework or library provides built-in protection that makes
+  the flagged pattern safe (e.g. parameterised queries).
+
+### Actions
+
+- **Real issue:** Fix the code.  After fixing, commit and push.
+- **False positive:** For each false-positive alert, run these
+  commands (one pair per alert):
+
+  ```
+  gh api -X PATCH "repos/{owner}/{repo}/code-scanning/alerts/{number}" \
+    -f state=dismissed \
+    -f "dismissed_reason=false positive" \
+    -f "dismissed_comment={your brief explanation}"
+  ```
+
+  Then leave one PR comment summarising all dismissed alerts and
+  the reasoning for each.  First, find the PR number:
+
+  ```
+  gh pr view --repo {owner}/{repo} {branch} --json number --jq .number
+  ```
+
+  Then post the comment:
+
+  ```
+  gh pr comment --repo {owner}/{repo} <pr_number> --body "..."
+  ```
+
+### Dismissible alerts
+
+- Alert #{N}: {rule} at {file}:{line}
+
+## Instructions
+
+For each finding, decide whether it should be fixed or can be
+safely ignored.  If you fix any findings:
+
+If your changes affect documentation, update it accordingly —
+code comments, inline API docs (JSDoc/TSDoc/docstrings), README
+files, CHANGELOG entries, and any user-facing manuals, guides,
+or tutorials the project maintains.  If the project uses a
+documentation site generator (MkDocs/Sphinx/Docusaurus/mdBook/
+etc.), update the corresponding source pages — not just the
+README.  If the project keeps a CHANGELOG (e.g. Keep a Changelog
+format), add an appropriate entry.
+
+If a manual or documentation site page requires a screenshot,
+capture a real one by starting the application and opening a
+browser — do not use placeholders.  If your code changes
+affect the visual output shown in existing manual screenshots,
+retake them as part of the doc update.
+
+Before pushing, check whether the PR description still accurately
+reflects the current code changes.  Run
+`gh pr view --json body --jq .body` to read the current
+description, then compare it against what the branch actually does.
+If the description is outdated or inaccurate, update it using
+`gh pr edit --body "..."`.  Keep the issue reference
+(Closes #{number} or Part of #{number}) in the body.
+
+Then commit and push the branch so a new CI run is triggered.
+If all findings are acceptable as-is, explain your reasoning.
+````
+
+The two conditional insertions shown in the template are:
+
+- **Incomplete-annotations note** — appended after `## CI
+  Findings` when some check run annotations could not be fetched.
+- **CodeQL Triage section** — appended before `## Instructions`
+  when findings are correlated with CodeQL code-scanning alerts.
+  The full section is shown verbatim in the template above; the
+  `### Dismissible alerts` list is populated at runtime with the
+  specific alerts found.
+
+**Findings format:** Annotations are grouped by check run and
+listed as `- file:line: [level] message (rule) [alert #N]`. The
+`[alert #N]` suffix appears only for findings correlated with
+CodeQL alerts.
+
+**Findings-review budget:** Tracked independently from the
+failure-fix budget. The maximum number of findings reviews is
+`max(1, maxFixAttempts)` — always at least one review even when
+`maxFixAttempts` is 0.
+
+**Verdict handling:** The findings-review sub-path does **not**
+use a verdict keyword. Instead, the handler compares the HEAD SHA
+before and after the review:
+
+- If the SHA changed (agent pushed fixes), the result is
+  `not_approved` and another CI poll begins.
+- If the SHA is unchanged (agent reviewed but made no changes),
+  the result is `completed` and the stage finishes.
+
+#### CodeQL triage
+
+When findings are correlated with CodeQL code-scanning alerts, the
+`## CodeQL Triage` section shown verbatim in the findings-review
+prompt template above is appended to the prompt.  The section
+includes evaluation criteria, dismiss commands, and a
+`### Dismissible alerts` list populated at runtime with the specific
+alerts found.  See the prompt template for the exact wording.
+
 ---
 
-### Stage 5: Test plan verification loop
+### Stage 6: Test plan verification loop
 
 **Agent:** A\
 **Purpose:** Execute each item in the PR's test plan checklist and
@@ -657,7 +821,7 @@ Do not include any other commentary — just the keyword.
 
 ---
 
-### Stage 6: Review loop
+### Stage 7: Review loop
 
 **Agents:** B (reviewer) and A (author)\
 **Purpose:** Independent code review by Agent B, with Agent A
@@ -734,6 +898,12 @@ Respond with exactly one of the following keywords:
 Do not include any other commentary — just the keyword.
 ```
 
+**Verdict comment:** After recording the verdict, the
+orchestrator posts a machine-readable PR comment:
+`[Review Verdict Round {n}: APPROVED|NOT_APPROVED]`. This
+comment is used for state reconciliation on resume (see
+[PR-comment-based resume](#pr-comment-based-resume) below).
+
 #### Review prompt — Agent B (round 2+)
 
 For follow-up reviews (round > 1), step 2 adds follow-through
@@ -753,7 +923,37 @@ step:
      or does not address the concern, keep the item open.
    - Only carry forward items that remain genuinely unresolved.
 3. Review the updated diff against the issue.
-   [same review angles block as round 1]
+   Your job is an
+   independent judgment on whether this is the right change
+   and whether it is built well — not a mechanical checklist.
+   Read the code, form an opinion, and explain it with
+   concrete references where they help anchor the point.
+
+   Common review angles include:
+   - Whether the approach actually solves the issue, and
+     whether any requirement appears to be dropped, only
+     partially implemented, or implemented in a surprising way.
+   - Correctness on edge cases and failure paths, not just the
+     happy path.
+   - Design quality: readability, appropriate abstractions,
+     avoiding over-engineering, unrelated drive-by changes,
+     dead code, or stray debug output.
+   - Test presence and meaningfulness — especially whether the
+     tests exercise the new behaviour in a way that would have
+     failed before the change. You do NOT need to run the test
+     suite or re-check CI; assume those are already handled and
+     focus on whether the tests are the right tests.
+   - Error handling, security (input validation, injection,
+     secrets, permissions), and obvious performance issues.
+   - Documentation or comments that now appear out of sync with
+     the code.
+   - PR hygiene if it appears off: issue linkage (`Closes #N`
+     vs. `Part of #N` with `## Not addressed` when partial) and
+     a `## Test plan` checklist.
+
+   The list above is guidance, not a limit. If something feels
+   off for any other reason — architectural, stylistic, product,
+   or subtle — raise it.
 4. Post your follow-up review as a PR comment prefixed with
    `**[Reviewer Round {n}]**`. Include any still-unresolved
    prior items and any new findings from this round. Be
@@ -835,6 +1035,8 @@ the result and respond with exactly one of the following keywords:
 
 - COMPLETED — if all feedback was addressed and changes were pushed
 - BLOCKED — if you cannot proceed and need user intervention
+
+Do not include any other commentary — just the keyword.
 ```
 
 After Agent A pushes, the orchestrator runs an internal CI
@@ -935,9 +1137,77 @@ squash short-circuits on single-commit branches.
 via `reviewAutoRounds`). When the budget is exhausted, the user
 is asked whether to continue.
 
+#### PR-comment-based resume
+
+When a review stage is resumed after interruption, the
+orchestrator reconstructs review state from PR comments rather
+than relying solely on persisted run state. The reconciliation
+(in `reconcileWithPr`) compares the saved `RunState` against the
+actual PR comment history and corrects:
+
+- **`reviewRound`** — always corrected to the maximum round number
+  seen across reviewer, author, and verdict PR comments.
+- **`stageLoopCount`** — only corrected when `currentStage` is 7
+  (the review stage); set to `max(0, prMaxRound - 1)` because the
+  loop counter is zero-based while round numbers are one-based.
+  When the pipeline is at a different stage, `stageLoopCount` is
+  left untouched so it preserves that stage's own loop counter.
+- **`currentStage`** — demoted from later stages back to 7 if the latest round
+  lacks an `APPROVED` verdict with a matching reviewer comment;
+  promoted to stage 7 if review rounds exist but local state is
+  still earlier.
+- **`reviewSubStep`** — derived conservatively from the comment
+  history (see below).  **Exception:** when `currentStage > 7`
+  (post-review stages such as squash), the max round is `APPROVED`,
+  and local `lastVerdict` is already `APPROVED`, sub-step
+  reconciliation is skipped.  PR comments cannot distinguish
+  `unresolved_summary` from `pr_finalization`, so the derivation
+  would conservatively return `unresolved_summary` and trigger a
+  false mismatch against a local `pr_finalization`.  Local state is
+  authoritative for post-approval progress.
+- **`lastVerdict`** — always corrected to the verdict derived from
+  the comment history, even when sub-step reconciliation is skipped.
+- **Agent session invalidation** — if any field diverged from the
+  persisted value, all agent sessions are invalidated so they
+  start fresh with corrected state.
+
+The sub-step derivation follows conservative rules:
+
+| PR comment state | Derived sub-step |
+| --- | --- |
+| No reviewer comment for current round | `review` |
+| Reviewer comment but no verdict comment | `verdict` |
+| Verdict is `APPROVED` | `unresolved_summary` |
+| Verdict is `NOT_APPROVED`, no author comment | `author_fix` |
+| Author comment exists | `ci_poll` |
+
+#### ReviewSubStep state machine
+
+Within each review round, the handler tracks progress through a
+`ReviewSubStep` enum:
+
+```text
+review → verdict → (APPROVED)     → unresolved_summary → pr_finalization
+                  → (NOT_APPROVED) → author_fix → ci_poll → [next round]
+```
+
+The sub-steps are:
+
+- **`review`** — Agent B posts a review comment.
+- **`verdict`** — Agent B provides `APPROVED` or `NOT_APPROVED`.
+- **`unresolved_summary`** — Agent B summarises unresolved items
+  (approval path only).
+- **`pr_finalization`** — Agent A verifies the PR body (approval
+  path only).
+- **`author_fix`** — Agent A addresses feedback and pushes.
+- **`ci_poll`** — internal CI poll-and-fix after the author push.
+
+On resume, the handler skips directly to the derived sub-step,
+avoiding re-execution of already-completed work within a round.
+
 ---
 
-### Stage 7: Squash commits
+### Stage 8: Squash commits
 
 **Agent:** A\
 **Purpose:** Consolidate branch commits into one or a few
@@ -994,7 +1264,7 @@ Do not include any other commentary — just the keyword.
 ```
 
 **Ambiguous response handling:** Same internal clarification
-retry pattern as stage 3 (Create PR).  If clarification also fails,
+retry pattern as stage 4 (Create PR).  If clarification also fails,
 the handler re-checks the branch commit count to verify whether the
 squash actually happened.  If the count decreased, the stage
 completes; otherwise it reports `BLOCKED`.
@@ -1009,7 +1279,7 @@ only **Instruct** and **Halt** are offered.
 
 ---
 
-### Stage 8: Done
+### Stage 9: Done
 
 **Agent:** A (only for rebase)\
 **Purpose:** Check for merge conflicts, optionally rebase, and

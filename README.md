@@ -91,29 +91,40 @@ last completed stage or start fresh.
 
 ## How it works
 
-AgentCoop runs an 8-stage pipeline with two agents: Agent A (author
-— implements the issue) and Agent B (reviewer).
+AgentCoop runs an 8-stage pipeline (stages 2–9) with two agents:
+Agent A (author — implements the issue) and Agent B (reviewer).
 
-1. **Implement** — Agent A implements the issue in a git worktree
-2. **Self-check** — Agent A self-checks against quality criteria
-3. **Create PR** — Agent A opens a pull request
-4. **CI check** — Wait for CI; agent fixes failures automatically
-5. **Test plan** — Agent A verifies the PR test plan
-6. **Review** — Agent B reviews; Agent A addresses feedback
-   (multi-round)
-7. **Squash** — Agent A consolidates branch commits into one or a
-   few meaningful commits and force-pushes. Skipped if the branch
-   already has only one commit or if the existing commits are
-   already clean.
-8. **Done** — Check for merge conflicts, optionally rebase, confirm
-   merge with the user, and clean up resources
+- **Stage 2 — Implement:** Agent A implements the issue in a git worktree
+- **Stage 3 — Self-check:** Agent A self-checks against quality criteria
+- **Stage 4 — Create PR:** Agent A opens a pull request
+- **Stage 5 — CI check:** Wait for CI; agent fixes failures automatically.
+  If CI passes with findings (e.g., CodeQL alerts), the agent
+  reviews the annotations and either fixes or triages them.
+- **Stage 6 — Test plan:** Agent A verifies the PR test plan
+- **Stage 7 — Review:** Agent B reviews; Agent A addresses feedback
+  (multi-round)
+- **Stage 8 — Squash:** Agent A consolidates branch commits into one or a
+  few meaningful commits and force-pushes. Skipped if the branch
+  already has only one commit or if the existing commits are
+  already clean.
+- **Stage 9 — Done:** Check for merge conflicts, optionally rebase, confirm
+  merge with the user, and clean up resources
 
 During the review stage, both agents communicate through PR
 comments on GitHub. Since they share the same GitHub account,
-comments are prefixed with round-tagged labels —
-`[Reviewer Round N]` and `[Author Round N]` — so each agent can
-identify which comments to read and respond to. This creates a
-persistent, auditable review thread directly on the PR.
+comments are prefixed with round-tagged labels so each agent can
+identify which comments to read and respond to:
+
+- `[Reviewer Round N]` — Agent B's review comment
+- `[Author Round N]` — Agent A's response to feedback
+- `[Review Verdict Round N: APPROVED|NOT_APPROVED]` — the
+  orchestrator's machine-readable verdict marker (used for state
+  reconciliation on resume)
+- `[Reviewer Unresolved Round N]` — Agent B's summary of items
+  that remain unresolved after the review loop ends
+
+This creates a persistent, auditable review thread directly on
+the PR.
 
 At the final stage, the orchestrator checks whether the PR can be
 merged cleanly. If merge conflicts are detected, the user can choose
@@ -125,7 +136,7 @@ any resolution, CI is re-validated before the merge confirmation is
 presented. Once the user confirms the PR has been merged, the
 orchestrator stops any running services (e.g., Docker Compose),
 deletes the git worktree and its branch, and ends the agent sessions.
-See [Done stage details](docs/pipeline.md#stage-8-done) for the full
+See [Done stage details](docs/pipeline.md#stage-9-done) for the full
 flow.
 
 For detailed stage descriptions, exact prompts, and prompt design
@@ -150,7 +161,7 @@ quality of the input.
 ### Maximum code quality, not cost efficiency
 
 The pipeline prioritizes production-quality output over token economy.
-Agent A self-checks its implementation against a 7-point checklist, a
+Agent A self-checks its implementation against an 8-point checklist, a
 separate Agent B performs an independent code review, test plan items
 are executed (not just listed), and the PR body is verified against
 the implementation multiple times throughout the pipeline.
