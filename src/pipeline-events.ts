@@ -28,6 +28,8 @@ export interface ReviewPostedEvent {
 export interface AgentInvokeEvent {
   agent: "a" | "b";
   type: "invoke" | "resume";
+  /** Type of prompt being sent (when available). */
+  promptKind?: AgentPromptKind;
 }
 
 /**
