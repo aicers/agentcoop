@@ -312,6 +312,7 @@ export function createCiCheckStageHandler(
   return {
     name: t()["stage.ciCheck"],
     number: 5,
+    primaryAgent: "a",
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // ---- poll for CI completion ------------------------------------------
 

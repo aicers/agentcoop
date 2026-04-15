@@ -108,6 +108,7 @@ export function createCreatePrStageHandler(
   return {
     name: t()["stage.createPr"],
     number: 4,
+    primaryAgent: "a",
     requiresArtifact: true,
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send the PR creation prompt (resume if saved session).
@@ -136,7 +137,7 @@ export function createCreatePrStageHandler(
       // session, because re-entering the handler would re-run the
       // side-effectful PR creation step.
       const prCheckPrompt = buildPrCompletionCheckPrompt();
-      ctx.promptSinks?.a?.(prCheckPrompt, "verdict-followup");
+      ctx.promptSinks?.a?.(prCheckPrompt, "verdict-followup", { resume: true });
       let checkResult = await sendFollowUp(
         opts.agent,
         prResult.sessionId,
@@ -167,7 +168,9 @@ export function createCreatePrStageHandler(
           checkResult.responseText,
           PR_CHECK_KEYWORDS,
         );
-        ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup");
+        ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup", {
+          resume: true,
+        });
         const retryResult = await sendFollowUp(
           opts.agent,
           checkResult.sessionId ?? prResult.sessionId,

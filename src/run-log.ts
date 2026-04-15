@@ -215,10 +215,10 @@ export function createRunLog(
   emitter.on("agent:invoke", (ev) => {
     const label = ev.agent === "a" ? "Agent A" : "Agent B";
     let suffix = "";
-    if (ev.promptKind === "work" && currentStageName) {
+    if (ev.kind === "work" && currentStageName) {
       suffix = ` (work: ${currentStageName})`;
-    } else if (ev.promptKind) {
-      suffix = ` (${ev.promptKind})`;
+    } else if (ev.kind) {
+      suffix = ` (${ev.kind})`;
     }
     write(`${ts()} [Pipeline] Invoking ${label}${suffix}`);
   });

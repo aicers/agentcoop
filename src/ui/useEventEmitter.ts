@@ -1,5 +1,21 @@
 import { useEffect, useRef, useState } from "react";
-import type { PipelineEventEmitter } from "../pipeline-events.js";
+import type {
+  AgentInvokeEvent,
+  PipelineCiPollEvent,
+  PipelineEventEmitter,
+  PipelineLoopEvent,
+  PipelineVerdictEvent,
+  StageEnterEvent,
+  StageExitEvent,
+} from "../pipeline-events.js";
+
+/** Return a HH:MM:SS timestamp string for the current time. */
+function hhmmss(): string {
+  const d = new Date();
+  return [d.getHours(), d.getMinutes(), d.getSeconds()]
+    .map((n) => String(n).padStart(2, "0"))
+    .join(":");
+}
 
 /** A structured prompt block stored for size-aware rendering. */
 export interface PromptBlock {
@@ -8,8 +24,17 @@ export interface PromptBlock {
   stageName?: string;
 }
 
-/** A line buffer entry: either a plain text line or a deferred prompt block. */
-export type LineEntry = string | PromptBlock;
+/** An inline diagnostic line from the pipeline orchestrator. */
+export interface DiagnosticBlock {
+  kind: "diagnostic";
+  /** HH:MM:SS timestamp. */
+  timestamp: string;
+  /** Human-readable diagnostic message. */
+  message: string;
+}
+
+/** A line buffer entry: plain text, a prompt block, or a diagnostic line. */
+export type LineEntry = string | PromptBlock | DiagnosticBlock;
 
 export interface AgentLinesResult {
   /** Completed (newline-terminated) lines and prompt blocks. */
@@ -116,6 +141,160 @@ export function useAgentLines(
       emitter.off("agent:prompt", handler);
     };
   }, [emitter, agent, maxLines]);
+
+  // Helper: push a DiagnosticBlock into the line buffer.
+  // Store maxLines in a ref so the callback always sees the latest value
+  // without duplicating the function body.
+  const maxLinesRef = useRef(maxLines);
+  useEffect(() => {
+    maxLinesRef.current = maxLines;
+  }, [maxLines]);
+
+  const pushDiagnostic = useRef((message: string) => {
+    const block: DiagnosticBlock = {
+      kind: "diagnostic",
+      timestamp: hhmmss(),
+      message,
+    };
+    // Flush any pending partial line before inserting the diagnostic
+    // so it appears in the correct chronological position.
+    if (bufferRef.current) {
+      const pending = bufferRef.current;
+      bufferRef.current = "";
+      setPendingLine("");
+      setLines((prev) => {
+        const next: LineEntry[] = [...prev, pending, block];
+        return next.length > maxLinesRef.current
+          ? next.slice(-maxLinesRef.current)
+          : next;
+      });
+    } else {
+      setLines((prev) => {
+        const next: LineEntry[] = [...prev, block];
+        return next.length > maxLinesRef.current
+          ? next.slice(-maxLinesRef.current)
+          : next;
+      });
+    }
+  });
+
+  // --- Diagnostic event subscriptions ---
+
+  // pipeline:verdict → route to the agent that produced the verdict.
+  useEffect(() => {
+    const handler = (ev: PipelineVerdictEvent) => {
+      if (ev.agent !== agent) return;
+      pushDiagnostic.current(`Reviewer verdict parsed as "${ev.keyword}"`);
+    };
+    emitter.on("pipeline:verdict", handler);
+    return () => {
+      emitter.off("pipeline:verdict", handler);
+    };
+  }, [emitter, agent]);
+
+  // stage:enter / stage:exit → show combined stage transitions in both panes.
+  // Buffer exit events and merge with the following enter to produce a single
+  // transition line like "Stage 7 (Review) → Stage 8 (Squash) [outcome: completed]".
+  const pendingExitRef = useRef<{
+    stageNumber: number;
+    stageName: string | undefined;
+    outcome: string;
+  } | null>(null);
+
+  useEffect(() => {
+    const exitHandler = (ev: StageExitEvent) => {
+      pendingExitRef.current = {
+        stageNumber: ev.stageNumber,
+        stageName: stageNameRef.current,
+        outcome: ev.outcome,
+      };
+    };
+    const enterHandler = (ev: StageEnterEvent) => {
+      const pending = pendingExitRef.current;
+      pendingExitRef.current = null;
+      if (pending) {
+        const from = pending.stageName
+          ? `Stage ${pending.stageNumber} (${pending.stageName})`
+          : `Stage ${pending.stageNumber}`;
+        pushDiagnostic.current(
+          `${from} → Stage ${ev.stageNumber} (${ev.stageName}) [outcome: ${pending.outcome}]`,
+        );
+      } else {
+        pushDiagnostic.current(
+          `Entering Stage ${ev.stageNumber} (${ev.stageName})`,
+        );
+      }
+    };
+    emitter.on("stage:exit", exitHandler);
+    emitter.on("stage:enter", enterHandler);
+    return () => {
+      emitter.off("stage:exit", exitHandler);
+      emitter.off("stage:enter", enterHandler);
+    };
+  }, [emitter]);
+
+  // pipeline:loop → route to the looping stage's primary agent pane.
+  useEffect(() => {
+    const handler = (ev: PipelineLoopEvent) => {
+      if (ev.agent !== undefined && ev.agent !== agent) return;
+      if (ev.exhausted) {
+        pushDiagnostic.current(`${ev.stageName} auto-budget exhausted`);
+      } else {
+        pushDiagnostic.current(
+          `${ev.stageName} auto-budget ${ev.remaining}/${ev.budget} remaining`,
+        );
+      }
+    };
+    emitter.on("pipeline:loop", handler);
+    return () => {
+      emitter.off("pipeline:loop", handler);
+    };
+  }, [emitter, agent]);
+
+  // pipeline:ci-poll → route to Agent A pane (CI fixes run on A).
+  useEffect(() => {
+    if (agent !== "a") return;
+    const handler = (ev: PipelineCiPollEvent) => {
+      if (ev.action === "start") {
+        const sha = ev.sha ? ` (SHA: ${ev.sha.slice(0, 7)})` : "";
+        pushDiagnostic.current(`CI polling started${sha}`);
+      } else if (ev.action === "status") {
+        const verdict = ev.verdict ? `: ${ev.verdict}` : "";
+        pushDiagnostic.current(`CI poll status${verdict}`);
+      } else {
+        const verdict = ev.verdict ? `: ${ev.verdict}` : "";
+        pushDiagnostic.current(`CI polling done${verdict}`);
+      }
+    };
+    emitter.on("pipeline:ci-poll", handler);
+    return () => {
+      emitter.off("pipeline:ci-poll", handler);
+    };
+  }, [emitter, agent]);
+
+  // agent:invoke → route to the target agent's pane.
+  useEffect(() => {
+    const kindLabels: Record<string, string> = {
+      work: "work prompt",
+      review: "review prompt",
+      "verdict-followup": "verdict follow-up",
+      "ci-fix": "CI fix prompt",
+      summary: "summary request",
+    };
+    const handler = (ev: AgentInvokeEvent) => {
+      if (ev.agent !== agent) return;
+      const label = agent === "a" ? "Agent A" : "Agent B";
+      const action = ev.type === "invoke" ? "Invoking" : "Resuming";
+      const kindLabel = ev.kind ? (kindLabels[ev.kind] ?? ev.kind) : "";
+      const roundSuffix = ev.round != null ? ` (round ${ev.round})` : "";
+      const context = kindLabel ? ` with ${kindLabel}${roundSuffix}` : "";
+      pushDiagnostic.current(`${action} ${label}${context}`);
+    };
+    emitter.on("agent:invoke", handler);
+    return () => {
+      emitter.off("agent:invoke", handler);
+    };
+  }, [emitter, agent]);
 
   return { lines, pendingLine };
 }

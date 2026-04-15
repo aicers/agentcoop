@@ -147,7 +147,7 @@ describe("createRunLog", () => {
     emitter.emit("agent:invoke", {
       agent: "a",
       type: "invoke",
-      promptKind: "work",
+      kind: "work",
     });
 
     // Enter a stage so subsequent "work" prompts include stage context.
@@ -160,12 +160,12 @@ describe("createRunLog", () => {
     emitter.emit("agent:invoke", {
       agent: "b",
       type: "invoke",
-      promptKind: "work",
+      kind: "work",
     });
     emitter.emit("agent:invoke", {
       agent: "a",
       type: "invoke",
-      promptKind: "ci-fix",
+      kind: "ci-fix",
     });
     emitter.emit("agent:invoke", { agent: "b", type: "invoke" });
     await log.close();
@@ -177,7 +177,7 @@ describe("createRunLog", () => {
     expect(content).toContain("[Pipeline] Invoking Agent B (work: Implement)");
     // Non-work kinds are unchanged.
     expect(content).toContain("[Pipeline] Invoking Agent A (ci-fix)");
-    // Without promptKind, no parenthetical suffix.
+    // Without kind, no parenthetical suffix.
     expect(content).toMatch(/Invoking Agent B\n/);
   });
 
@@ -375,7 +375,7 @@ describe("createRunLog", () => {
     emitter.emit("agent:invoke", {
       agent: "a",
       type: "invoke",
-      promptKind: "work",
+      kind: "work",
     });
 
     // Restore to "Done".
@@ -384,7 +384,7 @@ describe("createRunLog", () => {
     emitter.emit("agent:invoke", {
       agent: "a",
       type: "invoke",
-      promptKind: "work",
+      kind: "work",
     });
 
     await log.close();

@@ -86,6 +86,11 @@ export interface StageDefinition {
    * the CI check before re-entering verification.
    */
   restartFromStage?: number;
+  /**
+   * The agent that primarily drives this stage.  Used by the UI to
+   * route loop diagnostics to the correct pane.
+   */
+  primaryAgent?: "a" | "b";
 }
 
 /**
@@ -512,7 +517,9 @@ export async function runPipeline(
         stageNumber: stage.number,
         stageName: stage.name,
         remaining: lc.autoRemaining,
+        budget: lc.budget,
         exhausted: !canContinue,
+        agent: stage.primaryAgent,
       });
       if (!canContinue) {
         const approved = await prompt.confirmContinueLoop(
@@ -631,22 +638,26 @@ async function runStage(
         a: (
           prompt: string,
           kind: import("./pipeline-events.js").AgentPromptKind,
+          meta?: import("./stage-util.js").PromptSinkMeta,
         ) => {
           events.emit("agent:invoke", {
             agent: "a",
-            type: "invoke",
-            promptKind: kind,
+            type: meta?.resume ? "resume" : "invoke",
+            kind,
+            round: meta?.round,
           });
           events.emit("agent:prompt", { agent: "a", prompt, kind });
         },
         b: (
           prompt: string,
           kind: import("./pipeline-events.js").AgentPromptKind,
+          meta?: import("./stage-util.js").PromptSinkMeta,
         ) => {
           events.emit("agent:invoke", {
             agent: "b",
-            type: "invoke",
-            promptKind: kind,
+            type: meta?.resume ? "resume" : "invoke",
+            kind,
+            round: meta?.round,
           });
           events.emit("agent:prompt", { agent: "b", prompt, kind });
         },
@@ -800,7 +811,9 @@ async function runStage(
       stageNumber: stage.number,
       stageName: stage.name,
       remaining: lc.autoRemaining,
+      budget: lc.budget,
       exhausted: !canContinue,
+      agent: stage.primaryAgent,
     });
     // Notify caller after loop counter change for persistence.
     onStageTransition?.(stage.number, lc.iteration);
@@ -907,6 +920,7 @@ export function createDoneStageHandler(
   return {
     name: t()["stage.done"],
     number: 9,
+    primaryAgent: "a",
     handler: async (ctx) => {
       const m = t();
       const summary = m["pipeline.pipelineCompleted"](

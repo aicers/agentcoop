@@ -28,8 +28,10 @@ export interface ReviewPostedEvent {
 export interface AgentInvokeEvent {
   agent: "a" | "b";
   type: "invoke" | "resume";
-  /** Type of prompt being sent (when available). */
-  promptKind?: AgentPromptKind;
+  /** Prompt kind so the diagnostic can show orchestrator context. */
+  kind?: AgentPromptKind;
+  /** Review round (1-based) for review-stage invocations. */
+  round?: number;
 }
 
 /**
@@ -37,12 +39,14 @@ export interface AgentInvokeEvent {
  * consumers to inspect prompt text.
  *
  * - `"work"` — primary stage prompt
+ * - `"review"` — reviewer stage prompt (Agent B reviewing Agent A's work)
  * - `"verdict-followup"` — verdict clarification prompt
  * - `"ci-fix"` — CI failure fix prompt
  * - `"summary"` — unresolved summary request
  */
 export type AgentPromptKind =
   | "work"
+  | "review"
   | "verdict-followup"
   | "ci-fix"
   | "summary";
@@ -82,8 +86,12 @@ export interface PipelineLoopEvent {
   stageName: string;
   /** Auto-iterations remaining after this advance. */
   remaining: number;
+  /** Total auto-budget for the loop. */
+  budget: number;
   /** `true` when the auto-budget has been exhausted. */
   exhausted: boolean;
+  /** Primary agent for the looping stage (used for pane routing). */
+  agent?: "a" | "b";
 }
 
 /**

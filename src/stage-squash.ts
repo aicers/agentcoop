@@ -130,6 +130,7 @@ export function createSquashStageHandler(
   return {
     name: t()["stage.squash"],
     number: 8,
+    primaryAgent: "a",
     requiresArtifact: true,
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Skip squash when the branch has only one commit.
@@ -168,7 +169,9 @@ export function createSquashStageHandler(
       // Step 2: Completion check (same internal-clarification pattern as
       // stage 4).
       const squashCheckPrompt = buildSquashCompletionCheckPrompt();
-      ctx.promptSinks?.a?.(squashCheckPrompt, "verdict-followup");
+      ctx.promptSinks?.a?.(squashCheckPrompt, "verdict-followup", {
+        resume: true,
+      });
       let checkResult = await sendFollowUp(
         opts.agent,
         squashResult.sessionId,
@@ -199,7 +202,9 @@ export function createSquashStageHandler(
           checkResult.responseText,
           SQUASH_CHECK_KEYWORDS,
         );
-        ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup");
+        ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup", {
+          resume: true,
+        });
         const retryResult = await sendFollowUp(
           opts.agent,
           checkResult.sessionId ?? squashResult.sessionId,

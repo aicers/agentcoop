@@ -443,6 +443,7 @@ export function createReviewStageHandler(
   return {
     name: t()["stage.review"],
     number: 7,
+    primaryAgent: "b",
     handler: async (ctx: StageContext): Promise<StageResult> => {
       const round = ctx.iteration + 1; // 1-based for display
 
@@ -488,7 +489,7 @@ export function createReviewStageHandler(
       if (currentStep === "review") {
         opts.onReviewProgress?.("review");
         const reviewPrompt = buildReviewPrompt(ctx, opts, round);
-        ctx.promptSinks?.b?.(reviewPrompt, "work");
+        ctx.promptSinks?.b?.(reviewPrompt, "review", { round });
         const reviewResult = await invokeOrResume(
           opts.agentB,
           ctx.savedAgentBSessionId,
@@ -530,7 +531,9 @@ export function createReviewStageHandler(
         if (agentBSessionId) {
           // Follow-up on review session (normal flow).
           const verdictPrompt = buildReviewVerdictPrompt();
-          ctx.promptSinks?.b?.(verdictPrompt, "verdict-followup");
+          ctx.promptSinks?.b?.(verdictPrompt, "verdict-followup", {
+            resume: true,
+          });
           verdictResult = await sendFollowUp(
             opts.agentB,
             agentBSessionId,
@@ -757,7 +760,9 @@ export function createReviewStageHandler(
 
         // Verdict follow-up: ask A for exactly PR_FINALIZED.
         const finalVerdictPrompt = buildPrFinalizationVerdictPrompt();
-        ctx.promptSinks?.a?.(finalVerdictPrompt, "verdict-followup");
+        ctx.promptSinks?.a?.(finalVerdictPrompt, "verdict-followup", {
+          resume: true,
+        });
         let finalVerdictResult = await sendFollowUp(
           opts.agentA,
           finalizeResult.sessionId,
@@ -793,7 +798,9 @@ export function createReviewStageHandler(
             finalVerdictResult.responseText,
             PR_FINALIZATION_KEYWORDS,
           );
-          ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup");
+          ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup", {
+            resume: true,
+          });
           const retryResult = await sendFollowUp(
             opts.agentA,
             finalVerdictResult.sessionId ?? finalizeResult.sessionId,
@@ -899,7 +906,9 @@ export function createReviewStageHandler(
         // Completion check on Agent A (with clarification retry,
         // same pattern as stage 4 / stage 8).
         const authorCheckPrompt = buildAuthorCompletionCheckPrompt();
-        ctx.promptSinks?.a?.(authorCheckPrompt, "verdict-followup");
+        ctx.promptSinks?.a?.(authorCheckPrompt, "verdict-followup", {
+          resume: true,
+        });
         let checkResult = await sendFollowUp(
           opts.agentA,
           fixResult.sessionId,
@@ -930,7 +939,9 @@ export function createReviewStageHandler(
             checkResult.responseText,
             AUTHOR_CHECK_KEYWORDS,
           );
-          ctx.promptSinks?.a?.(retryPrompt, "verdict-followup");
+          ctx.promptSinks?.a?.(retryPrompt, "verdict-followup", {
+            resume: true,
+          });
           const retryResult = await sendFollowUp(
             opts.agentA,
             checkResult.sessionId ?? fixResult.sessionId,

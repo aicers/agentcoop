@@ -7,6 +7,7 @@ import type {
   StageEnterEvent,
 } from "../pipeline-events.js";
 import {
+  type DiagnosticBlock,
   type LineEntry,
   PROMPT_LINE_PREFIX,
   PROMPT_SEPARATOR_CHAR,
@@ -83,10 +84,19 @@ export function renderPromptRows(block: PromptBlock, width: number): string[] {
   return result;
 }
 
+/**
+ * Render a diagnostic block as a single formatted line:
+ * `[HH:MM:SS] Pipeline: <message>`
+ */
+export function renderDiagnosticRow(block: DiagnosticBlock): string {
+  return `[${block.timestamp}] Pipeline: ${block.message}`;
+}
+
 /** A single terminal row tagged with display metadata. */
 interface RowEntry {
   text: string;
   isPrompt: boolean;
+  isDiagnostic: boolean;
   /** Index of the parent logical line in allLines. */
   lineIdx: number;
 }
@@ -161,12 +171,28 @@ export function AgentPane({
         entry.startsWith(PROMPT_LINE_PREFIX) ||
         entry.startsWith(PROMPT_SEPARATOR_CHAR);
       for (const row of splitIntoRows(entry, contentWidth)) {
-        allRows.push({ text: row, isPrompt, lineIdx: i });
+        allRows.push({ text: row, isPrompt, isDiagnostic: false, lineIdx: i });
+      }
+    } else if (entry.kind === "diagnostic") {
+      // DiagnosticBlock: single formatted row.
+      const text = renderDiagnosticRow(entry);
+      for (const row of splitIntoRows(text, contentWidth)) {
+        allRows.push({
+          text: row,
+          isPrompt: false,
+          isDiagnostic: true,
+          lineIdx: i,
+        });
       }
     } else {
       // PromptBlock: render size-aware with current content width.
       for (const row of renderPromptRows(entry, contentWidth)) {
-        allRows.push({ text: row, isPrompt: true, lineIdx: i });
+        allRows.push({
+          text: row,
+          isPrompt: true,
+          isDiagnostic: false,
+          lineIdx: i,
+        });
       }
     }
   }
@@ -276,12 +302,15 @@ export function AgentPane({
     linesAbove = startRow > 0 ? allRows[startRow].lineIdx : 0;
   }
 
-  const hasOutput = allLines.length > 0;
+  // Diagnostic-only panes should still show the placeholder message.
+  const hasOutput = allLines.some(
+    (l) => typeof l === "string" || l.kind !== "diagnostic",
+  );
 
   let placeholder: string | undefined;
-  if (visibleRowEntries.length === 0 && effectiveOffset === 0) {
+  if (effectiveOffset === 0 && (!hasOutput || visibleRowEntries.length === 0)) {
     const m = t();
-    if (hasOutput) {
+    if (hasOutput && visibleRowEntries.length === 0) {
       placeholder = m["agentPane.tooSmall"];
     } else if (
       agent === "b" &&
@@ -333,14 +362,13 @@ export function AgentPane({
         flexShrink={1}
         overflow="hidden"
       >
-        {placeholder !== undefined ? (
-          <Text dimColor>{placeholder}</Text>
-        ) : (
+        {placeholder !== undefined && <Text dimColor>{placeholder}</Text>}
+        {(placeholder === undefined || !hasOutput) && (
           <>
             {topIndicator && <Text dimColor>{topIndicator}</Text>}
             {visibleRowEntries.map((row, i) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: rows are derived without stable IDs
-              <Text key={i} dimColor={row.isPrompt}>
+              <Text key={i} dimColor={row.isPrompt || row.isDiagnostic}>
                 {row.text}
               </Text>
             ))}
