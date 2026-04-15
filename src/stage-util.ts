@@ -26,14 +26,27 @@ import {
  */
 export type StreamSink = (chunk: string) => void;
 
+/** Extra context forwarded through the prompt sink to diagnostic events. */
+export interface PromptSinkMeta {
+  /** Review round (1-based) for review-stage invocations. */
+  round?: number;
+  /** True when the prompt resumes an existing session (sendFollowUp). */
+  resume?: boolean;
+}
+
 /**
  * Callback that receives the full prompt text before it is sent to the agent.
  * Used by the UI to display outgoing prompts in the agent's pane.
  *
  * The optional `kind` parameter classifies the prompt type so that
  * diagnostic consumers can distinguish prompts without inspecting text.
+ * The optional `meta` parameter carries additional context (e.g. round).
  */
-export type PromptSink = (prompt: string, kind: AgentPromptKind) => void;
+export type PromptSink = (
+  prompt: string,
+  kind: AgentPromptKind,
+  meta?: PromptSinkMeta,
+) => void;
 
 /**
  * Callback that receives token usage data after an agent invocation completes.

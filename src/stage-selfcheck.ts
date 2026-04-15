@@ -135,6 +135,7 @@ export function createSelfCheckStageHandler(
   return {
     name: t()["stage.selfCheck"],
     number: 3,
+    primaryAgent: "a",
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send self-check prompt (resume if saved session).
       const checkPrompt = buildSelfCheckPrompt(ctx, opts);
@@ -159,7 +160,7 @@ export function createSelfCheckStageHandler(
 
       // Step 2: Send fix-or-done work prompt (resume the same session).
       const fixPrompt = buildFixOrDonePrompt();
-      ctx.promptSinks?.a?.(fixPrompt, "work");
+      ctx.promptSinks?.a?.(fixPrompt, "work", { resume: true });
       const fixResult = await sendFollowUp(
         opts.agent,
         checkResult.sessionId,
@@ -176,7 +177,7 @@ export function createSelfCheckStageHandler(
 
       // Step 3: Verdict follow-up — ask for exactly FIXED or DONE.
       const verdictPrompt = buildFixOrDoneVerdictPrompt();
-      ctx.promptSinks?.a?.(verdictPrompt, "verdict-followup");
+      ctx.promptSinks?.a?.(verdictPrompt, "verdict-followup", { resume: true });
       const verdictResult = await sendFollowUp(
         opts.agent,
         fixResult.sessionId,
@@ -208,7 +209,9 @@ export function createSelfCheckStageHandler(
           verdictCheckResult.responseText,
           FIX_OR_DONE_KEYWORDS,
         );
-        ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup");
+        ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup", {
+          resume: true,
+        });
         const retryResult = await sendFollowUp(
           opts.agent,
           verdictCheckResult.sessionId ?? fixResult.sessionId,
@@ -244,7 +247,7 @@ export function createSelfCheckStageHandler(
       if (result.outcome === "completed" && verdictCheckResult.sessionId) {
         try {
           const syncPrompt = buildIssueSyncPrompt(ctx, opts);
-          ctx.promptSinks?.a?.(syncPrompt, "work");
+          ctx.promptSinks?.a?.(syncPrompt, "work", { resume: true });
           const syncResult = await sendFollowUp(
             opts.agent,
             verdictCheckResult.sessionId,
@@ -258,7 +261,9 @@ export function createSelfCheckStageHandler(
           if (syncResult.status === "success") {
             // Verdict follow-up: ask for sync status report.
             const syncVerdictPrompt = buildIssueSyncVerdictPrompt();
-            ctx.promptSinks?.a?.(syncVerdictPrompt, "verdict-followup");
+            ctx.promptSinks?.a?.(syncVerdictPrompt, "verdict-followup", {
+              resume: true,
+            });
             const syncVerdictResult = await sendFollowUp(
               opts.agent,
               syncResult.sessionId ?? verdictCheckResult.sessionId,
@@ -277,7 +282,9 @@ export function createSelfCheckStageHandler(
               // Clarification retry if the response was malformed.
               if (!parseResult.valid) {
                 const clarifyPrompt = buildIssueSyncClarificationPrompt();
-                ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup");
+                ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup", {
+                  resume: true,
+                });
                 const retryResult = await sendFollowUp(
                   opts.agent,
                   syncVerdictResult.sessionId ??

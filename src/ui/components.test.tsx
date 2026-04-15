@@ -14,7 +14,12 @@ import {
   type AgentInvokeEvent,
   PipelineEventEmitter,
 } from "../pipeline-events.js";
-import { AgentPane, renderPromptRows, splitIntoRows } from "./AgentPane.js";
+import {
+  AgentPane,
+  renderDiagnosticRow,
+  renderPromptRows,
+  splitIntoRows,
+} from "./AgentPane.js";
 import {
   computeLayoutWidth,
   computeVisibilityFlags,
@@ -1764,7 +1769,8 @@ describe("viewport height constraint", () => {
 
     const emitter = new PipelineEventEmitter();
     const viewportWidth = 80;
-    const viewportHeight = 16;
+    // Extra height to accommodate inline diagnostic rows from stage:enter.
+    const viewportHeight = 18;
     const labelA = "Agent A (author)";
     const labelB = "Agent B (reviewer)";
     const flags = computeVisibilityFlags(viewportHeight, 1, true, "row", {
@@ -3151,5 +3157,99 @@ describe("AgentPane size-aware rendering", () => {
     const frame = lastFrame() ?? "";
     // The frame must fit within 8 rows.
     expect(frame.split("\n").length).toBeLessThanOrEqual(8);
+  });
+});
+
+describe("renderDiagnosticRow", () => {
+  test("formats timestamp and message with Pipeline prefix", () => {
+    const row = renderDiagnosticRow({
+      kind: "diagnostic",
+      timestamp: "01:03:15",
+      message: 'Reviewer verdict parsed as "APPROVED"',
+    });
+    expect(row).toBe(
+      '[01:03:15] Pipeline: Reviewer verdict parsed as "APPROVED"',
+    );
+  });
+
+  test("handles empty message", () => {
+    const row = renderDiagnosticRow({
+      kind: "diagnostic",
+      timestamp: "00:00:00",
+      message: "",
+    });
+    expect(row).toBe("[00:00:00] Pipeline: ");
+  });
+});
+
+describe("AgentPane diagnostic rendering", () => {
+  test("renders diagnostic lines inline with agent output", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box height={12}>
+        <AgentPane label="Agent A" agent="a" emitter={emitter} color="blue" />
+      </Box>,
+    );
+
+    emitter.emit("agent:chunk", { agent: "a", chunk: "output line\n" });
+    emitter.emit("pipeline:verdict", {
+      agent: "a",
+      keyword: "APPROVED",
+      raw: "APPROVED",
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("output line");
+    expect(frame).toContain("Pipeline:");
+    expect(frame).toContain("APPROVED");
+  });
+
+  test("diagnostic-only pane shows placeholder and diagnostics together", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box height={10}>
+        <AgentPane label="Agent A" agent="a" emitter={emitter} color="blue" />
+      </Box>,
+    );
+
+    emitter.emit("stage:enter", {
+      stageNumber: 2,
+      stageName: "Implement",
+      iteration: 0,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    // Placeholder and diagnostic lines should both be visible.
+    expect(frame).toContain("waiting for output");
+    expect(frame).toContain("Pipeline:");
+    expect(frame).toContain("Implement");
+  });
+
+  test("diagnostic after partial chunk preserves chronological order", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box height={12}>
+        <AgentPane label="Agent A" agent="a" emitter={emitter} color="blue" />
+      </Box>,
+    );
+
+    // Emit a partial (unterminated) chunk, then a diagnostic.
+    emitter.emit("agent:chunk", { agent: "a", chunk: "partial text" });
+    emitter.emit("pipeline:verdict", {
+      agent: "a",
+      keyword: "APPROVED",
+      raw: "APPROVED",
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    // The partial text should appear before the diagnostic line.
+    const partialIdx = frame.indexOf("partial text");
+    const diagnosticIdx = frame.indexOf("Pipeline:");
+    expect(partialIdx).toBeGreaterThanOrEqual(0);
+    expect(diagnosticIdx).toBeGreaterThanOrEqual(0);
+    expect(partialIdx).toBeLessThan(diagnosticIdx);
   });
 });

@@ -125,6 +125,7 @@ export function createTestPlanStageHandler(
   return {
     name: t()["stage.testPlan"],
     number: 6,
+    primaryAgent: "a",
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send verification prompt (resume if saved session).
       const verifyPrompt = buildTestPlanVerifyPrompt(ctx, opts);
@@ -149,7 +150,7 @@ export function createTestPlanStageHandler(
 
       // Step 2: Send self-check work prompt (resume the same session).
       const selfCheckPrompt = buildTestPlanSelfCheckPrompt();
-      ctx.promptSinks?.a?.(selfCheckPrompt, "work");
+      ctx.promptSinks?.a?.(selfCheckPrompt, "work", { resume: true });
       const checkResult = await sendFollowUp(
         opts.agent,
         verifyResult.sessionId,
@@ -166,7 +167,7 @@ export function createTestPlanStageHandler(
 
       // Step 3: Verdict follow-up — ask for exactly FIXED or DONE.
       const verdictPrompt = buildTestPlanVerdictPrompt();
-      ctx.promptSinks?.a?.(verdictPrompt, "verdict-followup");
+      ctx.promptSinks?.a?.(verdictPrompt, "verdict-followup", { resume: true });
       const verdictResult = await sendFollowUp(
         opts.agent,
         checkResult.sessionId,
@@ -197,7 +198,9 @@ export function createTestPlanStageHandler(
           verdictResult.responseText,
           TEST_PLAN_VERDICT_KEYWORDS,
         );
-        ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup");
+        ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup", {
+          resume: true,
+        });
         const retryResult = await sendFollowUp(
           opts.agent,
           verdictResult.sessionId ?? checkResult.sessionId,

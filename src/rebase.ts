@@ -104,7 +104,7 @@ export function createRebaseHandler(
 
     // Verdict follow-up: ask for exactly COMPLETED or BLOCKED.
     const verdictPrompt = buildRebaseVerdictPrompt();
-    ctx.promptSinks?.a?.(verdictPrompt, "verdict-followup");
+    ctx.promptSinks?.a?.(verdictPrompt, "verdict-followup", { resume: true });
     let verdictResult = await sendFollowUp(
       agent,
       result.sessionId,
@@ -138,7 +138,7 @@ export function createRebaseHandler(
         verdictResult.responseText,
         REBASE_KEYWORDS,
       );
-      ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup");
+      ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup", { resume: true });
       const retryResult = await sendFollowUp(
         agent,
         verdictResult.sessionId ?? result.sessionId,

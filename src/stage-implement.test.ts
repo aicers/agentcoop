@@ -415,6 +415,54 @@ describe("createImplementStageHandler", () => {
     });
   });
 
+  test("prompt sink receives resume: true for completion check", async () => {
+    const implResult = makeResult({ sessionId: "sess-impl" });
+    const checkResult = makeResult({ responseText: "COMPLETED" });
+    const agent = makeAgent(implResult, checkResult);
+    const promptSink = vi.fn();
+    const stage = createImplementStageHandler(makeOpts({ agent }));
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      promptSinks: { a: promptSink },
+    };
+    await stage.handler(ctx);
+
+    // First call: implementation prompt (no resume meta).
+    expect(promptSink).toHaveBeenCalledTimes(2);
+    expect(promptSink.mock.calls[0][2]).toBeUndefined();
+    // Second call: completion check (resume: true).
+    expect(promptSink.mock.calls[1][2]).toEqual({ resume: true });
+  });
+
+  test("prompt sink receives resume: true for clarification retry", async () => {
+    const implResult = makeResult({ sessionId: "sess-impl" });
+    const ambiguousCheck = makeResult({
+      sessionId: "sess-check",
+      responseText: "I think so",
+    });
+    const clarifiedCheck = makeResult({ responseText: "COMPLETED" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(implResult)),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(ambiguousCheck))
+        .mockReturnValueOnce(makeStream(clarifiedCheck)),
+    };
+    const promptSink = vi.fn();
+    const stage = createImplementStageHandler(makeOpts({ agent }));
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      promptSinks: { a: promptSink },
+    };
+    await stage.handler(ctx);
+
+    // 3 calls: impl prompt, check prompt, clarification prompt.
+    expect(promptSink).toHaveBeenCalledTimes(3);
+    // Both the check and clarification calls pass resume: true.
+    expect(promptSink.mock.calls[1][2]).toEqual({ resume: true });
+    expect(promptSink.mock.calls[2][2]).toEqual({ resume: true });
+  });
+
   test("falls back to invoke when saved session fails", async () => {
     const errorResult = makeResult({
       status: "error",

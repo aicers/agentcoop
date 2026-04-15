@@ -179,6 +179,7 @@ describe("PipelineEventEmitter", () => {
       stageNumber: 2,
       stageName: "Implement",
       remaining: 1,
+      budget: 3,
       exhausted: false,
     };
     emitter.emit("pipeline:loop", event);

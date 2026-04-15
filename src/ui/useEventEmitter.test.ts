@@ -5,8 +5,20 @@
  * PipelineEventEmitter events and accumulate chunks into lines.
  */
 import { describe, expect, test } from "vitest";
+import type {
+  AgentInvokeEvent,
+  PipelineCiPollEvent,
+  PipelineLoopEvent,
+  PipelineVerdictEvent,
+  StageEnterEvent,
+  StageExitEvent,
+} from "../pipeline-events.js";
 import { PipelineEventEmitter } from "../pipeline-events.js";
-import type { LineEntry, PromptBlock } from "./useEventEmitter.js";
+import type {
+  DiagnosticBlock,
+  LineEntry,
+  PromptBlock,
+} from "./useEventEmitter.js";
 
 // ---- line accumulation logic (mirrors useAgentLines) -------------------------
 
@@ -23,8 +35,39 @@ function createLineAccumulator(
   let buffer = "";
   let lines: LineEntry[] = [];
   let stageName: string | undefined;
+  const handlers: Array<{ event: string; fn: (...args: unknown[]) => void }> =
+    [];
 
-  const chunkHandler = (ev: { agent: "a" | "b"; chunk: string }) => {
+  function on<T>(event: string, fn: (ev: T) => void) {
+    emitter.on(event as "agent:chunk", fn as never);
+    handlers.push({ event, fn: fn as (...args: unknown[]) => void });
+  }
+
+  function push(block: DiagnosticBlock | PromptBlock) {
+    const next: LineEntry[] = [...lines, block];
+    lines = next.length > maxLines ? next.slice(-maxLines) : next;
+  }
+
+  function pushDiagnostic(message: string) {
+    const block: DiagnosticBlock = {
+      kind: "diagnostic",
+      timestamp: "00:00:00",
+      message,
+    };
+    // Flush any pending partial line before inserting the diagnostic
+    // so it appears in the correct chronological position (mirrors
+    // the real hook's pushDiagnostic logic).
+    if (buffer) {
+      const pending = buffer;
+      buffer = "";
+      const next: LineEntry[] = [...lines, pending, block];
+      lines = next.length > maxLines ? next.slice(-maxLines) : next;
+    } else {
+      push(block);
+    }
+  }
+
+  on<{ agent: "a" | "b"; chunk: string }>("agent:chunk", (ev) => {
     if (ev.agent !== agent) return;
     buffer += ev.chunk;
     const parts = buffer.split("\n");
@@ -32,9 +75,9 @@ function createLineAccumulator(
     if (parts.length === 0) return;
     const next: LineEntry[] = [...lines, ...parts];
     lines = next.length > maxLines ? next.slice(-maxLines) : next;
-  };
+  });
 
-  const promptHandler = (ev: { agent: "a" | "b"; prompt: string }) => {
+  on<{ agent: "a" | "b"; prompt: string }>("agent:prompt", (ev) => {
     if (ev.agent !== agent) return;
     const block: PromptBlock = { kind: "prompt", prompt: ev.prompt, stageName };
     if (buffer) {
@@ -43,26 +86,96 @@ function createLineAccumulator(
       const next: LineEntry[] = [...lines, pending, block];
       lines = next.length > maxLines ? next.slice(-maxLines) : next;
     } else {
-      const next: LineEntry[] = [...lines, block];
-      lines = next.length > maxLines ? next.slice(-maxLines) : next;
+      push(block);
     }
-  };
+  });
 
-  const stageHandler = (ev: { stageName: string }) => {
+  // Buffer exit events and merge with the following enter to produce a
+  // single transition line (mirrors the real hook's pendingExitRef logic).
+  let pendingExit: {
+    stageNumber: number;
+    stageName: string | undefined;
+    outcome: string;
+  } | null = null;
+
+  on<StageExitEvent>("stage:exit", (ev) => {
+    pendingExit = {
+      stageNumber: ev.stageNumber,
+      stageName,
+      outcome: ev.outcome,
+    };
+  });
+
+  on<StageEnterEvent>("stage:enter", (ev) => {
+    const pending = pendingExit;
+    pendingExit = null;
+    if (pending) {
+      const from = pending.stageName
+        ? `Stage ${pending.stageNumber} (${pending.stageName})`
+        : `Stage ${pending.stageNumber}`;
+      pushDiagnostic(
+        `${from} → Stage ${ev.stageNumber} (${ev.stageName}) [outcome: ${pending.outcome}]`,
+      );
+    } else {
+      pushDiagnostic(`Entering Stage ${ev.stageNumber} (${ev.stageName})`);
+    }
     stageName = ev.stageName;
-  };
+  });
 
-  emitter.on("agent:chunk", chunkHandler);
-  emitter.on("agent:prompt", promptHandler);
-  emitter.on("stage:enter", stageHandler);
+  on<PipelineVerdictEvent>("pipeline:verdict", (ev) => {
+    if (ev.agent !== agent) return;
+    pushDiagnostic(`Reviewer verdict parsed as "${ev.keyword}"`);
+  });
+
+  on<PipelineLoopEvent>("pipeline:loop", (ev) => {
+    if (ev.agent !== undefined && ev.agent !== agent) return;
+    if (ev.exhausted) {
+      pushDiagnostic(`${ev.stageName} auto-budget exhausted`);
+    } else {
+      pushDiagnostic(
+        `${ev.stageName} auto-budget ${ev.remaining}/${ev.budget} remaining`,
+      );
+    }
+  });
+
+  on<PipelineCiPollEvent>("pipeline:ci-poll", (ev) => {
+    if (agent !== "a") return;
+    if (ev.action === "start") {
+      const sha = ev.sha ? ` (SHA: ${ev.sha.slice(0, 7)})` : "";
+      pushDiagnostic(`CI polling started${sha}`);
+    } else if (ev.action === "status") {
+      const verdict = ev.verdict ? `: ${ev.verdict}` : "";
+      pushDiagnostic(`CI poll status${verdict}`);
+    } else {
+      const verdict = ev.verdict ? `: ${ev.verdict}` : "";
+      pushDiagnostic(`CI polling done${verdict}`);
+    }
+  });
+
+  on<AgentInvokeEvent>("agent:invoke", (ev) => {
+    if (ev.agent !== agent) return;
+    const kindLabels: Record<string, string> = {
+      work: "work prompt",
+      review: "review prompt",
+      "verdict-followup": "verdict follow-up",
+      "ci-fix": "CI fix prompt",
+      summary: "summary request",
+    };
+    const label = agent === "a" ? "Agent A" : "Agent B";
+    const action = ev.type === "invoke" ? "Invoking" : "Resuming";
+    const kindLabel = ev.kind ? (kindLabels[ev.kind] ?? ev.kind) : "";
+    const roundSuffix = ev.round != null ? ` (round ${ev.round})` : "";
+    const context = kindLabel ? ` with ${kindLabel}${roundSuffix}` : "";
+    pushDiagnostic(`${action} ${label}${context}`);
+  });
 
   return {
     getLines: () => lines,
     getBuffer: () => buffer,
     cleanup: () => {
-      emitter.off("agent:chunk", chunkHandler);
-      emitter.off("agent:prompt", promptHandler);
-      emitter.off("stage:enter", stageHandler);
+      for (const { event, fn } of handlers) {
+        emitter.off(event as "agent:chunk", fn as never);
+      }
     },
   };
 }
@@ -204,7 +317,9 @@ describe("agent:prompt integration with line accumulator", () => {
 
     const lines = acc.getLines();
     expect(lines[0]).toBe("output");
-    expect(lines[1]).toEqual({
+    // stage:enter also produces a diagnostic block
+    expect(lines[1]).toMatchObject({ kind: "diagnostic" });
+    expect(lines[2]).toEqual({
       kind: "prompt",
       prompt: "hello",
       stageName: "Implement",
@@ -312,5 +427,328 @@ describe("event subscription patterns", () => {
 
     accA.cleanup();
     accB.cleanup();
+  });
+});
+
+describe("diagnostic event routing", () => {
+  function diagnostics(lines: LineEntry[]): DiagnosticBlock[] {
+    return lines.filter(
+      (l): l is DiagnosticBlock =>
+        typeof l !== "string" && l.kind === "diagnostic",
+    );
+  }
+
+  test("pipeline:verdict routes to the agent that produced it", () => {
+    const emitter = new PipelineEventEmitter();
+    const accA = createLineAccumulator(emitter, "a");
+    const accB = createLineAccumulator(emitter, "b");
+
+    emitter.emit("pipeline:verdict", {
+      agent: "b",
+      keyword: "APPROVED",
+      raw: "APPROVED",
+    });
+
+    expect(diagnostics(accA.getLines())).toEqual([]);
+    const bDiags = diagnostics(accB.getLines());
+    expect(bDiags).toHaveLength(1);
+    expect(bDiags[0].message).toBe('Reviewer verdict parsed as "APPROVED"');
+
+    accA.cleanup();
+    accB.cleanup();
+  });
+
+  test("stage:enter and stage:exit combine into a single transition line", () => {
+    const emitter = new PipelineEventEmitter();
+    const accA = createLineAccumulator(emitter, "a");
+    const accB = createLineAccumulator(emitter, "b");
+
+    emitter.emit("stage:enter", {
+      stageNumber: 7,
+      stageName: "Review",
+      iteration: 0,
+    });
+    emitter.emit("stage:exit", { stageNumber: 7, outcome: "completed" });
+    emitter.emit("stage:enter", {
+      stageNumber: 8,
+      stageName: "Squash",
+      iteration: 0,
+    });
+
+    for (const acc of [accA, accB]) {
+      const diags = diagnostics(acc.getLines());
+      expect(diags).toHaveLength(2);
+      expect(diags[0].message).toBe("Entering Stage 7 (Review)");
+      expect(diags[1].message).toBe(
+        "Stage 7 (Review) → Stage 8 (Squash) [outcome: completed]",
+      );
+    }
+
+    accA.cleanup();
+    accB.cleanup();
+  });
+
+  test("pipeline:loop shows remaining/total budget in the owning pane", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "b");
+
+    emitter.emit("pipeline:loop", {
+      stageNumber: 7,
+      stageName: "Review",
+      remaining: 4,
+      budget: 5,
+      exhausted: false,
+      agent: "b",
+    });
+
+    const diags = diagnostics(acc.getLines());
+    expect(diags).toHaveLength(1);
+    expect(diags[0].message).toBe("Review auto-budget 4/5 remaining");
+
+    acc.cleanup();
+  });
+
+  test("pipeline:loop shows exhausted message", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "b");
+
+    emitter.emit("pipeline:loop", {
+      stageNumber: 7,
+      stageName: "Review",
+      remaining: 0,
+      budget: 5,
+      exhausted: true,
+      agent: "b",
+    });
+
+    const diags = diagnostics(acc.getLines());
+    expect(diags).toHaveLength(1);
+    expect(diags[0].message).toBe("Review auto-budget exhausted");
+
+    acc.cleanup();
+  });
+
+  test("pipeline:loop does not appear in the non-owning pane", () => {
+    const emitter = new PipelineEventEmitter();
+    const accA = createLineAccumulator(emitter, "a");
+    const accB = createLineAccumulator(emitter, "b");
+
+    emitter.emit("pipeline:loop", {
+      stageNumber: 7,
+      stageName: "Review",
+      remaining: 3,
+      budget: 5,
+      exhausted: false,
+      agent: "b",
+    });
+
+    // Agent B owns the loop — should receive the diagnostic.
+    expect(diagnostics(accB.getLines())).toHaveLength(1);
+    // Agent A should not receive it.
+    expect(diagnostics(accA.getLines())).toHaveLength(0);
+
+    accA.cleanup();
+    accB.cleanup();
+  });
+
+  test("pipeline:ci-poll routes only to agent A", () => {
+    const emitter = new PipelineEventEmitter();
+    const accA = createLineAccumulator(emitter, "a");
+    const accB = createLineAccumulator(emitter, "b");
+
+    emitter.emit("pipeline:ci-poll", {
+      action: "start",
+      sha: "abc1234567890",
+    });
+
+    const aDiags = diagnostics(accA.getLines());
+    expect(aDiags).toHaveLength(1);
+    expect(aDiags[0].message).toBe("CI polling started (SHA: abc1234)");
+
+    // Agent B should not receive ci-poll diagnostics
+    const bDiags = diagnostics(accB.getLines());
+    expect(bDiags).toHaveLength(0);
+
+    accA.cleanup();
+    accB.cleanup();
+  });
+
+  test("pipeline:ci-poll status includes verdict when present", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "a");
+
+    emitter.emit("pipeline:ci-poll", {
+      action: "status",
+      verdict: "pending",
+    });
+
+    const diags = diagnostics(acc.getLines());
+    expect(diags).toHaveLength(1);
+    expect(diags[0].message).toBe("CI poll status: pending");
+
+    acc.cleanup();
+  });
+
+  test("pipeline:ci-poll status without verdict", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "a");
+
+    emitter.emit("pipeline:ci-poll", { action: "status" });
+
+    const diags = diagnostics(acc.getLines());
+    expect(diags).toHaveLength(1);
+    expect(diags[0].message).toBe("CI poll status");
+
+    acc.cleanup();
+  });
+
+  test("pipeline:ci-poll start without SHA", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "a");
+
+    emitter.emit("pipeline:ci-poll", { action: "start" });
+
+    const diags = diagnostics(acc.getLines());
+    expect(diags).toHaveLength(1);
+    expect(diags[0].message).toBe("CI polling started");
+
+    acc.cleanup();
+  });
+
+  test("pipeline:ci-poll done includes verdict", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "a");
+
+    emitter.emit("pipeline:ci-poll", {
+      action: "done",
+      sha: "abc",
+      verdict: "pass",
+    });
+
+    const diags = diagnostics(acc.getLines());
+    expect(diags).toHaveLength(1);
+    expect(diags[0].message).toBe("CI polling done: pass");
+
+    acc.cleanup();
+  });
+
+  test("agent:invoke routes to the target agent's pane with kind context", () => {
+    const emitter = new PipelineEventEmitter();
+    const accA = createLineAccumulator(emitter, "a");
+    const accB = createLineAccumulator(emitter, "b");
+
+    emitter.emit("agent:invoke", {
+      agent: "b",
+      type: "invoke",
+      kind: "work",
+    });
+
+    const aDiags = diagnostics(accA.getLines());
+    expect(aDiags).toHaveLength(0);
+
+    const bDiags = diagnostics(accB.getLines());
+    expect(bDiags).toHaveLength(1);
+    expect(bDiags[0].message).toBe("Invoking Agent B with work prompt");
+
+    accA.cleanup();
+    accB.cleanup();
+  });
+
+  test("agent:invoke resume produces correct message with kind", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "a");
+
+    emitter.emit("agent:invoke", {
+      agent: "a",
+      type: "resume",
+      kind: "verdict-followup",
+    });
+
+    const diags = diagnostics(acc.getLines());
+    expect(diags).toHaveLength(1);
+    expect(diags[0].message).toBe("Resuming Agent A with verdict follow-up");
+
+    acc.cleanup();
+  });
+
+  test("agent:invoke review kind includes round", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "b");
+
+    emitter.emit("agent:invoke", {
+      agent: "b",
+      type: "invoke",
+      kind: "review",
+      round: 2,
+    });
+
+    const diags = diagnostics(acc.getLines());
+    expect(diags).toHaveLength(1);
+    expect(diags[0].message).toBe(
+      "Invoking Agent B with review prompt (round 2)",
+    );
+
+    acc.cleanup();
+  });
+
+  test("agent:invoke without kind falls back to generic message", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "b");
+
+    emitter.emit("agent:invoke", { agent: "b", type: "invoke" });
+
+    const diags = diagnostics(acc.getLines());
+    expect(diags).toHaveLength(1);
+    expect(diags[0].message).toBe("Invoking Agent B");
+
+    acc.cleanup();
+  });
+
+  test("diagnostic blocks are capped by maxLines", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "a", 2);
+
+    emitter.emit("agent:chunk", { agent: "a", chunk: "line1\n" });
+    emitter.emit("pipeline:verdict", {
+      agent: "a",
+      keyword: "BLOCKED",
+      raw: "BLOCKED",
+    });
+    emitter.emit("pipeline:verdict", {
+      agent: "a",
+      keyword: "APPROVED",
+      raw: "APPROVED",
+    });
+
+    // maxLines = 2: should keep only the last two entries
+    expect(acc.getLines()).toHaveLength(2);
+
+    acc.cleanup();
+  });
+
+  test("diagnostic arriving mid-chunk flushes the partial buffer first", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "a");
+
+    emitter.emit("agent:chunk", { agent: "a", chunk: "partial" });
+    expect(acc.getBuffer()).toBe("partial");
+
+    emitter.emit("pipeline:verdict", {
+      agent: "a",
+      keyword: "APPROVED",
+      raw: "APPROVED",
+    });
+
+    const lines = acc.getLines();
+    // The partial text should be flushed as a plain string line
+    // before the diagnostic block.
+    expect(lines[0]).toBe("partial");
+    expect(lines[1]).toMatchObject({
+      kind: "diagnostic",
+      message: 'Reviewer verdict parsed as "APPROVED"',
+    });
+    expect(acc.getBuffer()).toBe("");
+
+    acc.cleanup();
   });
 });

@@ -85,6 +85,7 @@ export function createImplementStageHandler(
   return {
     name: t()["stage.implement"],
     number: 2,
+    primaryAgent: "a",
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send the implementation prompt (resume if saved session).
       const prompt = buildImplementPrompt(ctx, opts);
@@ -109,7 +110,7 @@ export function createImplementStageHandler(
 
       // Step 2: Resume the session and ask for completion status.
       const checkPrompt = buildCompletionCheckPrompt();
-      ctx.promptSinks?.a?.(checkPrompt, "verdict-followup");
+      ctx.promptSinks?.a?.(checkPrompt, "verdict-followup", { resume: true });
       const checkResult = await sendFollowUp(
         opts.agent,
         implResult.sessionId,
@@ -141,7 +142,9 @@ export function createImplementStageHandler(
           checkResult.responseText,
           IMPLEMENT_CHECK_KEYWORDS,
         );
-        ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup");
+        ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup", {
+          resume: true,
+        });
         const retryResult = await sendFollowUp(
           opts.agent,
           checkResult.sessionId ?? implResult.sessionId,
