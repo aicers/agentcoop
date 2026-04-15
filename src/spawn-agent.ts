@@ -1,4 +1,6 @@
+import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
+import EventEmitter from "node:events";
 import type { AgentResult, AgentStream, ChunkTransformer } from "./agent.js";
 
 export interface SpawnAgentOptions {
@@ -21,13 +23,65 @@ export interface SpawnAgentOptions {
    * Omit or pass 0 to disable.
    */
   inactivityTimeoutMs?: number;
+  /**
+   * When provided, this text is written to the child's stdin and the
+   * stream is closed.  This avoids placing large prompts on the command
+   * line where they can hit the OS `ARG_MAX` limit.
+   */
+  stdin?: string;
 }
 
 export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
-  const child = spawn(opts.command, opts.args, {
-    cwd: opts.cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(opts.command, opts.args, {
+      cwd: opts.cwd,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch (err) {
+    // spawn() can throw synchronously for errors like E2BIG (argument
+    // list too long) or EACCES.  Convert these into a structured result
+    // so callers never see an unhandled exception.
+    const errno = (err as NodeJS.ErrnoException).code;
+    const errorResult: AgentResult =
+      errno === "ENOENT"
+        ? {
+            sessionId: undefined,
+            responseText: `${opts.command} CLI not found`,
+            status: "error",
+            errorType: "cli_not_found",
+            stderrText: "",
+          }
+        : {
+            sessionId: undefined,
+            responseText: (err as Error).message,
+            status: "error",
+            errorType: "execution_error",
+            stderrText: "",
+          };
+    const stubChild = new EventEmitter() as ChildProcess;
+    stubChild.kill = () => false;
+    return {
+      async *[Symbol.asyncIterator]() {},
+      result: Promise.resolve(errorResult),
+      child: stubChild,
+    };
+  }
+
+  // Write prompt to stdin when provided, avoiding ARG_MAX limits.
+  if (opts.stdin != null) {
+    child.stdin?.on("error", () => {
+      // EPIPE means the child closed its stdin before we finished
+      // writing — harmless.  Other errors (e.g. ECONNRESET) will
+      // surface as a non-zero exit code from the child, which the
+      // `close` handler resolves as a structured AgentResult.
+      // Throwing from an event callback would bypass structured error
+      // handling and produce an uncaught exception.
+    });
+    child.stdin?.end(opts.stdin);
+  } else {
+    child.stdin?.end();
+  }
 
   const { stdout, stderr } = child;
   const stdoutChunks: string[] = [];
@@ -84,7 +138,7 @@ export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
     stderrChunks.push(data.toString());
   });
 
-  const result = new Promise<AgentResult>((resolve, reject) => {
+  const result = new Promise<AgentResult>((resolve) => {
     child.on("error", (err) => {
       if (inactivityTimer) clearTimeout(inactivityTimer);
       if ("code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
@@ -96,7 +150,13 @@ export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
           stderrText: "",
         });
       } else {
-        reject(err);
+        resolve({
+          sessionId: undefined,
+          responseText: err.message,
+          status: "error",
+          errorType: "execution_error",
+          stderrText: "",
+        });
       }
     });
 

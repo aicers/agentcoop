@@ -207,7 +207,6 @@ export interface ClaudeAdapterOptions {
 }
 
 export function buildClaudeArgs(
-  prompt: string,
   opts: {
     model?: string;
     effortLevel?: ClaudeEffortLevel;
@@ -216,7 +215,8 @@ export function buildClaudeArgs(
   sessionId?: string,
 ): string[] {
   // --verbose is required for --output-format stream-json.
-  const args = ["-p", prompt, "--output-format", "stream-json", "--verbose"];
+  // -p without a following positional argument causes Claude to read from stdin.
+  const args = ["-p", "--output-format", "stream-json", "--verbose"];
   if (opts.model) {
     // Append context window variant as a bracketed suffix (e.g. opus[1m])
     // when the extended 1M window is selected.
@@ -297,7 +297,7 @@ export function createClaudeAdapter(
       if (options?.onUsage) transformer.onUsage = options.onUsage;
       return spawnAgent({
         command: "claude",
-        args: buildClaudeArgs(prompt, {
+        args: buildClaudeArgs({
           model,
           effortLevel,
           contextWindow,
@@ -306,6 +306,7 @@ export function createClaudeAdapter(
         parseResult: parseClaudeOutput,
         chunkTransformer: transformer,
         inactivityTimeoutMs,
+        stdin: prompt,
       });
     },
     resume(sessionId, prompt, options?: InvokeOptions) {
@@ -313,15 +314,12 @@ export function createClaudeAdapter(
       if (options?.onUsage) transformer.onUsage = options.onUsage;
       return spawnAgent({
         command: "claude",
-        args: buildClaudeArgs(
-          prompt,
-          { model, effortLevel, contextWindow },
-          sessionId,
-        ),
+        args: buildClaudeArgs({ model, effortLevel, contextWindow }, sessionId),
         cwd: options?.cwd,
         parseResult: parseClaudeOutput,
         chunkTransformer: transformer,
         inactivityTimeoutMs,
+        stdin: prompt,
       });
     },
   };

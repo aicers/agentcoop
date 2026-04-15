@@ -17,8 +17,8 @@ function createMockChild(): ChildProcess {
   const child = new EventEmitter() as ChildProcess;
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
-  child.stdin = null;
-  child.stdio = [null, child.stdout, child.stderr, null, null];
+  child.stdin = new PassThrough();
+  child.stdio = [child.stdin, child.stdout, child.stderr, null, null];
   child.pid = 12345;
   child.connected = false;
   child.signalCode = null;
@@ -73,7 +73,7 @@ describe("spawnAgent", () => {
 
     expect(mockSpawn).toHaveBeenCalledWith("test-cli", ["--flag", "value"], {
       cwd: "/some/dir",
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
   });
 
@@ -207,7 +207,7 @@ describe("spawnAgent", () => {
     });
   });
 
-  test("rejects on non-ENOENT spawn error", async () => {
+  test("resolves execution_error on non-ENOENT spawn error", async () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child);
 
@@ -227,7 +227,141 @@ describe("spawnAgent", () => {
     err.code = "EACCES";
     child.emit("error", err);
 
-    await expect(stream.result).rejects.toThrow("permission denied");
+    const result = await stream.result;
+    expect(result).toMatchObject({
+      sessionId: undefined,
+      responseText: "permission denied",
+      status: "error",
+      errorType: "execution_error",
+      stderrText: "",
+    });
+  });
+
+  test("resolves execution_error on E2BIG spawn error (async event)", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const stream = spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: () => ({
+        sessionId: undefined,
+        responseText: "",
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+    });
+
+    const err = new Error("spawn E2BIG") as NodeJS.ErrnoException;
+    err.code = "E2BIG";
+    child.emit("error", err);
+
+    const result = await stream.result;
+    expect(result.status).toBe("error");
+    expect(result.errorType).toBe("execution_error");
+    expect(result.responseText).toBe("spawn E2BIG");
+  });
+
+  test("resolves execution_error when spawn() throws E2BIG synchronously", async () => {
+    const err = new Error("spawn E2BIG") as NodeJS.ErrnoException;
+    err.code = "E2BIG";
+    mockSpawn.mockImplementation(() => {
+      throw err;
+    });
+
+    const stream = spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: () => ({
+        sessionId: undefined,
+        responseText: "",
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+    });
+
+    const result = await stream.result;
+    expect(result.status).toBe("error");
+    expect(result.errorType).toBe("execution_error");
+    expect(result.responseText).toBe("spawn E2BIG");
+  });
+
+  test("resolves execution_error when spawn() throws EACCES synchronously", async () => {
+    const err = new Error("spawn EACCES") as NodeJS.ErrnoException;
+    err.code = "EACCES";
+    mockSpawn.mockImplementation(() => {
+      throw err;
+    });
+
+    const stream = spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: () => ({
+        sessionId: undefined,
+        responseText: "",
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+    });
+
+    const result = await stream.result;
+    expect(result.status).toBe("error");
+    expect(result.errorType).toBe("execution_error");
+    expect(result.responseText).toBe("spawn EACCES");
+  });
+
+  test("resolves cli_not_found when spawn() throws ENOENT synchronously", async () => {
+    const err = new Error("spawn ENOENT") as NodeJS.ErrnoException;
+    err.code = "ENOENT";
+    mockSpawn.mockImplementation(() => {
+      throw err;
+    });
+
+    const stream = spawnAgent({
+      command: "nonexistent",
+      args: [],
+      parseResult: () => ({
+        sessionId: undefined,
+        responseText: "",
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+    });
+
+    const result = await stream.result;
+    expect(result.status).toBe("error");
+    expect(result.errorType).toBe("cli_not_found");
+    expect(result.responseText).toBe("nonexistent CLI not found");
+  });
+
+  test("synchronous spawn throw returns empty async iterator", async () => {
+    const err = new Error("spawn E2BIG") as NodeJS.ErrnoException;
+    err.code = "E2BIG";
+    mockSpawn.mockImplementation(() => {
+      throw err;
+    });
+
+    const stream = spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: () => ({
+        sessionId: undefined,
+        responseText: "",
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+    });
+
+    const chunks: string[] = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toEqual([]);
   });
 
   test("passes only stdout to parseResult output param", async () => {
@@ -307,6 +441,116 @@ describe("spawnAgent", () => {
     const result = await stream.result;
     expect(result.responseText).toBe("");
     expect(result.status).toBe("success");
+  });
+
+  test("writes stdin option to child process stdin", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+    const stdinData: string[] = [];
+    (child.stdin as PassThrough).on("data", (chunk: Buffer) => {
+      stdinData.push(chunk.toString());
+    });
+
+    spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: (output) => ({
+        sessionId: undefined,
+        responseText: output,
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+      stdin: "hello from stdin",
+    });
+
+    // Allow the write to flush.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(stdinData.join("")).toBe("hello from stdin");
+  });
+
+  test("closes stdin when no stdin option provided", () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: () => ({
+        sessionId: undefined,
+        responseText: "",
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+    });
+
+    // stdin should be ended (writable finished).
+    expect((child.stdin as PassThrough).writableEnded).toBe(true);
+  });
+
+  test("silently ignores EPIPE on stdin", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    // Replace stdin with one that emits EPIPE on write.
+    const fakeStdin = new PassThrough();
+    child.stdin = fakeStdin;
+
+    const stream = spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: (output) => ({
+        sessionId: undefined,
+        responseText: output,
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+      stdin: "prompt data",
+    });
+
+    // Simulate EPIPE error on stdin.
+    const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
+    epipe.code = "EPIPE";
+    fakeStdin.emit("error", epipe);
+
+    // Process should still resolve normally.
+    child.emit("close", 0);
+    const result = await stream.result;
+    expect(result.status).toBe("success");
+  });
+
+  test("silently ignores non-EPIPE stdin errors (no uncaught exception)", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const fakeStdin = new PassThrough();
+    child.stdin = fakeStdin;
+
+    const stream = spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: (_output, code) => ({
+        sessionId: undefined,
+        responseText: "",
+        status: code === 0 ? "success" : "error",
+        errorType: code === 0 ? undefined : "execution_error",
+        stderrText: "",
+      }),
+      stdin: "prompt data",
+    });
+
+    // Simulate a non-EPIPE stdin error — should not throw.
+    const err = new Error("write ECONNRESET") as NodeJS.ErrnoException;
+    err.code = "ECONNRESET";
+    fakeStdin.emit("error", err);
+
+    // Child exits with error; the close handler produces a structured result.
+    child.emit("close", 1);
+    const result = await stream.result;
+    expect(result.status).toBe("error");
+    expect(result.errorType).toBe("execution_error");
   });
 });
 
@@ -706,9 +950,13 @@ describe("Claude adapter invoke/resume (E2E with mock spawn)", () => {
     return events.map((e) => JSON.stringify(e)).join("\n");
   }
 
-  test("invoke sends correct args and returns parsed result", async () => {
+  test("invoke passes prompt via stdin, not in args", async () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child);
+    const stdinData: string[] = [];
+    (child.stdin as PassThrough).on("data", (chunk: Buffer) => {
+      stdinData.push(chunk.toString());
+    });
 
     const adapter = createClaudeAdapter({
       model: "opus",
@@ -716,19 +964,16 @@ describe("Claude adapter invoke/resume (E2E with mock spawn)", () => {
 
     const stream = adapter.invoke("write tests");
 
-    expect(mockSpawn).toHaveBeenCalledWith(
-      "claude",
-      expect.arrayContaining([
-        "-p",
-        "write tests",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--model",
-        "opus",
-      ]),
-      expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] }),
-    );
+    const spawnArgs = mockSpawn.mock.calls[0]?.[1] as string[];
+    expect(spawnArgs).toContain("-p");
+    expect(spawnArgs).not.toContain("write tests");
+    expect(spawnArgs).toContain("--output-format");
+    expect(spawnArgs).toContain("--model");
+    expect(spawnArgs).toContain("opus");
+
+    // Verify prompt was delivered via stdin.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(stdinData.join("")).toBe("write tests");
 
     const output = streamJsonl([
       { type: "system", subtype: "init", session_id: "sess-new" },
@@ -749,23 +994,27 @@ describe("Claude adapter invoke/resume (E2E with mock spawn)", () => {
     expect(result.status).toBe("success");
   });
 
-  test("resume includes --resume flag with session ID", () => {
+  test("resume passes prompt via stdin and includes --resume flag", async () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child);
+    const stdinData: string[] = [];
+    (child.stdin as PassThrough).on("data", (chunk: Buffer) => {
+      stdinData.push(chunk.toString());
+    });
 
     const adapter = createClaudeAdapter();
     adapter.resume("sess-prev", "continue working");
 
-    expect(mockSpawn).toHaveBeenCalledWith(
-      "claude",
-      expect.arrayContaining([
-        "--resume",
-        "sess-prev",
-        "--permission-mode",
-        "bypassPermissions",
-      ]),
-      expect.anything(),
-    );
+    const spawnArgs = mockSpawn.mock.calls[0]?.[1] as string[];
+    expect(spawnArgs).toContain("--resume");
+    expect(spawnArgs).toContain("sess-prev");
+    expect(spawnArgs).toContain("--permission-mode");
+    expect(spawnArgs).toContain("bypassPermissions");
+    expect(spawnArgs).not.toContain("continue working");
+
+    // Verify prompt was delivered via stdin.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(stdinData.join("")).toBe("continue working");
   });
 
   test("invoke with cwd passes working directory", () => {
@@ -888,27 +1137,28 @@ describe("Claude adapter invoke/resume (E2E with mock spawn)", () => {
 // E2E: Codex adapter full flow
 // ---------------------------------------------------------------------------
 describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
-  test("invoke sends correct args and returns parsed JSONL result", async () => {
+  test("invoke passes prompt via stdin with '-' in args", async () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child);
+    const stdinData: string[] = [];
+    (child.stdin as PassThrough).on("data", (chunk: Buffer) => {
+      stdinData.push(chunk.toString());
+    });
 
     const adapter = createCodexAdapter({ model: "gpt-5.4" });
     const stream = adapter.invoke("fix the bug");
 
-    expect(mockSpawn).toHaveBeenCalledWith(
-      "codex",
-      expect.arrayContaining([
-        "exec",
-        "-s",
-        "danger-full-access",
-        "--json",
-        "-m",
-        "gpt-5.4",
-        "-c",
-        "model_reasoning_effort=high",
-      ]),
-      expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] }),
-    );
+    const spawnArgs = mockSpawn.mock.calls[0]?.[1] as string[];
+    expect(spawnArgs).toContain("-");
+    expect(spawnArgs).not.toContain("fix the bug");
+    expect(spawnArgs).toContain("exec");
+    expect(spawnArgs).toContain("--json");
+    expect(spawnArgs).toContain("-m");
+    expect(spawnArgs).toContain("gpt-5.4");
+
+    // Verify prompt was delivered via stdin.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(stdinData.join("")).toBe("fix the bug");
 
     const jsonl = [
       JSON.stringify({
@@ -981,9 +1231,13 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
     expect(spawnArgs).toContain("model_reasoning_effort=medium");
   });
 
-  test("resume uses plain text parsing without --json flag", async () => {
+  test("resume passes prompt via stdin with '-' in args", async () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child);
+    const stdinData: string[] = [];
+    (child.stdin as PassThrough).on("data", (chunk: Buffer) => {
+      stdinData.push(chunk.toString());
+    });
 
     const adapter = createCodexAdapter({ model: "gpt-5.3-codex" });
     const stream = adapter.resume("sess-prev", "keep going");
@@ -991,6 +1245,12 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
     const spawnArgs = mockSpawn.mock.calls[0]?.[1] as string[];
     expect(spawnArgs).toContain("resume");
     expect(spawnArgs).toContain("sess-prev");
+    expect(spawnArgs).toContain("-");
+    expect(spawnArgs).not.toContain("keep going");
+
+    // Verify prompt was delivered via stdin.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(stdinData.join("")).toBe("keep going");
     expect(spawnArgs).toContain("-c");
     expect(spawnArgs).toContain("sandbox_mode=danger-full-access");
     expect(spawnArgs).toContain('model="gpt-5.3-codex"');
