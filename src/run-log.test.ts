@@ -61,6 +61,8 @@ function meta(overrides?: Partial<RunLogMetadata>): RunLogMetadata {
     agentB: { cli: "claude", model: "sonnet" },
     selfCheckAutoIterations: 5,
     reviewAutoRounds: 5,
+    ciCheckAutoIterations: 3,
+    ciCheckTimeoutMinutes: 10,
     inactivityTimeoutMinutes: 20,
     autoResumeAttempts: 3,
     ...overrides,
@@ -106,6 +108,8 @@ describe("createRunLog", () => {
     expect(content).toContain("claude / sonnet");
     expect(content).toContain("self-check=5");
     expect(content).toContain("review=5");
+    expect(content).toContain("ci-check=3");
+    expect(content).toContain("ciCheck=10m");
     expect(content).toContain("inactivity=20m");
     expect(content).toContain("autoResume=3");
     expect(content).toContain("auto");

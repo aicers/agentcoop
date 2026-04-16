@@ -3180,6 +3180,35 @@ describe("renderDiagnosticRow", () => {
     });
     expect(row).toBe("[00:00:00] Pipeline: ");
   });
+
+  test("appends count suffix when count > 1", () => {
+    const row = renderDiagnosticRow({
+      kind: "diagnostic",
+      timestamp: "06:41:08",
+      message: "CI poll status: pending",
+      count: 3,
+    });
+    expect(row).toBe("[06:41:08] Pipeline: CI poll status: pending x3");
+  });
+
+  test("omits count suffix when count is 1", () => {
+    const row = renderDiagnosticRow({
+      kind: "diagnostic",
+      timestamp: "01:00:00",
+      message: "some message",
+      count: 1,
+    });
+    expect(row).toBe("[01:00:00] Pipeline: some message");
+  });
+
+  test("omits count suffix when count is undefined", () => {
+    const row = renderDiagnosticRow({
+      kind: "diagnostic",
+      timestamp: "01:00:00",
+      message: "some message",
+    });
+    expect(row).toBe("[01:00:00] Pipeline: some message");
+  });
 });
 
 describe("AgentPane diagnostic rendering", () => {

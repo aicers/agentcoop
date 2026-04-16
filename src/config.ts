@@ -5,6 +5,8 @@ import { dirname, join } from "node:path";
 export interface PipelineSettings {
   selfCheckAutoIterations: number;
   reviewAutoRounds: number;
+  ciCheckAutoIterations: number;
+  ciCheckTimeoutMinutes: number;
   inactivityTimeoutMinutes: number;
   autoResumeAttempts: number;
 }
@@ -12,6 +14,8 @@ export interface PipelineSettings {
 export const DEFAULT_PIPELINE_SETTINGS: PipelineSettings = {
   selfCheckAutoIterations: 5,
   reviewAutoRounds: 5,
+  ciCheckAutoIterations: 3,
+  ciCheckTimeoutMinutes: 10,
   inactivityTimeoutMinutes: 20,
   autoResumeAttempts: 3,
 };
@@ -103,6 +107,12 @@ function loadPipelineSettings(raw: unknown): PipelineSettings {
     reviewAutoRounds: isPositiveInt(r.reviewAutoRounds)
       ? r.reviewAutoRounds
       : d.reviewAutoRounds,
+    ciCheckAutoIterations: isPositiveInt(r.ciCheckAutoIterations)
+      ? r.ciCheckAutoIterations
+      : d.ciCheckAutoIterations,
+    ciCheckTimeoutMinutes: isPositiveInt(r.ciCheckTimeoutMinutes)
+      ? r.ciCheckTimeoutMinutes
+      : d.ciCheckTimeoutMinutes,
     inactivityTimeoutMinutes: isPositiveInt(r.inactivityTimeoutMinutes)
       ? r.inactivityTimeoutMinutes
       : d.inactivityTimeoutMinutes,
@@ -154,6 +164,27 @@ export function loadConfig(): Config {
       raw.executionMode === "auto" || raw.executionMode === "step"
         ? raw.executionMode
         : undefined,
+  };
+}
+
+/**
+ * Assembles the CI-check stage definition fragment from pipeline settings.
+ *
+ * Accepts a factory that builds the stage handler (so the caller can
+ * inject agent/issue context) and returns the handler spread with
+ * `autoBudget` set.  This keeps the minutes→ms conversion and the
+ * settings→stage wiring in one testable place, independent of the CLI
+ * entry point.
+ */
+export function assembleCiCheckStage<T>(
+  createHandler: (opts: { pollTimeoutMs: number }) => T,
+  settings: PipelineSettings,
+): T & { autoBudget: number } {
+  return {
+    ...createHandler({
+      pollTimeoutMs: settings.ciCheckTimeoutMinutes * 60_000,
+    }),
+    autoBudget: settings.ciCheckAutoIterations,
   };
 }
 

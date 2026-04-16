@@ -275,6 +275,8 @@ Settings are stored in `~/.agentcoop/config.json`:
 | `language` | UI language (`en` or `ko`) | `en` |
 | `pipelineSettings.selfCheckAutoIterations` | Self-check budget | `5` |
 | `pipelineSettings.reviewAutoRounds` | Review budget | `5` |
+| `pipelineSettings.ciCheckAutoIterations` | CI check fix-attempt budget | `3` |
+| `pipelineSettings.ciCheckTimeoutMinutes` | CI poll timeout | `10` |
 | `pipelineSettings.inactivityTimeoutMinutes` | Silence timeout | `20` |
 | `pipelineSettings.autoResumeAttempts` | Max auto-resumes | `3` |
 | `notifications.bell` | Terminal bell on input wait | `true` |

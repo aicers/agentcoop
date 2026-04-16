@@ -34,6 +34,8 @@ export const en: Messages = {
   "startup.settingSelfCheck": "Self-check auto iterations",
   "startup.settingReviewRounds": "Review auto rounds",
   "startup.settingInactivityTimeout": "Inactivity timeout",
+  "startup.settingCiCheckIterations": "CI check auto iterations",
+  "startup.settingCiCheckTimeout": "CI check timeout",
   "startup.settingAutoResume": "Auto-resume attempts",
   "startup.settingSuffixMin": "min",
   "startup.adjustSettings": "Adjust any settings?",

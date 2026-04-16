@@ -443,20 +443,26 @@ function settingLabels(): Record<SettingKey, string> {
   return {
     selfCheckAutoIterations: m["startup.settingSelfCheck"],
     reviewAutoRounds: m["startup.settingReviewRounds"],
+    ciCheckAutoIterations: m["startup.settingCiCheckIterations"],
+    ciCheckTimeoutMinutes: m["startup.settingCiCheckTimeout"],
     inactivityTimeoutMinutes: m["startup.settingInactivityTimeout"],
     autoResumeAttempts: m["startup.settingAutoResume"],
   };
 }
 
 function settingSuffixes(): Partial<Record<SettingKey, string>> {
+  const m = t();
   return {
-    inactivityTimeoutMinutes: t()["startup.settingSuffixMin"],
+    ciCheckTimeoutMinutes: m["startup.settingSuffixMin"],
+    inactivityTimeoutMinutes: m["startup.settingSuffixMin"],
   };
 }
 
 const SETTING_KEYS: SettingKey[] = [
   "selfCheckAutoIterations",
   "reviewAutoRounds",
+  "ciCheckAutoIterations",
+  "ciCheckTimeoutMinutes",
   "inactivityTimeoutMinutes",
   "autoResumeAttempts",
 ];

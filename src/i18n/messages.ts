@@ -37,6 +37,8 @@ export interface Messages {
   "startup.settingSelfCheck": string;
   "startup.settingReviewRounds": string;
   "startup.settingInactivityTimeout": string;
+  "startup.settingCiCheckIterations": string;
+  "startup.settingCiCheckTimeout": string;
   "startup.settingAutoResume": string;
   "startup.settingSuffixMin": string;
   "startup.adjustSettings": string;
