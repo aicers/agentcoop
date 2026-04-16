@@ -85,12 +85,20 @@ export function renderPromptRows(block: PromptBlock, width: number): string[] {
 }
 
 /**
- * Render a diagnostic block as a single formatted line:
+ * Render a diagnostic block as a single formatted line.
+ *
+ * Global (stage-transition) diagnostics use a divider style:
+ * `── Stage 4 (Create PR) → Stage 5 (CI check) [outcome: completed] ──`
+ *
+ * Agent-specific diagnostics keep the activity-log style:
  * `[HH:MM:SS] Pipeline: <message>`
  */
 export function renderDiagnosticRow(block: DiagnosticBlock): string {
   const suffix =
     block.count != null && block.count > 1 ? ` x${block.count}` : "";
+  if (block.global) {
+    return `\u2500\u2500 ${block.message}${suffix} \u2500\u2500`;
+  }
   return `[${block.timestamp}] Pipeline: ${block.message}${suffix}`;
 }
 

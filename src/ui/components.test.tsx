@@ -3209,6 +3209,32 @@ describe("renderDiagnosticRow", () => {
     });
     expect(row).toBe("[01:00:00] Pipeline: some message");
   });
+
+  test("renders global diagnostic as divider line", () => {
+    const row = renderDiagnosticRow({
+      kind: "diagnostic",
+      timestamp: "07:04:28",
+      message:
+        "Stage 4 (Create PR) \u2192 Stage 5 (CI check) [outcome: completed]",
+      global: true,
+    });
+    expect(row).toBe(
+      "\u2500\u2500 Stage 4 (Create PR) \u2192 Stage 5 (CI check) [outcome: completed] \u2500\u2500",
+    );
+  });
+
+  test("renders global diagnostic with count suffix", () => {
+    const row = renderDiagnosticRow({
+      kind: "diagnostic",
+      timestamp: "00:00:00",
+      message: "Entering Stage 1 (Implement)",
+      count: 2,
+      global: true,
+    });
+    expect(row).toBe(
+      "\u2500\u2500 Entering Stage 1 (Implement) x2 \u2500\u2500",
+    );
+  });
 });
 
 describe("AgentPane diagnostic rendering", () => {
@@ -3251,8 +3277,9 @@ describe("AgentPane diagnostic rendering", () => {
 
     const frame = lastFrame() ?? "";
     // Placeholder and diagnostic lines should both be visible.
+    // Stage transitions render as divider lines (no "Pipeline:" prefix).
     expect(frame).toContain("waiting for output");
-    expect(frame).toContain("Pipeline:");
+    expect(frame).toContain("\u2500\u2500");
     expect(frame).toContain("Implement");
   });
 

@@ -48,19 +48,20 @@ function createLineAccumulator(
     lines = next.length > maxLines ? next.slice(-maxLines) : next;
   }
 
-  function pushDiagnostic(message: string) {
+  function pushDiagnostic(message: string, global?: boolean) {
     // Flush any pending partial line before inserting the diagnostic
     // so it appears in the correct chronological position (mirrors
     // the real hook's pushDiagnostic logic).
+    const base: DiagnosticBlock = {
+      kind: "diagnostic",
+      timestamp: "00:00:00",
+      message,
+      ...(global ? { global: true } : {}),
+    };
     if (buffer) {
       const pending = buffer;
       buffer = "";
-      const block: DiagnosticBlock = {
-        kind: "diagnostic",
-        timestamp: "00:00:00",
-        message,
-      };
-      const next: LineEntry[] = [...lines, pending, block];
+      const next: LineEntry[] = [...lines, pending, base];
       lines = next.length > maxLines ? next.slice(-maxLines) : next;
     } else {
       // Deduplicate consecutive identical diagnostics (mirrors
@@ -70,7 +71,8 @@ function createLineAccumulator(
         last != null &&
         typeof last !== "string" &&
         last.kind === "diagnostic" &&
-        last.message === message
+        last.message === message &&
+        (last.global ?? false) === (global ?? false)
       ) {
         const updated: DiagnosticBlock = {
           ...last,
@@ -80,12 +82,7 @@ function createLineAccumulator(
         lines = [...lines.slice(0, -1), updated];
         return;
       }
-      const block: DiagnosticBlock = {
-        kind: "diagnostic",
-        timestamp: "00:00:00",
-        message,
-      };
-      push(block);
+      push(base);
     }
   }
 
@@ -137,9 +134,13 @@ function createLineAccumulator(
         : `Stage ${pending.stageNumber}`;
       pushDiagnostic(
         `${from} → Stage ${ev.stageNumber} (${ev.stageName}) [outcome: ${pending.outcome}]`,
+        true,
       );
     } else {
-      pushDiagnostic(`Entering Stage ${ev.stageNumber} (${ev.stageName})`);
+      pushDiagnostic(
+        `Entering Stage ${ev.stageNumber} (${ev.stageName})`,
+        true,
+      );
     }
     stageName = ev.stageName;
   });
@@ -194,6 +195,7 @@ function createLineAccumulator(
   return {
     getLines: () => lines,
     getBuffer: () => buffer,
+    pushDiagnostic,
     cleanup: () => {
       for (const { event, fn } of handlers) {
         emitter.off(event as "agent:chunk", fn as never);
@@ -501,9 +503,11 @@ describe("diagnostic event routing", () => {
       const diags = diagnostics(acc.getLines());
       expect(diags).toHaveLength(2);
       expect(diags[0].message).toBe("Entering Stage 7 (Review)");
+      expect(diags[0].global).toBe(true);
       expect(diags[1].message).toBe(
         "Stage 7 (Review) → Stage 8 (Squash) [outcome: completed]",
       );
+      expect(diags[1].global).toBe(true);
     }
 
     accA.cleanup();
@@ -822,6 +826,26 @@ describe("diagnostic event routing", () => {
     expect(diags).toHaveLength(2);
     expect(diags[0].message).toBe("CI poll status: pending");
     expect(diags[1].message).toBe("CI poll status: pass");
+
+    acc.cleanup();
+  });
+
+  test("global and non-global diagnostics with same message are not collapsed", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "a");
+
+    // Push a global diagnostic, then a non-global one with the exact
+    // same message text.  The dedup condition at useEventEmitter.ts:188
+    // must keep them as separate entries.
+    acc.pushDiagnostic("same message", true);
+    acc.pushDiagnostic("same message");
+
+    const diags = diagnostics(acc.getLines());
+    expect(diags).toHaveLength(2);
+    expect(diags[0].global).toBe(true);
+    expect(diags[0].count).toBeUndefined();
+    expect(diags[1].global).toBeUndefined();
+    expect(diags[1].count).toBeUndefined();
 
     acc.cleanup();
   });

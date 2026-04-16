@@ -33,6 +33,8 @@ export interface DiagnosticBlock {
   message: string;
   /** Number of consecutive occurrences (omitted or 1 for the first). */
   count?: number;
+  /** Whether this is a global (cross-pane) diagnostic like stage transitions. */
+  global?: boolean;
 }
 
 /** A line buffer entry: plain text, a prompt block, or a diagnostic line. */
@@ -152,21 +154,22 @@ export function useAgentLines(
     maxLinesRef.current = maxLines;
   }, [maxLines]);
 
-  const pushDiagnostic = useRef((message: string) => {
+  const pushDiagnostic = useRef((message: string, global?: boolean) => {
     const now = hhmmss();
+    const base: DiagnosticBlock = {
+      kind: "diagnostic",
+      timestamp: now,
+      message,
+      ...(global ? { global: true } : {}),
+    };
     // Flush any pending partial line before inserting the diagnostic
     // so it appears in the correct chronological position.
     if (bufferRef.current) {
       const pending = bufferRef.current;
       bufferRef.current = "";
       setPendingLine("");
-      const block: DiagnosticBlock = {
-        kind: "diagnostic",
-        timestamp: now,
-        message,
-      };
       setLines((prev) => {
-        const next: LineEntry[] = [...prev, pending, block];
+        const next: LineEntry[] = [...prev, pending, base];
         return next.length > maxLinesRef.current
           ? next.slice(-maxLinesRef.current)
           : next;
@@ -174,14 +177,15 @@ export function useAgentLines(
     } else {
       setLines((prev) => {
         // Deduplicate: if the last entry is a diagnostic with the same
-        // message, update it in place with an incremented count and
-        // the latest timestamp.
+        // message and global flag, update it in place with an
+        // incremented count and the latest timestamp.
         const last = prev.length > 0 ? prev[prev.length - 1] : undefined;
         if (
           last != null &&
           typeof last !== "string" &&
           last.kind === "diagnostic" &&
-          last.message === message
+          last.message === message &&
+          (last.global ?? false) === (global ?? false)
         ) {
           const updated: DiagnosticBlock = {
             ...last,
@@ -191,12 +195,7 @@ export function useAgentLines(
           const next: LineEntry[] = [...prev.slice(0, -1), updated];
           return next;
         }
-        const block: DiagnosticBlock = {
-          kind: "diagnostic",
-          timestamp: now,
-          message,
-        };
-        const next: LineEntry[] = [...prev, block];
+        const next: LineEntry[] = [...prev, base];
         return next.length > maxLinesRef.current
           ? next.slice(-maxLinesRef.current)
           : next;
@@ -244,10 +243,12 @@ export function useAgentLines(
           : `Stage ${pending.stageNumber}`;
         pushDiagnostic.current(
           `${from} → Stage ${ev.stageNumber} (${ev.stageName}) [outcome: ${pending.outcome}]`,
+          true,
         );
       } else {
         pushDiagnostic.current(
           `Entering Stage ${ev.stageNumber} (${ev.stageName})`,
+          true,
         );
       }
     };
