@@ -18,7 +18,7 @@ import {
 } from "./cleanup-confirm.js";
 import { createCodexAdapter } from "./codex-adapter.js";
 import type { NotificationSettings, PipelineSettings } from "./config.js";
-import { loadConfig } from "./config.js";
+import { assembleCiCheckStage, loadConfig } from "./config.js";
 import { getGitHubUsername, getIssue } from "./github.js";
 import { initI18n, t } from "./i18n/index.js";
 import {
@@ -534,10 +534,15 @@ try {
     ...issueCtx,
   });
 
-  const ciCheckStage = createCiCheckStageHandler({
-    agent: agentA,
-    ...issueCtx,
-  });
+  const ciCheckStage = assembleCiCheckStage(
+    (opts) =>
+      createCiCheckStageHandler({
+        agent: agentA,
+        ...issueCtx,
+        ...opts,
+      }),
+    pipelineSettings,
+  );
 
   const testPlanStage = {
     ...createTestPlanStageHandler({
@@ -663,6 +668,8 @@ try {
     },
     selfCheckAutoIterations: pipelineSettings.selfCheckAutoIterations,
     reviewAutoRounds: pipelineSettings.reviewAutoRounds,
+    ciCheckAutoIterations: pipelineSettings.ciCheckAutoIterations,
+    ciCheckTimeoutMinutes: pipelineSettings.ciCheckTimeoutMinutes,
     inactivityTimeoutMinutes: pipelineSettings.inactivityTimeoutMinutes,
     autoResumeAttempts: pipelineSettings.autoResumeAttempts,
   });

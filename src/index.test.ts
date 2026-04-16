@@ -181,9 +181,34 @@ describe("module exports", () => {
     expect(config.DEFAULT_PIPELINE_SETTINGS).toEqual({
       selfCheckAutoIterations: 5,
       reviewAutoRounds: 5,
+      ciCheckAutoIterations: 3,
+      ciCheckTimeoutMinutes: 10,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
+  });
+
+  test("assembleCiCheckStage passes pollTimeoutMs to handler and sets autoBudget", async () => {
+    const { assembleCiCheckStage, DEFAULT_PIPELINE_SETTINGS } = await import(
+      "../dist/config.js"
+    );
+    // Use non-default values to prove the mapping, not just the defaults.
+    const settings = {
+      ...DEFAULT_PIPELINE_SETTINGS,
+      ciCheckAutoIterations: 7,
+      ciCheckTimeoutMinutes: 15,
+    };
+    let receivedOpts: { pollTimeoutMs: number } | undefined;
+    const handlerStub = { name: "CI check", number: 5, handler: () => {} };
+    const result = assembleCiCheckStage((opts: { pollTimeoutMs: number }) => {
+      receivedOpts = opts;
+      return handlerStub;
+    }, settings);
+    // The factory received the converted timeout.
+    expect(receivedOpts).toEqual({ pollTimeoutMs: 15 * 60_000 });
+    // The returned object spreads the handler and adds autoBudget.
+    expect(result.autoBudget).toBe(7);
+    expect(result.name).toBe("CI check");
   });
 
   test("github module exports listRepositories and getIssue", async () => {

@@ -89,7 +89,9 @@ export function renderPromptRows(block: PromptBlock, width: number): string[] {
  * `[HH:MM:SS] Pipeline: <message>`
  */
 export function renderDiagnosticRow(block: DiagnosticBlock): string {
-  return `[${block.timestamp}] Pipeline: ${block.message}`;
+  const suffix =
+    block.count != null && block.count > 1 ? ` x${block.count}` : "";
+  return `[${block.timestamp}] Pipeline: ${block.message}${suffix}`;
 }
 
 /** A single terminal row tagged with display metadata. */

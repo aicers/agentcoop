@@ -35,6 +35,8 @@ export interface RunLogMetadata {
   agentB: RunLogAgentMeta;
   selfCheckAutoIterations: number;
   reviewAutoRounds: number;
+  ciCheckAutoIterations: number;
+  ciCheckTimeoutMinutes: number;
   inactivityTimeoutMinutes: number;
   autoResumeAttempts: number;
 }
@@ -177,10 +179,10 @@ export function createRunLog(
     write(`  context  : ${meta.agentB.contextWindow}`);
   if (meta.agentB.effortLevel) write(`  effort   : ${meta.agentB.effortLevel}`);
   write(
-    `Auto-budget: self-check=${meta.selfCheckAutoIterations}, review=${meta.reviewAutoRounds}`,
+    `Auto-budget: self-check=${meta.selfCheckAutoIterations}, review=${meta.reviewAutoRounds}, ci-check=${meta.ciCheckAutoIterations}`,
   );
   write(
-    `Timeouts   : inactivity=${meta.inactivityTimeoutMinutes}m, autoResume=${meta.autoResumeAttempts}`,
+    `Timeouts   : inactivity=${meta.inactivityTimeoutMinutes}m, ciCheck=${meta.ciCheckTimeoutMinutes}m, autoResume=${meta.autoResumeAttempts}`,
   );
   write("");
 

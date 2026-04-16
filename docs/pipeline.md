@@ -566,8 +566,10 @@ Then commit and push the branch so a new CI run is triggered.
 ```
 
 **Loop behavior:** Each CI failure consumes one iteration from the
-auto-budget (default: 3). When the budget is exhausted, the user
-is asked whether to continue.
+auto-budget (default: 3, configurable via `ciCheckAutoIterations`).
+The stage polls for CI completion up to a configurable timeout
+(default: 10 minutes, configurable via `ciCheckTimeoutMinutes`).
+When the budget is exhausted, the user is asked whether to continue.
 
 #### CI findings review
 

@@ -31,6 +31,8 @@ export interface DiagnosticBlock {
   timestamp: string;
   /** Human-readable diagnostic message. */
   message: string;
+  /** Number of consecutive occurrences (omitted or 1 for the first). */
+  count?: number;
 }
 
 /** A line buffer entry: plain text, a prompt block, or a diagnostic line. */
@@ -151,17 +153,18 @@ export function useAgentLines(
   }, [maxLines]);
 
   const pushDiagnostic = useRef((message: string) => {
-    const block: DiagnosticBlock = {
-      kind: "diagnostic",
-      timestamp: hhmmss(),
-      message,
-    };
+    const now = hhmmss();
     // Flush any pending partial line before inserting the diagnostic
     // so it appears in the correct chronological position.
     if (bufferRef.current) {
       const pending = bufferRef.current;
       bufferRef.current = "";
       setPendingLine("");
+      const block: DiagnosticBlock = {
+        kind: "diagnostic",
+        timestamp: now,
+        message,
+      };
       setLines((prev) => {
         const next: LineEntry[] = [...prev, pending, block];
         return next.length > maxLinesRef.current
@@ -170,6 +173,29 @@ export function useAgentLines(
       });
     } else {
       setLines((prev) => {
+        // Deduplicate: if the last entry is a diagnostic with the same
+        // message, update it in place with an incremented count and
+        // the latest timestamp.
+        const last = prev.length > 0 ? prev[prev.length - 1] : undefined;
+        if (
+          last != null &&
+          typeof last !== "string" &&
+          last.kind === "diagnostic" &&
+          last.message === message
+        ) {
+          const updated: DiagnosticBlock = {
+            ...last,
+            timestamp: now,
+            count: (last.count ?? 1) + 1,
+          };
+          const next: LineEntry[] = [...prev.slice(0, -1), updated];
+          return next;
+        }
+        const block: DiagnosticBlock = {
+          kind: "diagnostic",
+          timestamp: now,
+          message,
+        };
         const next: LineEntry[] = [...prev, block];
         return next.length > maxLinesRef.current
           ? next.slice(-maxLinesRef.current)

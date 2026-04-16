@@ -51,6 +51,8 @@ function defaultConfig(): Config {
     pipelineSettings: {
       selfCheckAutoIterations: 3,
       reviewAutoRounds: 3,
+      ciCheckAutoIterations: 3,
+      ciCheckTimeoutMinutes: 10,
       inactivityTimeoutMinutes: 15,
       autoResumeAttempts: 3,
     },
@@ -126,6 +128,8 @@ describe("runStartup — happy path", () => {
     expect(result.pipelineSettings).toEqual({
       selfCheckAutoIterations: 3,
       reviewAutoRounds: 3,
+      ciCheckAutoIterations: 3,
+      ciCheckTimeoutMinutes: 10,
       inactivityTimeoutMinutes: 15,
       autoResumeAttempts: 3,
     });
@@ -1071,6 +1075,8 @@ describe("runStartup — pipeline settings", () => {
     expect(result.pipelineSettings).toEqual({
       selfCheckAutoIterations: 3,
       reviewAutoRounds: 3,
+      ciCheckAutoIterations: 3,
+      ciCheckTimeoutMinutes: 10,
       inactivityTimeoutMinutes: 15,
       autoResumeAttempts: 3,
     });
@@ -1114,17 +1120,19 @@ describe("runStartup — pipeline settings", () => {
     expect(mockSaveConfig).toHaveBeenCalledOnce();
   });
 
-  test("presents all four settings as checkbox choices", async () => {
+  test("presents all six settings as checkbox choices", async () => {
     setupHappyPath();
     await runStartup();
 
     expect(mockCheckbox).toHaveBeenCalledTimes(2);
     const opts = mockCheckbox.mock.calls[0][0];
-    expect(opts.choices).toHaveLength(4);
+    expect(opts.choices).toHaveLength(6);
     const values = opts.choices.map((c: { value: string }) => c.value);
     expect(values).toEqual([
       "selfCheckAutoIterations",
       "reviewAutoRounds",
+      "ciCheckAutoIterations",
+      "ciCheckTimeoutMinutes",
       "inactivityTimeoutMinutes",
       "autoResumeAttempts",
     ]);
@@ -1132,8 +1140,10 @@ describe("runStartup — pipeline settings", () => {
     const names = opts.choices.map((c: { name: string }) => c.name);
     expect(names[0]).toBe("Self-check auto iterations: 3");
     expect(names[1]).toBe("Review auto rounds: 3");
-    expect(names[2]).toBe("Inactivity timeout: 15 min");
-    expect(names[3]).toBe("Auto-resume attempts: 3");
+    expect(names[2]).toBe("CI check auto iterations: 3");
+    expect(names[3]).toBe("CI check timeout: 10 min");
+    expect(names[4]).toBe("Inactivity timeout: 15 min");
+    expect(names[5]).toBe("Auto-resume attempts: 3");
   });
 
   test("displays current settings from config with unit suffix", async () => {
@@ -1145,6 +1155,9 @@ describe("runStartup — pipeline settings", () => {
     expect(logs).toContain("Pipeline settings");
     expect(logs).toContain("Self-check auto iterations");
     expect(logs).toContain("Review auto rounds");
+    expect(logs).toContain("CI check auto iterations");
+    expect(logs).toContain("CI check timeout");
+    expect(logs).toContain("10 min");
     expect(logs).toContain("Inactivity timeout");
     expect(logs).toContain("15 min");
     expect(logs).toContain("Auto-resume attempts");
@@ -1203,6 +1216,8 @@ describe("runStartup — pipeline settings", () => {
     const result = await runStartup();
     expect(result.pipelineSettings.selfCheckAutoIterations).toBe(10);
     expect(result.pipelineSettings.reviewAutoRounds).toBe(3);
+    expect(result.pipelineSettings.ciCheckAutoIterations).toBe(3);
+    expect(result.pipelineSettings.ciCheckTimeoutMinutes).toBe(10);
     expect(result.pipelineSettings.inactivityTimeoutMinutes).toBe(15);
     expect(result.pipelineSettings.autoResumeAttempts).toBe(3);
   });
@@ -1238,13 +1253,15 @@ describe("runStartup — pipeline settings", () => {
     expect(result.pipelineSettings.reviewAutoRounds).toBe(5);
   });
 
-  test("adjusting all four settings works correctly", async () => {
+  test("adjusting all six settings works correctly", async () => {
     setupHappyPath();
     mockCheckbox
       .mockReset()
       .mockResolvedValueOnce([
         "selfCheckAutoIterations",
         "reviewAutoRounds",
+        "ciCheckAutoIterations",
+        "ciCheckTimeoutMinutes",
         "inactivityTimeoutMinutes",
         "autoResumeAttempts",
       ])
@@ -1253,6 +1270,8 @@ describe("runStartup — pipeline settings", () => {
     mockInput
       .mockResolvedValueOnce("5") // selfCheckAutoIterations
       .mockResolvedValueOnce("7") // reviewAutoRounds
+      .mockResolvedValueOnce("4") // ciCheckAutoIterations
+      .mockResolvedValueOnce("15") // ciCheckTimeoutMinutes
       .mockResolvedValueOnce("30") // inactivityTimeoutMinutes
       .mockResolvedValueOnce("2"); // autoResumeAttempts
     mockConfirm.mockReset().mockResolvedValueOnce(true); // save
@@ -1262,6 +1281,8 @@ describe("runStartup — pipeline settings", () => {
     expect(result.pipelineSettings).toEqual({
       selfCheckAutoIterations: 5,
       reviewAutoRounds: 7,
+      ciCheckAutoIterations: 4,
+      ciCheckTimeoutMinutes: 15,
       inactivityTimeoutMinutes: 30,
       autoResumeAttempts: 2,
     });
@@ -1271,6 +1292,8 @@ describe("runStartup — pipeline settings", () => {
         pipelineSettings: {
           selfCheckAutoIterations: 5,
           reviewAutoRounds: 7,
+          ciCheckAutoIterations: 4,
+          ciCheckTimeoutMinutes: 15,
           inactivityTimeoutMinutes: 30,
           autoResumeAttempts: 2,
         },

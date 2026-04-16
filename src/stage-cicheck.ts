@@ -7,8 +7,10 @@
  * failure logs, sends them to the agent for a fix, and returns
  * `"not_approved"` so the engine loops back for another CI poll.
  *
- * The engine's default auto-budget (3) handles the "3 automatic /
- * 4th asks user" requirement for fix iterations.
+ * The engine's auto-budget (configurable via `ciCheckAutoIterations`,
+ * default 3) handles the fix iteration limit.  The poll timeout
+ * (configurable via `ciCheckTimeoutMinutes`, default 10) caps how
+ * long the stage waits for a pending CI run.
  */
 
 import type { AgentAdapter } from "./agent.js";

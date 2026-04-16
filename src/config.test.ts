@@ -40,6 +40,8 @@ describe("loadConfig", () => {
       pipelineSettings: {
         selfCheckAutoIterations: 5,
         reviewAutoRounds: 5,
+        ciCheckAutoIterations: 3,
+        ciCheckTimeoutMinutes: 10,
         inactivityTimeoutMinutes: 20,
         autoResumeAttempts: 3,
       },
@@ -58,6 +60,8 @@ describe("loadConfig", () => {
       pipelineSettings: {
         selfCheckAutoIterations: 5,
         reviewAutoRounds: 5,
+        ciCheckAutoIterations: 3,
+        ciCheckTimeoutMinutes: 10,
         inactivityTimeoutMinutes: 20,
         autoResumeAttempts: 3,
       },
@@ -89,6 +93,8 @@ describe("loadConfig", () => {
     expect(config.pipelineSettings).toEqual({
       selfCheckAutoIterations: 5,
       reviewAutoRounds: 5,
+      ciCheckAutoIterations: 3,
+      ciCheckTimeoutMinutes: 10,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -236,6 +242,8 @@ describe("loadConfig", () => {
         pipelineSettings: {
           selfCheckAutoIterations: 5,
           reviewAutoRounds: 2,
+          ciCheckAutoIterations: 4,
+          ciCheckTimeoutMinutes: 15,
           inactivityTimeoutMinutes: 30,
           autoResumeAttempts: 1,
         },
@@ -245,6 +253,8 @@ describe("loadConfig", () => {
     expect(config.pipelineSettings).toEqual({
       selfCheckAutoIterations: 5,
       reviewAutoRounds: 2,
+      ciCheckAutoIterations: 4,
+      ciCheckTimeoutMinutes: 15,
       inactivityTimeoutMinutes: 30,
       autoResumeAttempts: 1,
     });
@@ -267,6 +277,8 @@ describe("loadConfig", () => {
     expect(config.pipelineSettings).toEqual({
       selfCheckAutoIterations: 5,
       reviewAutoRounds: 5,
+      ciCheckAutoIterations: 3,
+      ciCheckTimeoutMinutes: 10,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -281,6 +293,8 @@ describe("loadConfig", () => {
     expect(config.pipelineSettings).toEqual({
       selfCheckAutoIterations: 5,
       reviewAutoRounds: 5,
+      ciCheckAutoIterations: 3,
+      ciCheckTimeoutMinutes: 10,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -333,6 +347,8 @@ describe("loadConfig", () => {
     expect(config.pipelineSettings).toEqual({
       selfCheckAutoIterations: 5,
       reviewAutoRounds: 5,
+      ciCheckAutoIterations: 3,
+      ciCheckTimeoutMinutes: 10,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -373,6 +389,8 @@ describe("loadConfig", () => {
     expect(config.pipelineSettings).toEqual({
       selfCheckAutoIterations: 5,
       reviewAutoRounds: 5,
+      ciCheckAutoIterations: 3,
+      ciCheckTimeoutMinutes: 10,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -396,6 +414,8 @@ describe("loadConfig", () => {
     expect(config.pipelineSettings).toEqual({
       selfCheckAutoIterations: 5,
       reviewAutoRounds: 5,
+      ciCheckAutoIterations: 3,
+      ciCheckTimeoutMinutes: 10,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -418,6 +438,8 @@ describe("loadConfig", () => {
     expect(config.pipelineSettings).toEqual({
       selfCheckAutoIterations: 5,
       reviewAutoRounds: 5,
+      ciCheckAutoIterations: 3,
+      ciCheckTimeoutMinutes: 10,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -432,6 +454,8 @@ describe("loadConfig", () => {
     expect(config.pipelineSettings).toEqual({
       selfCheckAutoIterations: 5,
       reviewAutoRounds: 5,
+      ciCheckAutoIterations: 3,
+      ciCheckTimeoutMinutes: 10,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -446,6 +470,8 @@ describe("loadConfig", () => {
     expect(config.pipelineSettings).toEqual({
       selfCheckAutoIterations: 5,
       reviewAutoRounds: 5,
+      ciCheckAutoIterations: 3,
+      ciCheckTimeoutMinutes: 10,
       inactivityTimeoutMinutes: 20,
       autoResumeAttempts: 3,
     });
@@ -537,6 +563,8 @@ describe("saveConfig", () => {
   const defaultPS = {
     selfCheckAutoIterations: 5,
     reviewAutoRounds: 5,
+    ciCheckAutoIterations: 3,
+    ciCheckTimeoutMinutes: 10,
     inactivityTimeoutMinutes: 20,
     autoResumeAttempts: 3,
   };

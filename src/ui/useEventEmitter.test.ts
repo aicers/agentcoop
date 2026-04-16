@@ -49,20 +49,42 @@ function createLineAccumulator(
   }
 
   function pushDiagnostic(message: string) {
-    const block: DiagnosticBlock = {
-      kind: "diagnostic",
-      timestamp: "00:00:00",
-      message,
-    };
     // Flush any pending partial line before inserting the diagnostic
     // so it appears in the correct chronological position (mirrors
     // the real hook's pushDiagnostic logic).
     if (buffer) {
       const pending = buffer;
       buffer = "";
+      const block: DiagnosticBlock = {
+        kind: "diagnostic",
+        timestamp: "00:00:00",
+        message,
+      };
       const next: LineEntry[] = [...lines, pending, block];
       lines = next.length > maxLines ? next.slice(-maxLines) : next;
     } else {
+      // Deduplicate consecutive identical diagnostics (mirrors
+      // the real hook's deduplication logic).
+      const last = lines.length > 0 ? lines[lines.length - 1] : undefined;
+      if (
+        last != null &&
+        typeof last !== "string" &&
+        last.kind === "diagnostic" &&
+        last.message === message
+      ) {
+        const updated: DiagnosticBlock = {
+          ...last,
+          timestamp: "00:00:00",
+          count: (last.count ?? 1) + 1,
+        };
+        lines = [...lines.slice(0, -1), updated];
+        return;
+      }
+      const block: DiagnosticBlock = {
+        kind: "diagnostic",
+        timestamp: "00:00:00",
+        message,
+      };
       push(block);
     }
   }
@@ -748,6 +770,76 @@ describe("diagnostic event routing", () => {
       message: 'Reviewer verdict parsed as "APPROVED"',
     });
     expect(acc.getBuffer()).toBe("");
+
+    acc.cleanup();
+  });
+
+  test("consecutive identical diagnostics are collapsed with count", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "a");
+
+    // Emit three identical CI poll status events.
+    emitter.emit("pipeline:ci-poll", { action: "status", verdict: "pending" });
+    emitter.emit("pipeline:ci-poll", { action: "status", verdict: "pending" });
+    emitter.emit("pipeline:ci-poll", { action: "status", verdict: "pending" });
+
+    const lines = acc.getLines();
+    // Should collapse to a single diagnostic entry with count 3.
+    expect(lines).toHaveLength(1);
+    const diag = lines[0] as DiagnosticBlock;
+    expect(diag.kind).toBe("diagnostic");
+    expect(diag.message).toBe("CI poll status: pending");
+    expect(diag.count).toBe(3);
+
+    acc.cleanup();
+  });
+
+  test("non-consecutive identical diagnostics are not collapsed", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "a");
+
+    emitter.emit("pipeline:ci-poll", { action: "status", verdict: "pending" });
+    emitter.emit("agent:chunk", { agent: "a", chunk: "some output\n" });
+    emitter.emit("pipeline:ci-poll", { action: "status", verdict: "pending" });
+
+    const diags = diagnostics(acc.getLines());
+    // Separated by a chunk line, so they should be two distinct entries.
+    expect(diags).toHaveLength(2);
+    expect(diags[0].count).toBeUndefined();
+    expect(diags[1].count).toBeUndefined();
+
+    acc.cleanup();
+  });
+
+  test("different consecutive diagnostics are not collapsed", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "a");
+
+    emitter.emit("pipeline:ci-poll", { action: "status", verdict: "pending" });
+    emitter.emit("pipeline:ci-poll", { action: "status", verdict: "pass" });
+
+    const diags = diagnostics(acc.getLines());
+    expect(diags).toHaveLength(2);
+    expect(diags[0].message).toBe("CI poll status: pending");
+    expect(diags[1].message).toBe("CI poll status: pass");
+
+    acc.cleanup();
+  });
+
+  test("deduplication after partial chunk flush produces separate entries", () => {
+    const emitter = new PipelineEventEmitter();
+    const acc = createLineAccumulator(emitter, "a");
+
+    emitter.emit("pipeline:ci-poll", { action: "status", verdict: "pending" });
+    // Emit a partial chunk then an identical diagnostic — the flush
+    // breaks the consecutive sequence, so they should not be collapsed.
+    emitter.emit("agent:chunk", { agent: "a", chunk: "partial" });
+    emitter.emit("pipeline:ci-poll", { action: "status", verdict: "pending" });
+
+    const diags = diagnostics(acc.getLines());
+    expect(diags).toHaveLength(2);
+    expect(diags[0].count).toBeUndefined();
+    expect(diags[1].count).toBeUndefined();
 
     acc.cleanup();
   });

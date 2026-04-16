@@ -43,6 +43,9 @@ export const ko: Messages = {
     "\uB9AC\uBDF0 \uC790\uB3D9 \uBC18\uBCF5 \uD69F\uC218",
   "startup.settingInactivityTimeout":
     "\uBE44\uD65C\uC131 \uC2DC\uAC04 \uCD08\uACFC",
+  "startup.settingCiCheckIterations":
+    "CI \uAC80\uC0AC \uC790\uB3D9 \uBC18\uBCF5 \uD69F\uC218",
+  "startup.settingCiCheckTimeout": "CI \uAC80\uC0AC \uC2DC\uAC04 \uCD08\uACFC",
   "startup.settingAutoResume":
     "\uC790\uB3D9 \uC7AC\uAC1C \uC2DC\uB3C4 \uD69F\uC218",
   "startup.settingSuffixMin": "\uBD84",
