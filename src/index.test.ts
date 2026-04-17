@@ -211,6 +211,44 @@ describe("module exports", () => {
     expect(result.name).toBe("CI check");
   });
 
+  test("assembleSquashStage passes pollTimeoutMs to handler", async () => {
+    const { assembleSquashStage, DEFAULT_PIPELINE_SETTINGS } = await import(
+      "../dist/config.js"
+    );
+    const settings = {
+      ...DEFAULT_PIPELINE_SETTINGS,
+      ciCheckTimeoutMinutes: 20,
+    };
+    let receivedOpts: { pollTimeoutMs: number } | undefined;
+    const handlerStub = { name: "Squash", number: 8, handler: () => {} };
+    const result = assembleSquashStage((opts: { pollTimeoutMs: number }) => {
+      receivedOpts = opts;
+      return handlerStub;
+    }, settings);
+    expect(receivedOpts).toEqual({ pollTimeoutMs: 20 * 60_000 });
+    expect(result.name).toBe("Squash");
+  });
+
+  test("assembleReviewStage passes pollTimeoutMs to handler and sets autoBudget", async () => {
+    const { assembleReviewStage, DEFAULT_PIPELINE_SETTINGS } = await import(
+      "../dist/config.js"
+    );
+    const settings = {
+      ...DEFAULT_PIPELINE_SETTINGS,
+      ciCheckTimeoutMinutes: 25,
+      reviewAutoRounds: 3,
+    };
+    let receivedOpts: { pollTimeoutMs: number } | undefined;
+    const handlerStub = { name: "Review", number: 7, handler: () => {} };
+    const result = assembleReviewStage((opts: { pollTimeoutMs: number }) => {
+      receivedOpts = opts;
+      return handlerStub;
+    }, settings);
+    expect(receivedOpts).toEqual({ pollTimeoutMs: 25 * 60_000 });
+    expect(result.autoBudget).toBe(3);
+    expect(result.name).toBe("Review");
+  });
+
   test("github module exports listRepositories and getIssue", async () => {
     const github = await import("../dist/github.js");
     expect(typeof github.listRepositories).toBe("function");

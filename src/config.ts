@@ -223,6 +223,40 @@ export function assembleCiCheckStage<T>(
   };
 }
 
+/**
+ * Assembles the squash stage definition fragment from pipeline settings.
+ *
+ * Keeps the minutes→ms conversion in one testable place, matching the
+ * pattern used by {@link assembleCiCheckStage}.
+ */
+export function assembleSquashStage<T>(
+  createHandler: (opts: { pollTimeoutMs: number }) => T,
+  settings: PipelineSettings,
+): T {
+  return createHandler({
+    pollTimeoutMs: settings.ciCheckTimeoutMinutes * 60_000,
+  });
+}
+
+/**
+ * Assembles the review stage definition fragment from pipeline settings.
+ *
+ * Converts `ciCheckTimeoutMinutes` to `pollTimeoutMs` and maps
+ * `reviewAutoRounds` to `autoBudget`, keeping the settings→stage wiring
+ * in one testable place.
+ */
+export function assembleReviewStage<T>(
+  createHandler: (opts: { pollTimeoutMs: number }) => T,
+  settings: PipelineSettings,
+): T & { autoBudget: number } {
+  return {
+    ...createHandler({
+      pollTimeoutMs: settings.ciCheckTimeoutMinutes * 60_000,
+    }),
+    autoBudget: settings.reviewAutoRounds,
+  };
+}
+
 export function saveConfig(config: Config): void {
   const path = configPath();
   mkdirSync(dirname(path), { recursive: true });
