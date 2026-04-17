@@ -80,6 +80,19 @@ export const ko: Messages = {
   "startup.customModelDuplicate": (name) =>
     `\uC774\uBBF8 "${name}"(\uC73C)\uB85C \uC874\uC7AC\uD569\uB2C8\uB2E4`,
 
+  // ---- custom model management -----------------------------------------------
+
+  "startup.manageCustomModelsOption":
+    "\uC0AC\uC6A9\uC790 \uC815\uC758 \uBAA8\uB378 \uAD00\uB9AC...",
+  "startup.manageCustomModelsList":
+    "\uC0AC\uC6A9\uC790 \uC815\uC758 \uBAA8\uB378:",
+  "startup.manageCustomModelsAction": (name) => `${name}:`,
+  "startup.manageCustomModelsEdit": "\uD3B8\uC9D1",
+  "startup.manageCustomModelsRemove": "\uC0AD\uC81C",
+  "startup.manageCustomModelsBack": "\uB4A4\uB85C",
+  "startup.manageCustomModelsConfirmRemove": (name) =>
+    `"${name}"\uC744(\uB97C) \uC0AD\uC81C\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?`,
+
   // ---- model registry ------------------------------------------------------
 
   "models.loadFailed": (detail) =>

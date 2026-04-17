@@ -140,6 +140,19 @@ function mergeModels(base: ModelEntry[], extra: ModelEntry[]): ModelEntry[] {
 }
 
 /**
+ * Return only the repo-default model list for a CLI (from `models.json`).
+ *
+ * This excludes user-defined custom models and is useful for duplicate
+ * checks that must distinguish repo defaults from customs.
+ */
+export function getDefaultModels(cli: CliType): ModelEntry[] {
+  if (!defaults) {
+    throw new Error("Model registry not initialized — call initModels() first");
+  }
+  return defaults[cli];
+}
+
+/**
  * Return the merged model list for a CLI (repo defaults + user customs).
  *
  * Repo defaults appear first; user customs are appended.  Duplicate

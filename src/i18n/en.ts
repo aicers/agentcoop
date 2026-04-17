@@ -60,6 +60,16 @@ export const en: Messages = {
     "Must match: gpt-<name> or o<number>[-<name>] (lowercase alphanumeric, hyphens, dots)",
   "startup.customModelDuplicate": (name) => `Already exists as "${name}"`,
 
+  // ---- custom model management -----------------------------------------------
+
+  "startup.manageCustomModelsOption": "Manage custom models...",
+  "startup.manageCustomModelsList": "Custom models:",
+  "startup.manageCustomModelsAction": (name) => `${name}:`,
+  "startup.manageCustomModelsEdit": "Edit",
+  "startup.manageCustomModelsRemove": "Remove",
+  "startup.manageCustomModelsBack": "Back",
+  "startup.manageCustomModelsConfirmRemove": (name) => `Remove "${name}"?`,
+
   // ---- model registry ------------------------------------------------------
 
   "models.loadFailed": (detail) =>

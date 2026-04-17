@@ -36,12 +36,14 @@ vi.mock("./github.js", () => ({
   getIssue: (...args: unknown[]) => mockGetIssue(...args),
 }));
 
+const mockGetDefaultModels = vi.fn();
 const mockGetModels = vi.fn();
 const mockGetModelDisplayName = vi.fn();
 const mockIsOpusModel = vi.fn();
 const mockSetCustomModels = vi.fn();
 
 vi.mock("./models.js", () => ({
+  getDefaultModels: (...args: unknown[]) => mockGetDefaultModels(...args),
   getModels: (...args: unknown[]) => mockGetModels(...args),
   getModelDisplayName: (...args: unknown[]) => mockGetModelDisplayName(...args),
   isOpusModel: (...args: unknown[]) => mockIsOpusModel(...args),
@@ -74,6 +76,9 @@ const MODEL_DISPLAY_NAMES: Record<string, string> = {
 };
 
 function setupModelMocks() {
+  mockGetDefaultModels.mockImplementation((cli: string) =>
+    cli === "claude" ? [...CLAUDE_TEST_MODELS] : [...CODEX_TEST_MODELS],
+  );
   mockGetModels.mockImplementation((cli: string) =>
     cli === "claude" ? [...CLAUDE_TEST_MODELS] : [...CODEX_TEST_MODELS],
   );
@@ -2041,5 +2046,761 @@ describe("runStartup — custom model entry", () => {
       agentAModelCall.choices[agentAModelCall.choices.length - 1];
     expect(lastChoice.name).toBe("Enter custom model...");
     expect(lastChoice.value).toBe("__custom__");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Manage custom models
+// ---------------------------------------------------------------------------
+describe("runStartup — manage custom models", () => {
+  function configWithCustomClaude(): Config {
+    return {
+      ...defaultConfig(),
+      customModels: {
+        claude: [{ name: "Claude Haiku 4.5", value: "claude-haiku-4-5" }],
+      },
+    };
+  }
+
+  function configWithMultipleCustoms(): Config {
+    return {
+      ...defaultConfig(),
+      customModels: {
+        claude: [
+          { name: "Claude Haiku 4.5", value: "claude-haiku-4-5" },
+          { name: "Claude Opus 4.7", value: "claude-opus-4-7" },
+        ],
+      },
+    };
+  }
+
+  test("manage option is shown when custom entries exist for current CLI", async () => {
+    const config = configWithCustomClaude();
+    const target = {
+      owner: "aicers",
+      repo: "agentcoop",
+      issueNumber: 42,
+      config,
+      configDirty: false,
+    };
+    mockSelect
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("opus") // agent A model (pick a regular model)
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("en"); // language
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    await runStartup(target);
+
+    // Agent A model call is the 2nd select (index 1)
+    const modelCall = mockSelect.mock.calls[1][0];
+    const values = modelCall.choices.map((c: { value: string }) => c.value);
+    expect(values).toContain("__manage_custom__");
+    const manageChoice = modelCall.choices.find(
+      (c: { value: string }) => c.value === "__manage_custom__",
+    );
+    expect(manageChoice.name).toBe("Manage custom models...");
+  });
+
+  test("manage option is hidden when no custom entries exist", async () => {
+    const config = defaultConfig(); // no customModels
+    const target = {
+      owner: "aicers",
+      repo: "agentcoop",
+      issueNumber: 42,
+      config,
+      configDirty: false,
+    };
+    mockSelect
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("opus") // agent A model
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("en"); // language
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    await runStartup(target);
+
+    const modelCall = mockSelect.mock.calls[1][0];
+    const values = modelCall.choices.map((c: { value: string }) => c.value);
+    expect(values).not.toContain("__manage_custom__");
+  });
+
+  test("manage list shows only user-defined entries, not repo defaults", async () => {
+    const config = configWithCustomClaude();
+    const target = {
+      owner: "aicers",
+      repo: "agentcoop",
+      issueNumber: 42,
+      config,
+      configDirty: false,
+    };
+    mockSelect
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("__manage_custom__") // agent A model → manage
+      .mockResolvedValueOnce("__manage_back__") // manage: back
+      .mockResolvedValueOnce("opus") // agent A model (2nd time)
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("en"); // language
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    await runStartup(target);
+
+    // The manage list prompt is the 3rd select call (index 2)
+    const listCall = mockSelect.mock.calls[2][0];
+    expect(listCall.message).toBe("Custom models:");
+    // Should contain only the custom entry (by index) + Back, not repo defaults.
+    expect(listCall.choices).toHaveLength(2); // 1 custom + Back
+    expect(listCall.choices[0].value).toBe(0);
+    expect(listCall.choices[0].name).toContain("claude-haiku-4-5");
+    expect(listCall.choices[1].value).toBe("__manage_back__");
+  });
+
+  test("edit updates value and name, persists, and sets default to edited entry", async () => {
+    const config = configWithCustomClaude();
+    const target = {
+      owner: "aicers",
+      repo: "agentcoop",
+      issueNumber: 42,
+      config,
+      configDirty: false,
+    };
+    mockSelect
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("__manage_custom__") // agent A model → manage
+      .mockResolvedValueOnce(0) // manage: pick entry (index 0)
+      .mockResolvedValueOnce("edit") // manage: action
+      // After manage returns, loop back:
+      .mockResolvedValueOnce("claude-haiku-4-6") // agent A model (2nd time)
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("en"); // language
+    mockInput
+      .mockResolvedValueOnce("claude-haiku-4-6") // edit: new value
+      .mockResolvedValueOnce("Claude Haiku 4.6"); // edit: new name
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true); // confirm issue
+
+    const result = await runStartup(target);
+
+    expect(result.agentA.model).toBe("claude-haiku-4-6");
+
+    // Config was updated with edited entry.
+    expect(config.customModels?.claude).toEqual([
+      { name: "Claude Haiku 4.6", value: "claude-haiku-4-6" },
+    ]);
+    // saveConfig was called for the edit (and possibly again at end).
+    expect(mockSaveConfig).toHaveBeenCalledWith(config);
+    // Registry was refreshed.
+    expect(mockSetCustomModels).toHaveBeenCalledWith(config.customModels);
+
+    // The model selector was re-opened with the edited value as default.
+    const secondModelCall = mockSelect.mock.calls[4][0];
+    expect(secondModelCall.default).toBe("claude-haiku-4-6");
+  });
+
+  test("remove drops entry, persists, and falls back to first model when removed was default", async () => {
+    const config = {
+      ...defaultConfig(),
+      agentA: {
+        cli: "claude" as const,
+        model: "claude-haiku-4-5",
+        contextWindow: "1m",
+        effortLevel: "high",
+      },
+      customModels: {
+        claude: [{ name: "Claude Haiku 4.5", value: "claude-haiku-4-5" }],
+      },
+    };
+    const target = {
+      owner: "aicers",
+      repo: "agentcoop",
+      issueNumber: 42,
+      config,
+      configDirty: false,
+    };
+    // config.agentA.model is "claude-haiku-4-5", so effective.model
+    // (and thus modelDefault) will be "claude-haiku-4-5" — matching
+    // the entry we are about to remove.
+    mockSelect
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("__manage_custom__") // agent A model → manage
+      .mockResolvedValueOnce(0) // manage: pick entry (index 0)
+      .mockResolvedValueOnce("remove") // manage: action
+      // After manage returns, loop back:
+      .mockResolvedValueOnce("opus") // agent A model (2nd time)
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("en"); // language
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm
+      .mockResolvedValueOnce(true) // confirm remove
+      .mockResolvedValueOnce(true); // confirm issue
+
+    await runStartup(target);
+
+    // Remove confirmation defaults to No (destructive action).
+    expect(mockConfirm.mock.calls[0][0]).toHaveProperty("default", false);
+
+    // Entry was removed.
+    expect(config.customModels?.claude).toEqual([]);
+    expect(mockSaveConfig).toHaveBeenCalledWith(config);
+    expect(mockSetCustomModels).toHaveBeenCalledWith(config.customModels);
+
+    // The model selector re-opened. Since the removed entry was the
+    // effective default ("claude-haiku-4-5"), the remove handler falls
+    // back to the first merged model from getModels ("opus").
+    const secondModelCall = mockSelect.mock.calls[4][0];
+    expect(secondModelCall.default).toBe("opus");
+  });
+
+  test("remove keeps original default when removed entry was not the default", async () => {
+    const config = configWithMultipleCustoms();
+    const target = {
+      owner: "aicers",
+      repo: "agentcoop",
+      issueNumber: 42,
+      config,
+      configDirty: false,
+    };
+    // effective.model for claude is "opus" (from CLI_DEFAULTS).
+    // We remove "claude-haiku-4-5" which is NOT the default.
+    mockSelect
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("__manage_custom__") // agent A model → manage
+      .mockResolvedValueOnce(0) // manage: pick entry (index 0)
+      .mockResolvedValueOnce("remove") // manage: action
+      // After manage returns, loop back:
+      .mockResolvedValueOnce("opus") // agent A model (2nd time)
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("en"); // language
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm
+      .mockResolvedValueOnce(true) // confirm remove
+      .mockResolvedValueOnce(true); // confirm issue
+
+    await runStartup(target);
+
+    // Remove confirmation defaults to No (destructive action).
+    expect(mockConfirm.mock.calls[0][0]).toHaveProperty("default", false);
+
+    // Only the first custom entry was removed.
+    expect(config.customModels?.claude).toEqual([
+      { name: "Claude Opus 4.7", value: "claude-opus-4-7" },
+    ]);
+
+    // The original default ("opus") was preserved.
+    const secondModelCall = mockSelect.mock.calls[4][0];
+    expect(secondModelCall.default).toBe("opus");
+  });
+
+  test("remove keeps default when custom entry shadowed a repo default", async () => {
+    // A custom "sonnet" entry duplicates the repo default value.
+    // Removing it should NOT reset the selector default because the
+    // repo default "sonnet" still exists in the merged list.
+    const config = {
+      ...defaultConfig(),
+      agentA: {
+        cli: "claude" as const,
+        model: "sonnet",
+        contextWindow: "1m",
+        effortLevel: "high",
+      },
+      customModels: {
+        claude: [{ name: "My Sonnet", value: "sonnet" }],
+      },
+    };
+    const target = {
+      owner: "aicers",
+      repo: "agentcoop",
+      issueNumber: 42,
+      config,
+      configDirty: false,
+    };
+    mockSelect
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("__manage_custom__") // agent A model → manage
+      .mockResolvedValueOnce(0) // manage: pick entry (index 0)
+      .mockResolvedValueOnce("remove") // manage: action
+      // After manage returns, loop back:
+      .mockResolvedValueOnce("sonnet") // agent A model (2nd time)
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("en"); // language
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm
+      .mockResolvedValueOnce(true) // confirm remove
+      .mockResolvedValueOnce(true); // confirm issue
+
+    await runStartup(target);
+
+    // Remove confirmation defaults to No (destructive action).
+    expect(mockConfirm.mock.calls[0][0]).toHaveProperty("default", false);
+
+    // Custom entry was removed.
+    expect(config.customModels?.claude).toEqual([]);
+    expect(mockSaveConfig).toHaveBeenCalledWith(config);
+    expect(mockSetCustomModels).toHaveBeenCalledWith(config.customModels);
+
+    // The default stays "sonnet" because the repo default still
+    // provides that value in the merged list.
+    const secondModelCall = mockSelect.mock.calls[4][0];
+    expect(secondModelCall.default).toBe("sonnet");
+  });
+
+  test("remove does nothing when user declines confirmation", async () => {
+    const config = configWithCustomClaude();
+    const target = {
+      owner: "aicers",
+      repo: "agentcoop",
+      issueNumber: 42,
+      config,
+      configDirty: false,
+    };
+    mockSelect
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("__manage_custom__") // agent A model → manage
+      .mockResolvedValueOnce(0) // manage: pick entry (index 0)
+      .mockResolvedValueOnce("remove") // manage: action
+      // After manage returns (declined), loop back:
+      .mockResolvedValueOnce("opus") // agent A model (2nd time)
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("en"); // language
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm
+      .mockResolvedValueOnce(false) // decline remove
+      .mockResolvedValueOnce(true); // confirm issue
+
+    await runStartup(target);
+
+    // Remove confirmation defaults to No (destructive action).
+    expect(mockConfirm.mock.calls[0][0]).toHaveProperty("default", false);
+
+    // Entry was NOT removed.
+    expect(config.customModels?.claude).toEqual([
+      { name: "Claude Haiku 4.5", value: "claude-haiku-4-5" },
+    ]);
+    // saveConfig was NOT called for the manage action itself.
+    // (It may still be called at end of runStartup for agent selection.)
+    expect(mockSetCustomModels).not.toHaveBeenCalled();
+  });
+
+  test("back from entry list returns to model selector unchanged", async () => {
+    const config = configWithCustomClaude();
+    const target = {
+      owner: "aicers",
+      repo: "agentcoop",
+      issueNumber: 42,
+      config,
+      configDirty: false,
+    };
+    mockSelect
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("__manage_custom__") // agent A model → manage
+      .mockResolvedValueOnce("__manage_back__") // manage: back from list
+      // Loop back to model selector:
+      .mockResolvedValueOnce("opus") // agent A model (2nd time)
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("en"); // language
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    const result = await runStartup(target);
+    expect(result.agentA.model).toBe("opus");
+    // No manage mutations.
+    expect(mockSetCustomModels).not.toHaveBeenCalled();
+  });
+
+  test("back from action menu returns to model selector unchanged", async () => {
+    const config = configWithCustomClaude();
+    const target = {
+      owner: "aicers",
+      repo: "agentcoop",
+      issueNumber: 42,
+      config,
+      configDirty: false,
+    };
+    mockSelect
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("__manage_custom__") // agent A model → manage
+      .mockResolvedValueOnce(0) // manage: pick entry (index 0)
+      .mockResolvedValueOnce("back") // manage: back from action
+      // Loop back to model selector:
+      .mockResolvedValueOnce("sonnet") // agent A model (2nd time)
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("en"); // language
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    const result = await runStartup(target);
+    expect(result.agentA.model).toBe("sonnet");
+    expect(mockSetCustomModels).not.toHaveBeenCalled();
+  });
+
+  test("edit duplicate-value rejection excludes the entry being edited", async () => {
+    const config = configWithCustomClaude();
+    const target = {
+      owner: "aicers",
+      repo: "agentcoop",
+      issueNumber: 42,
+      config,
+      configDirty: false,
+    };
+
+    // Make getModels include the custom model so duplicate check is exercised.
+    mockGetModels.mockImplementation((cli: string) => {
+      if (cli === "claude") {
+        return [
+          ...CLAUDE_TEST_MODELS,
+          { name: "Claude Haiku 4.5", value: "claude-haiku-4-5" },
+        ];
+      }
+      return [...CODEX_TEST_MODELS];
+    });
+
+    mockSelect
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("__manage_custom__") // agent A model → manage
+      .mockResolvedValueOnce(0) // manage: pick entry (index 0)
+      .mockResolvedValueOnce("edit") // manage: action
+      // After manage returns, loop back:
+      .mockResolvedValueOnce("claude-haiku-4-5") // agent A model (2nd time)
+      .mockResolvedValueOnce("200k")
+      .mockResolvedValueOnce("high")
+      .mockResolvedValueOnce("codex")
+      .mockResolvedValueOnce("gpt-5.4")
+      .mockResolvedValueOnce("high")
+      .mockResolvedValueOnce("auto")
+      .mockResolvedValueOnce("en");
+
+    let valueCallDone = false;
+    mockInput.mockImplementation(
+      async (opts: {
+        message: string;
+        validate?: (v: string) => string | true;
+        default?: string;
+      }) => {
+        if (!valueCallDone && opts.validate) {
+          valueCallDone = true;
+          // Keeping the same value is allowed (self-exclusion).
+          expect(opts.validate("claude-haiku-4-5")).toBe(true);
+          // A repo default is still rejected.
+          expect(opts.validate("opus")).not.toBe(true);
+          expect(opts.validate("opus")).toContain("Already exists");
+          return "claude-haiku-4-5";
+        }
+        // Display name prompt
+        return "Claude Haiku 4.5";
+      },
+    );
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    await runStartup(target);
+  });
+
+  test("edit rejects unchanged value when a duplicate custom entry exists", async () => {
+    // Two custom entries with the same value — an invalid state that can
+    // only arise from manual config editing.  The validator must detect
+    // the duplicate even when the user keeps the value unchanged, because
+    // exclusion is by index (the specific row), not by value.
+    const config: Config = {
+      ...defaultConfig(),
+      customModels: {
+        claude: [
+          { name: "Haiku A", value: "claude-haiku-4-5" },
+          { name: "Haiku B", value: "claude-haiku-4-5" },
+        ],
+      },
+    };
+    const target = {
+      owner: "aicers",
+      repo: "agentcoop",
+      issueNumber: 42,
+      config,
+      configDirty: false,
+    };
+
+    // mergeModels deduplicates, so only one "claude-haiku-4-5" appears.
+    mockGetModels.mockImplementation((cli: string) => {
+      if (cli === "claude") {
+        return [
+          ...CLAUDE_TEST_MODELS,
+          { name: "Haiku A", value: "claude-haiku-4-5" },
+        ];
+      }
+      return [...CODEX_TEST_MODELS];
+    });
+
+    mockSelect
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("__manage_custom__") // agent A model → manage
+      .mockResolvedValueOnce(0) // manage: pick entry (index 0)
+      .mockResolvedValueOnce("edit") // manage: action
+      // After manage returns (value changed to resolve dup), loop back:
+      .mockResolvedValueOnce("claude-haiku-4-6") // agent A model (2nd time)
+      .mockResolvedValueOnce("200k")
+      .mockResolvedValueOnce("high")
+      .mockResolvedValueOnce("codex")
+      .mockResolvedValueOnce("gpt-5.4")
+      .mockResolvedValueOnce("high")
+      .mockResolvedValueOnce("auto")
+      .mockResolvedValueOnce("en");
+
+    let valueCallDone = false;
+    mockInput.mockImplementation(
+      async (opts: {
+        message: string;
+        validate?: (v: string) => string | true;
+        default?: string;
+      }) => {
+        if (!valueCallDone && opts.validate) {
+          valueCallDone = true;
+          // Keeping the same value must be rejected because the other
+          // custom entry (index 1) also has "claude-haiku-4-5".
+          expect(opts.validate("claude-haiku-4-5")).not.toBe(true);
+          // A distinct valid value is accepted.
+          expect(opts.validate("claude-haiku-4-6")).toBe(true);
+          return "claude-haiku-4-6";
+        }
+        return "Haiku A";
+      },
+    );
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    await runStartup(target);
+  });
+
+  test("edit rejects value that duplicates a repo default even when custom had same value", async () => {
+    // A custom entry whose value matches a repo default — an invalid state
+    // from manual config editing.  The validator must reject keeping the
+    // value because the repo default is a distinct conflicting entry.
+    const config: Config = {
+      ...defaultConfig(),
+      customModels: {
+        claude: [{ name: "My Opus", value: "opus" }],
+      },
+    };
+    const target = {
+      owner: "aicers",
+      repo: "agentcoop",
+      issueNumber: 42,
+      config,
+      configDirty: false,
+    };
+
+    mockGetModels.mockImplementation((cli: string) => {
+      if (cli === "claude") {
+        // mergeModels: repo default wins, so the custom "opus" is dropped.
+        return [...CLAUDE_TEST_MODELS];
+      }
+      return [...CODEX_TEST_MODELS];
+    });
+
+    mockSelect
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("__manage_custom__") // agent A model → manage
+      .mockResolvedValueOnce(0) // manage: pick entry (index 0)
+      .mockResolvedValueOnce("edit") // manage: action
+      // After edit (value changed to resolve conflict), loop back:
+      .mockResolvedValueOnce("claude-haiku-4-5-new") // agent A model (2nd time)
+      .mockResolvedValueOnce("200k")
+      .mockResolvedValueOnce("high")
+      .mockResolvedValueOnce("codex")
+      .mockResolvedValueOnce("gpt-5.4")
+      .mockResolvedValueOnce("high")
+      .mockResolvedValueOnce("auto")
+      .mockResolvedValueOnce("en");
+
+    let valueCallDone = false;
+    mockInput.mockImplementation(
+      async (opts: {
+        message: string;
+        validate?: (v: string) => string | true;
+        default?: string;
+      }) => {
+        if (!valueCallDone && opts.validate) {
+          valueCallDone = true;
+          // Keeping "opus" must be rejected — it conflicts with the repo default.
+          expect(opts.validate("opus")).not.toBe(true);
+          // A distinct valid value is accepted.
+          expect(opts.validate("claude-haiku-4-5-new")).toBe(true);
+          return "claude-haiku-4-5-new";
+        }
+        return "My Opus";
+      },
+    );
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    await runStartup(target);
+  });
+
+  test("manage submenu selects correct entry when duplicate values exist", async () => {
+    // Two custom entries with the same value.  Selecting the second one
+    // (index 1) should edit that row, not the first one.
+    const config: Config = {
+      ...defaultConfig(),
+      customModels: {
+        claude: [
+          { name: "Haiku A", value: "claude-haiku-4-5" },
+          { name: "Haiku B", value: "claude-haiku-4-5" },
+        ],
+      },
+    };
+    const target = {
+      owner: "aicers",
+      repo: "agentcoop",
+      issueNumber: 42,
+      config,
+      configDirty: false,
+    };
+
+    mockGetModels.mockImplementation((cli: string) => {
+      if (cli === "claude") {
+        return [
+          ...CLAUDE_TEST_MODELS,
+          { name: "Haiku A", value: "claude-haiku-4-5" },
+        ];
+      }
+      return [...CODEX_TEST_MODELS];
+    });
+
+    mockSelect
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("__manage_custom__") // agent A model → manage
+      .mockResolvedValueOnce(1) // manage: pick entry (index 1 = "Haiku B")
+      .mockResolvedValueOnce("edit") // manage: action
+      // After edit, loop back:
+      .mockResolvedValueOnce("claude-haiku-4-6") // agent A model (2nd time)
+      .mockResolvedValueOnce("200k")
+      .mockResolvedValueOnce("high")
+      .mockResolvedValueOnce("codex")
+      .mockResolvedValueOnce("gpt-5.4")
+      .mockResolvedValueOnce("high")
+      .mockResolvedValueOnce("auto")
+      .mockResolvedValueOnce("en");
+
+    mockInput.mockImplementation(async () => "claude-haiku-4-6");
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    await runStartup(target);
+
+    // "Haiku B" (index 1) should have been updated, not "Haiku A" (index 0).
+    expect(config.customModels?.claude?.[0]).toEqual({
+      name: "Haiku A",
+      value: "claude-haiku-4-5",
+    });
+    expect(config.customModels?.claude?.[1]).toEqual({
+      name: "claude-haiku-4-6",
+      value: "claude-haiku-4-6",
+    });
+  });
+
+  test("manage option hidden after all customs removed for current CLI", async () => {
+    const config = configWithCustomClaude();
+    const target = {
+      owner: "aicers",
+      repo: "agentcoop",
+      issueNumber: 42,
+      config,
+      configDirty: false,
+    };
+    mockSelect
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("__manage_custom__") // agent A model → manage
+      .mockResolvedValueOnce(0) // manage: pick entry (index 0)
+      .mockResolvedValueOnce("remove") // manage: action
+      // After remove, loop back — customs are now empty:
+      .mockResolvedValueOnce("opus") // agent A model (2nd time)
+      .mockResolvedValueOnce("200k")
+      .mockResolvedValueOnce("high")
+      .mockResolvedValueOnce("codex")
+      .mockResolvedValueOnce("gpt-5.4")
+      .mockResolvedValueOnce("high")
+      .mockResolvedValueOnce("auto")
+      .mockResolvedValueOnce("en");
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm
+      .mockResolvedValueOnce(true) // confirm remove
+      .mockResolvedValueOnce(true); // confirm issue
+
+    await runStartup(target);
+
+    // Remove confirmation defaults to No (destructive action).
+    expect(mockConfirm.mock.calls[0][0]).toHaveProperty("default", false);
+
+    // The second model selector (index 4) should NOT include manage option.
+    const secondModelCall = mockSelect.mock.calls[4][0];
+    const values = secondModelCall.choices.map(
+      (c: { value: string }) => c.value,
+    );
+    expect(values).not.toContain("__manage_custom__");
   });
 });
