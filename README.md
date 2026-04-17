@@ -175,7 +175,7 @@ tokens consumed.
 
 Agents run with full filesystem and tool access:
 `--permission-mode bypassPermissions` for Claude,
-`--dangerously-bypass-approvals-and-sandbox` for Codex. There is no
+`-s danger-full-access` for Codex. There is no
 interactive permission prompt flow.
 
 This is necessary, not merely convenient. Agents run in
@@ -236,7 +236,7 @@ to reuse it, clean up and recreate, or halt.
 
 ## Prerequisites
 
-- Node.js 24+
+- Node.js 24.x
 - pnpm
 - `claude` and/or `codex` CLI installed and authenticated
 - `gh` CLI authenticated
