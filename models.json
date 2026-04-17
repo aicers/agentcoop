@@ -1,6 +1,6 @@
 {
   "claude": [
-    { "name": "Claude Opus 4.6", "value": "opus" },
+    { "name": "Claude Opus 4.7", "value": "opus" },
     { "name": "Claude Sonnet 4.6", "value": "sonnet" }
   ],
   "codex": [
