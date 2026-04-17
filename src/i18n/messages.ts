@@ -61,6 +61,16 @@ export interface Messages {
   "startup.customModelInvalidCodex": string;
   "startup.customModelDuplicate": (existingName: string) => string;
 
+  // ---- custom model management (startup.ts) ----------------------------------
+
+  "startup.manageCustomModelsOption": string;
+  "startup.manageCustomModelsList": string;
+  "startup.manageCustomModelsAction": (name: string) => string;
+  "startup.manageCustomModelsEdit": string;
+  "startup.manageCustomModelsRemove": string;
+  "startup.manageCustomModelsBack": string;
+  "startup.manageCustomModelsConfirmRemove": (name: string) => string;
+
   // ---- model registry (models.ts / index.ts) --------------------------------
 
   "models.loadFailed": (detail: string) => string;

@@ -9,6 +9,7 @@ import type { Issue } from "./github.js";
 import { getIssue, listRepositories } from "./github.js";
 import { initI18n, t } from "./i18n/index.js";
 import {
+  getDefaultModels,
   getModelDisplayName,
   getModels,
   isOpusModel,
@@ -51,6 +52,8 @@ const CLI_CHOICES = [
 // ---- Custom model sentinel value -----------------------------------------
 
 const CUSTOM_MODEL_SENTINEL = "__custom__";
+const MANAGE_CUSTOM_MODELS_SENTINEL = "__manage_custom__";
+const MANAGE_BACK_SENTINEL = "__manage_back__";
 
 // ---- Model validation patterns -------------------------------------------
 
@@ -383,53 +386,43 @@ async function selectAgent(
   // of landing on the first choice.
   const effective = defaults?.cli === cli ? defaults : CLI_DEFAULTS[cli];
 
-  const models = getModels(cli);
-  const modelChoices = [
-    ...models.map((m) => ({ name: m.name, value: m.value })),
-    { name: m["startup.customModelOption"], value: CUSTOM_MODEL_SENTINEL },
-  ];
-  let model = await select({
-    message: m["startup.agentModel"](label),
-    choices: modelChoices,
-    default: effective.model,
-  });
+  let modelDefault = effective.model;
+  let model: string;
 
-  if (model === CUSTOM_MODEL_SENTINEL) {
-    const pattern =
-      cli === "claude" ? CLAUDE_MODEL_PATTERN : CODEX_MODEL_PATTERN;
-    const invalidMsg =
-      cli === "claude"
-        ? m["startup.customModelInvalidClaude"]
-        : m["startup.customModelInvalidCodex"];
-
-    const rawValue = await input({
-      message: m["startup.customModelValue"],
-      validate: (v) => {
-        const trimmed = v.trim();
-        if (!pattern.test(trimmed)) return invalidMsg;
-        const existing = getModels(cli).find((e) => e.value === trimmed);
-        if (existing) return m["startup.customModelDuplicate"](existing.name);
-        return true;
-      },
-    });
-    const value = rawValue.trim();
-
-    const rawName = await input({
-      message: m["startup.customModelName"],
-      default: value,
-    });
-    const displayName = rawName.trim() || value;
-
-    // Persist to config.
-    if (config) {
-      if (!config.customModels) config.customModels = {};
-      if (!config.customModels[cli]) config.customModels[cli] = [];
-      config.customModels[cli].push({ name: displayName, value });
-      saveConfig(config);
-      setCustomModels(config.customModels);
+  // Loop so the manage-custom-models submenu can return the user to the
+  // model selector with an updated list.
+  for (;;) {
+    const models = getModels(cli);
+    const customsForCli = config?.customModels?.[cli] ?? [];
+    const modelChoices: { name: string; value: string }[] = [
+      ...models.map((entry) => ({ name: entry.name, value: entry.value })),
+      { name: m["startup.customModelOption"], value: CUSTOM_MODEL_SENTINEL },
+    ];
+    if (customsForCli.length > 0) {
+      modelChoices.push({
+        name: m["startup.manageCustomModelsOption"],
+        value: MANAGE_CUSTOM_MODELS_SENTINEL,
+      });
     }
 
-    model = value;
+    const selected = await select({
+      message: m["startup.agentModel"](label),
+      choices: modelChoices,
+      default: modelDefault,
+    });
+
+    if (selected === MANAGE_CUSTOM_MODELS_SENTINEL && config) {
+      modelDefault = await manageCustomModels(cli, config, modelDefault);
+      continue;
+    }
+
+    if (selected === CUSTOM_MODEL_SENTINEL) {
+      model = await promptNewCustomModel(cli, config, m);
+      break;
+    }
+
+    model = selected;
+    break;
   }
 
   let contextWindow: string | undefined;
@@ -450,6 +443,191 @@ async function selectAgent(
   });
 
   return { cli, model, contextWindow, effortLevel };
+}
+
+// ---- custom model helpers ---------------------------------------------------
+
+type MessageCatalog = ReturnType<typeof t>;
+
+async function promptNewCustomModel(
+  cli: "claude" | "codex",
+  config: Config | undefined,
+  m: MessageCatalog,
+): Promise<string> {
+  const pattern = cli === "claude" ? CLAUDE_MODEL_PATTERN : CODEX_MODEL_PATTERN;
+  const invalidMsg =
+    cli === "claude"
+      ? m["startup.customModelInvalidClaude"]
+      : m["startup.customModelInvalidCodex"];
+
+  const rawValue = await input({
+    message: m["startup.customModelValue"],
+    validate: (v) => {
+      const trimmed = v.trim();
+      if (!pattern.test(trimmed)) return invalidMsg;
+      const existing = getModels(cli).find((e) => e.value === trimmed);
+      if (existing) return m["startup.customModelDuplicate"](existing.name);
+      return true;
+    },
+  });
+  const value = rawValue.trim();
+
+  const rawName = await input({
+    message: m["startup.customModelName"],
+    default: value,
+  });
+  const displayName = rawName.trim() || value;
+
+  // Persist to config.
+  if (config) {
+    if (!config.customModels) config.customModels = {};
+    if (!config.customModels[cli]) config.customModels[cli] = [];
+    config.customModels[cli].push({ name: displayName, value });
+    saveConfig(config);
+    setCustomModels(config.customModels);
+  }
+
+  return value;
+}
+
+async function manageCustomModels(
+  cli: "claude" | "codex",
+  config: Config,
+  currentDefault: string | undefined,
+): Promise<string | undefined> {
+  const m = t();
+  const customsForCli = config.customModels?.[cli] ?? [];
+
+  // Step 1: pick a custom model from the list (or go back).
+  // Use the array index as the choice value so that duplicate values in
+  // an invalid config don't collapse onto the first matching entry.
+  const entryChoices: {
+    name: string;
+    value: number | typeof MANAGE_BACK_SENTINEL;
+  }[] = [
+    ...customsForCli.map((entry, i) => ({
+      name: `${entry.name} (${entry.value})`,
+      value: i,
+    })),
+    { name: m["startup.manageCustomModelsBack"], value: MANAGE_BACK_SENTINEL },
+  ];
+
+  const selected = await select({
+    message: m["startup.manageCustomModelsList"],
+    choices: entryChoices,
+  });
+
+  if (selected === MANAGE_BACK_SENTINEL) {
+    return currentDefault;
+  }
+
+  const entryIndex = selected;
+  const entry = customsForCli[entryIndex];
+
+  // Step 2: pick an action.
+  const action = await select<"edit" | "remove" | "back">({
+    message: m["startup.manageCustomModelsAction"](entry.name),
+    choices: [
+      { name: m["startup.manageCustomModelsEdit"], value: "edit" },
+      { name: m["startup.manageCustomModelsRemove"], value: "remove" },
+      { name: m["startup.manageCustomModelsBack"], value: "back" },
+    ],
+  });
+
+  if (action === "back") {
+    return currentDefault;
+  }
+
+  if (action === "edit") {
+    return editCustomModel(cli, config, customsForCli, entryIndex, entry, m);
+  }
+
+  // action === "remove"
+  return removeCustomModel(
+    cli,
+    config,
+    customsForCli,
+    entryIndex,
+    entry,
+    currentDefault,
+    m,
+  );
+}
+
+async function editCustomModel(
+  cli: "claude" | "codex",
+  config: Config,
+  customsForCli: { name: string; value: string }[],
+  entryIndex: number,
+  entry: { name: string; value: string },
+  m: MessageCatalog,
+): Promise<string> {
+  const pattern = cli === "claude" ? CLAUDE_MODEL_PATTERN : CODEX_MODEL_PATTERN;
+  const invalidMsg =
+    cli === "claude"
+      ? m["startup.customModelInvalidClaude"]
+      : m["startup.customModelInvalidCodex"];
+
+  const rawValue = await input({
+    message: m["startup.customModelValue"],
+    default: entry.value,
+    validate: (v) => {
+      const trimmed = v.trim();
+      if (!pattern.test(trimmed)) return invalidMsg;
+      // Exclude the entry being edited by index (not value) so that
+      // pre-existing duplicate customs are still detected.
+      const dupCustom = customsForCli.find(
+        (c, i) => i !== entryIndex && c.value === trimmed,
+      );
+      if (dupCustom) return m["startup.customModelDuplicate"](dupCustom.name);
+      // Check against repo defaults (customs already handled above).
+      const dupDefault = getDefaultModels(cli).find((e) => e.value === trimmed);
+      if (dupDefault) return m["startup.customModelDuplicate"](dupDefault.name);
+      return true;
+    },
+  });
+  const newValue = rawValue.trim();
+
+  const rawName = await input({
+    message: m["startup.customModelName"],
+    default: entry.name,
+  });
+  const newName = rawName.trim() || newValue;
+
+  customsForCli[entryIndex] = { name: newName, value: newValue };
+  saveConfig(config);
+  setCustomModels(config.customModels);
+
+  return newValue;
+}
+
+async function removeCustomModel(
+  cli: "claude" | "codex",
+  config: Config,
+  customsForCli: { name: string; value: string }[],
+  entryIndex: number,
+  entry: { name: string; value: string },
+  currentDefault: string | undefined,
+  m: MessageCatalog,
+): Promise<string | undefined> {
+  const confirmed = await confirm({
+    message: m["startup.manageCustomModelsConfirmRemove"](entry.name),
+    default: false,
+  });
+
+  if (!confirmed) {
+    return currentDefault;
+  }
+
+  customsForCli.splice(entryIndex, 1);
+  saveConfig(config);
+  setCustomModels(config.customModels);
+
+  const updatedModels = getModels(cli);
+  if (updatedModels.some((e) => e.value === currentDefault)) {
+    return currentDefault;
+  }
+  return updatedModels[0]?.value;
 }
 
 async function selectExecutionMode(
