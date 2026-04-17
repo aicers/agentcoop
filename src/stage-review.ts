@@ -18,8 +18,8 @@
  *         the next review round.
  *
  * The pipeline engine's auto-budget manages the 3-automatic /
- * 4th-asks-user contract.  `autoBudget` should be set from the
- * `reviewAutoRounds` config value in `index.ts`.
+ * 4th-asks-user contract.  `autoBudget` is wired from the
+ * `reviewAutoRounds` config value via `assembleReviewStage`.
  */
 
 import type { AgentAdapter, AgentResult } from "./agent.js";

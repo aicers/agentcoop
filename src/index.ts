@@ -18,7 +18,12 @@ import {
 } from "./cleanup-confirm.js";
 import { createCodexAdapter } from "./codex-adapter.js";
 import type { NotificationSettings, PipelineSettings } from "./config.js";
-import { assembleCiCheckStage, loadConfig } from "./config.js";
+import {
+  assembleCiCheckStage,
+  assembleReviewStage,
+  assembleSquashStage,
+  loadConfig,
+} from "./config.js";
 import { getGitHubUsername, getIssue } from "./github.js";
 import { initI18n, t } from "./i18n/index.js";
 import {
@@ -558,38 +563,45 @@ try {
     restartFromStage: 5,
   };
 
-  const squashStage = createSquashStageHandler({
-    agent: agentA,
-    ...issueCtx,
-    defaultBranch,
-  });
+  const squashStage = assembleSquashStage(
+    (opts) =>
+      createSquashStageHandler({
+        agent: agentA,
+        ...issueCtx,
+        defaultBranch,
+        ...opts,
+      }),
+    pipelineSettings,
+  );
 
-  const reviewStage = {
-    ...createReviewStageHandler({
-      agentA,
-      agentB,
-      ...issueCtx,
-      getPrNumber: () => runState.prNumber,
-      onReviewProgress: (subStep, verdict) => {
-        runState.reviewSubStep = subStep;
-        if (verdict !== undefined) {
-          runState.lastVerdict = verdict;
-        } else if (subStep === "review" || subStep === "verdict") {
-          // Entering a pre-verdict step for a (possibly new) round —
-          // clear the stale verdict from the previous round so that
-          // reconciliation does not falsely invalidate sessions.
-          runState.lastVerdict = undefined;
-        }
-        saveRunState(runState);
-      },
-      onReviewPosted: (round) => {
-        runState.reviewCount = round;
-        saveRunState(runState);
-        emitter.emit("review:posted", { round });
-      },
-    }),
-    autoBudget: pipelineSettings.reviewAutoRounds,
-  };
+  const reviewStage = assembleReviewStage(
+    (opts) =>
+      createReviewStageHandler({
+        agentA,
+        agentB,
+        ...issueCtx,
+        ...opts,
+        getPrNumber: () => runState.prNumber,
+        onReviewProgress: (subStep, verdict) => {
+          runState.reviewSubStep = subStep;
+          if (verdict !== undefined) {
+            runState.lastVerdict = verdict;
+          } else if (subStep === "review" || subStep === "verdict") {
+            // Entering a pre-verdict step for a (possibly new) round —
+            // clear the stale verdict from the previous round so that
+            // reconciliation does not falsely invalidate sessions.
+            runState.lastVerdict = undefined;
+          }
+          saveRunState(runState);
+        },
+        onReviewPosted: (round) => {
+          runState.reviewCount = round;
+          saveRunState(runState);
+          emitter.emit("review:posted", { round });
+        },
+      }),
+    pipelineSettings,
+  );
 
   // Mutable run state for persistence.
   const runState: RunState = savedState ?? {
