@@ -65,6 +65,26 @@ export const ko: Messages = {
   "startup.issueNotConfirmed":
     "\uC774\uC288\uAC00 \uD655\uC778\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4. \uC911\uB2E8\uD569\uB2C8\uB2E4.",
 
+  // ---- custom model entry --------------------------------------------------
+
+  "startup.customModelOption":
+    "\uC0AC\uC6A9\uC790 \uC815\uC758 \uBAA8\uB378 \uC785\uB825...",
+  "startup.customModelValue":
+    "\uBAA8\uB378 \uC2DD\uBCC4\uC790 (--model\uC5D0 \uC804\uB2EC\uB428):",
+  "startup.customModelName":
+    "\uD45C\uC2DC \uC774\uB984 (\uBE44\uC6CC\uB450\uBA74 \uC2DD\uBCC4\uC790 \uC0AC\uC6A9):",
+  "startup.customModelInvalidClaude":
+    "\uD615\uC2DD: opus, sonnet, haiku \uB610\uB294 claude-<\uC774\uB984> (\uC18C\uBB38\uC790 \uC601\uC22B\uC790 \uBC0F \uD558\uC774\uD508)",
+  "startup.customModelInvalidCodex":
+    "\uD615\uC2DD: gpt-<\uC774\uB984> \uB610\uB294 o<\uC22B\uC790>[-<\uC774\uB984>] (\uC18C\uBB38\uC790 \uC601\uC22B\uC790, \uD558\uC774\uD508, \uC810)",
+  "startup.customModelDuplicate": (name) =>
+    `\uC774\uBBF8 "${name}"(\uC73C)\uB85C \uC874\uC7AC\uD569\uB2C8\uB2E4`,
+
+  // ---- model registry ------------------------------------------------------
+
+  "models.loadFailed": (detail) =>
+    `\uBAA8\uB378 \uC815\uC758 \uB85C\uB4DC \uC2E4\uD328: ${detail}`,
+
   // ---- resume / run state ------------------------------------------------
 
   "resume.savedStateFound":

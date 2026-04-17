@@ -49,6 +49,22 @@ export const en: Messages = {
   "startup.proceedWithIssue": "Proceed with this issue?",
   "startup.issueNotConfirmed": "Issue not confirmed. Aborting.",
 
+  // ---- custom model entry --------------------------------------------------
+
+  "startup.customModelOption": "Enter custom model...",
+  "startup.customModelValue": "Model identifier (passed to --model):",
+  "startup.customModelName": "Display name (leave blank to use identifier):",
+  "startup.customModelInvalidClaude":
+    "Must match: opus, sonnet, haiku, or claude-<name> (lowercase alphanumeric and hyphens)",
+  "startup.customModelInvalidCodex":
+    "Must match: gpt-<name> or o<number>[-<name>] (lowercase alphanumeric, hyphens, dots)",
+  "startup.customModelDuplicate": (name) => `Already exists as "${name}"`,
+
+  // ---- model registry ------------------------------------------------------
+
+  "models.loadFailed": (detail) =>
+    `Failed to load model definitions: ${detail}`,
+
   // ---- resume / run state ------------------------------------------------
 
   "resume.savedStateFound": "  Saved run state found:",

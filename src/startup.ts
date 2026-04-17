@@ -8,6 +8,12 @@ import { loadConfig, saveConfig } from "./config.js";
 import type { Issue } from "./github.js";
 import { getIssue, listRepositories } from "./github.js";
 import { initI18n, t } from "./i18n/index.js";
+import {
+  getModelDisplayName,
+  getModels,
+  isOpusModel,
+  setCustomModels,
+} from "./models.js";
 
 export interface TargetResult {
   owner: string;
@@ -42,17 +48,14 @@ const CLI_CHOICES = [
   { name: "Codex", value: "codex" as const },
 ];
 
-// ---- Model choices per CLI -----------------------------------------------
+// ---- Custom model sentinel value -----------------------------------------
 
-const CLAUDE_MODELS = [
-  { name: "Claude Opus 4.6", value: "opus" },
-  { name: "Claude Sonnet 4.6", value: "sonnet" },
-];
+const CUSTOM_MODEL_SENTINEL = "__custom__";
 
-const CODEX_MODELS = [
-  { name: "GPT-5.4", value: "gpt-5.4" },
-  { name: "GPT-5.3-Codex", value: "gpt-5.3-codex" },
-];
+// ---- Model validation patterns -------------------------------------------
+
+const CLAUDE_MODEL_PATTERN = /^(opus|sonnet|haiku|claude-[a-z0-9-]+)$/;
+const CODEX_MODEL_PATTERN = /^(gpt-[a-z0-9.-]+|o[0-9]+(-[a-z0-9]+)?)$/;
 
 // ---- Context window variants ---------------------------------------------
 
@@ -75,7 +78,7 @@ const CLAUDE_OPUS_EFFORT_LEVELS = [
 ];
 
 function claudeEffortChoices(model: string) {
-  return model === "opus" ? CLAUDE_OPUS_EFFORT_LEVELS : CLAUDE_EFFORT_LEVELS;
+  return isOpusModel(model) ? CLAUDE_OPUS_EFFORT_LEVELS : CLAUDE_EFFORT_LEVELS;
 }
 
 const CODEX_REASONING_LEVELS = [
@@ -88,9 +91,7 @@ const CODEX_REASONING_LEVELS = [
 // ---- Display name helpers ------------------------------------------------
 
 function modelDisplayName(config: AgentConfig): string {
-  const modelChoices = config.cli === "claude" ? CLAUDE_MODELS : CODEX_MODELS;
-  const modelName =
-    modelChoices.find((m) => m.value === config.model)?.name ?? config.model;
+  const modelName = getModelDisplayName(config.cli, config.model);
   const parts = [modelName];
   if (config.contextWindow) {
     parts[0] = `${modelName} (${config.contextWindow.toUpperCase()})`;
@@ -218,13 +219,18 @@ export async function runStartup(
   const agentA = await selectAgent(
     t()["agent.labelARole"],
     config.agentA ?? DEFAULT_AGENT_A,
+    config,
   );
   // Smart default: opposite CLI for agent B
   const defaultBCli = agentA.cli === "claude" ? "codex" : "claude";
   const agentBDefaults: Partial<AgentConfig> = config.agentB
     ? config.agentB
     : CLI_DEFAULTS[defaultBCli];
-  const agentB = await selectAgent(t()["agent.labelBRole"], agentBDefaults);
+  const agentB = await selectAgent(
+    t()["agent.labelBRole"],
+    agentBDefaults,
+    config,
+  );
   const executionMode = await selectExecutionMode(config.executionMode);
 
   const { language, dirty: langDirty } = await selectLanguage(config);
@@ -362,6 +368,7 @@ const DEFAULT_AGENT_A = CLI_DEFAULTS.claude;
 async function selectAgent(
   label: string,
   defaults?: Partial<AgentConfig>,
+  config?: Config,
 ): Promise<AgentConfig> {
   const m = t();
 
@@ -376,12 +383,54 @@ async function selectAgent(
   // of landing on the first choice.
   const effective = defaults?.cli === cli ? defaults : CLI_DEFAULTS[cli];
 
-  const models = cli === "claude" ? CLAUDE_MODELS : CODEX_MODELS;
-  const model = await select({
+  const models = getModels(cli);
+  const modelChoices = [
+    ...models.map((m) => ({ name: m.name, value: m.value })),
+    { name: m["startup.customModelOption"], value: CUSTOM_MODEL_SENTINEL },
+  ];
+  let model = await select({
     message: m["startup.agentModel"](label),
-    choices: models,
+    choices: modelChoices,
     default: effective.model,
   });
+
+  if (model === CUSTOM_MODEL_SENTINEL) {
+    const pattern =
+      cli === "claude" ? CLAUDE_MODEL_PATTERN : CODEX_MODEL_PATTERN;
+    const invalidMsg =
+      cli === "claude"
+        ? m["startup.customModelInvalidClaude"]
+        : m["startup.customModelInvalidCodex"];
+
+    const rawValue = await input({
+      message: m["startup.customModelValue"],
+      validate: (v) => {
+        const trimmed = v.trim();
+        if (!pattern.test(trimmed)) return invalidMsg;
+        const existing = getModels(cli).find((e) => e.value === trimmed);
+        if (existing) return m["startup.customModelDuplicate"](existing.name);
+        return true;
+      },
+    });
+    const value = rawValue.trim();
+
+    const rawName = await input({
+      message: m["startup.customModelName"],
+      default: value,
+    });
+    const displayName = rawName.trim() || value;
+
+    // Persist to config.
+    if (config) {
+      if (!config.customModels) config.customModels = {};
+      if (!config.customModels[cli]) config.customModels[cli] = [];
+      config.customModels[cli].push({ name: displayName, value });
+      saveConfig(config);
+      setCustomModels(config.customModels);
+    }
+
+    model = value;
+  }
 
   let contextWindow: string | undefined;
   if (cli === "claude") {
