@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Config } from "./config.js";
 import type { Issue } from "./github.js";
 import { initI18n } from "./i18n/index.js";
@@ -36,9 +36,54 @@ vi.mock("./github.js", () => ({
   getIssue: (...args: unknown[]) => mockGetIssue(...args),
 }));
 
+const mockGetModels = vi.fn();
+const mockGetModelDisplayName = vi.fn();
+const mockIsOpusModel = vi.fn();
+const mockSetCustomModels = vi.fn();
+
+vi.mock("./models.js", () => ({
+  getModels: (...args: unknown[]) => mockGetModels(...args),
+  getModelDisplayName: (...args: unknown[]) => mockGetModelDisplayName(...args),
+  isOpusModel: (...args: unknown[]) => mockIsOpusModel(...args),
+  setCustomModels: (...args: unknown[]) => mockSetCustomModels(...args),
+}));
+
 const { runStartup, selectTarget, modelDisplayName } = await import(
   "./startup.js"
 );
+
+// ---------------------------------------------------------------------------
+// Model mock setup
+// ---------------------------------------------------------------------------
+
+const CLAUDE_TEST_MODELS = [
+  { name: "Claude Opus 4.6", value: "opus" },
+  { name: "Claude Sonnet 4.6", value: "sonnet" },
+];
+
+const CODEX_TEST_MODELS = [
+  { name: "GPT-5.4", value: "gpt-5.4" },
+  { name: "GPT-5.3-Codex", value: "gpt-5.3-codex" },
+];
+
+const MODEL_DISPLAY_NAMES: Record<string, string> = {
+  opus: "Claude Opus 4.6",
+  sonnet: "Claude Sonnet 4.6",
+  "gpt-5.4": "GPT-5.4",
+  "gpt-5.3-codex": "GPT-5.3-Codex",
+};
+
+function setupModelMocks() {
+  mockGetModels.mockImplementation((cli: string) =>
+    cli === "claude" ? [...CLAUDE_TEST_MODELS] : [...CODEX_TEST_MODELS],
+  );
+  mockGetModelDisplayName.mockImplementation(
+    (_cli: string, value: string) => MODEL_DISPLAY_NAMES[value] ?? value,
+  );
+  mockIsOpusModel.mockImplementation(
+    (value: string) => value === "opus" || value.startsWith("claude-opus-"),
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -94,6 +139,10 @@ function setupHappyPath() {
   mockGetIssue.mockReturnValue(defaultIssue());
   mockConfirm.mockResolvedValueOnce(true); // confirm issue
 }
+
+beforeEach(() => {
+  setupModelMocks();
+});
 
 afterEach(async () => {
   vi.resetAllMocks();
@@ -518,11 +567,13 @@ describe("runStartup — model selection", () => {
       (c: { value: string }) => c.value,
     );
     // Agent A selected "claude" CLI, so only Claude models are shown
+    // plus the "Enter custom model..." sentinel
     expect(values).toContain("opus");
     expect(values).toContain("sonnet");
+    expect(values).toContain("__custom__");
     expect(values).not.toContain("gpt-5.4");
     expect(values).not.toContain("gpt-5.3-codex");
-    expect(values).toHaveLength(2);
+    expect(values).toHaveLength(3);
   });
 
   test("switching CLI seeds defaults from CLI_DEFAULTS", async () => {
@@ -638,6 +689,35 @@ describe("runStartup — effort level choices", () => {
     expect(result.agentA.effortLevel).toBe("max");
     expect(result.agentB.effortLevel).toBe("high");
   });
+
+  test("offers max effort for explicit Opus ID (claude-opus-4-7)", async () => {
+    setupHappyPath();
+    mockSelect
+      .mockReset()
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("claude-opus-4-7") // agent A model — explicit ID
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("max") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("en"); // language
+    mockConfirm.mockResolvedValueOnce(true);
+
+    const result = await runStartup();
+
+    // Effort prompt for an explicit Opus ID should include "max"
+    // index: 0=owner, 1=CLI, 2=model, 3=context, 4=effort
+    const agentAEffortCall = mockSelect.mock.calls[4][0];
+    const agentAValues = agentAEffortCall.choices.map(
+      (c: { value: string }) => c.value,
+    );
+    expect(agentAValues).toContain("max");
+    expect(agentAValues).toEqual(["low", "medium", "high", "max"]);
+    expect(result.agentA.effortLevel).toBe("max");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -652,6 +732,16 @@ describe("modelDisplayName", () => {
       effortLevel: "max",
     });
     expect(name).toBe("Claude Opus 4.6 (1M) / Max");
+  });
+
+  test("shows Max label for explicit Opus ID with max effort", () => {
+    const name = modelDisplayName({
+      cli: "claude",
+      model: "claude-opus-4-7",
+      contextWindow: "1m",
+      effortLevel: "max",
+    });
+    expect(name).toBe("claude-opus-4-7 (1M) / Max");
   });
 
   test("shows High label for Sonnet with high effort", () => {
@@ -1716,5 +1806,240 @@ describe("runStartup — quick-start", () => {
     const result = await runStartup();
 
     expect(result.executionMode).toBe("auto");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Custom model entry
+// ---------------------------------------------------------------------------
+describe("runStartup — custom model entry", () => {
+  test("custom model flow prompts for value and name, persists to config", async () => {
+    const config = defaultConfig();
+    mockLoadConfig.mockReturnValue(config);
+    mockSelect
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("__custom__") // agent A model → custom sentinel
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("en"); // language
+    mockSearch.mockResolvedValueOnce("agentcoop");
+    mockInput
+      .mockResolvedValueOnce("42") // issue number
+      .mockResolvedValueOnce("claude-opus-4-7") // custom model value
+      .mockResolvedValueOnce("Claude Opus 4.7"); // custom model display name
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    const result = await runStartup();
+    expect(result.agentA.model).toBe("claude-opus-4-7");
+    expect(result.agentA.cli).toBe("claude");
+
+    // Config should have been saved with the custom model.
+    expect(mockSaveConfig).toHaveBeenCalled();
+    expect(config.customModels?.claude).toEqual([
+      { name: "Claude Opus 4.7", value: "claude-opus-4-7" },
+    ]);
+    // Registry should have been refreshed.
+    expect(mockSetCustomModels).toHaveBeenCalledWith(config.customModels);
+  });
+
+  test("custom model display name defaults to value when left blank", async () => {
+    const config = defaultConfig();
+    mockLoadConfig.mockReturnValue(config);
+    mockSelect
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("codex") // agent A CLI
+      .mockResolvedValueOnce("__custom__") // agent A model → custom sentinel
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("claude") // agent B CLI
+      .mockResolvedValueOnce("opus") // agent B model
+      .mockResolvedValueOnce("200k") // agent B context window
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("en"); // language
+    mockSearch.mockResolvedValueOnce("agentcoop");
+    mockInput
+      .mockResolvedValueOnce("42") // issue number
+      .mockResolvedValueOnce("gpt-6") // custom model value
+      .mockResolvedValueOnce(""); // blank → defaults to value
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    const result = await runStartup();
+    expect(result.agentA.model).toBe("gpt-6");
+    expect(config.customModels?.codex).toEqual([
+      { name: "gpt-6", value: "gpt-6" },
+    ]);
+  });
+
+  test("custom model validates regex for Claude", async () => {
+    const config = defaultConfig();
+    mockLoadConfig.mockReturnValue(config);
+    mockSelect
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("__custom__") // custom sentinel
+      .mockResolvedValueOnce("200k") // agent A context window
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto")
+      .mockResolvedValueOnce("en");
+    mockSearch.mockResolvedValueOnce("agentcoop");
+
+    let valueCallDone = false;
+    mockInput.mockImplementation(
+      async (opts: {
+        message: string;
+        validate?: (v: string) => string | true;
+        default?: string;
+      }) => {
+        if (opts.message === "Issue number:") return "42";
+        if (!valueCallDone && opts.validate) {
+          valueCallDone = true;
+          // Invalid values should be rejected
+          expect(opts.validate("INVALID")).not.toBe(true);
+          expect(opts.validate("some spaces")).not.toBe(true);
+          expect(opts.validate("")).not.toBe(true);
+          // Valid values should pass (only non-duplicate ones)
+          expect(opts.validate("haiku")).toBe(true);
+          expect(opts.validate("claude-opus-4-7")).toBe(true);
+          expect(opts.validate("claude-haiku-4-5")).toBe(true);
+          return "claude-haiku-4-5";
+        }
+        // Display name prompt
+        return "Claude Haiku 4.5";
+      },
+    );
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    const result = await runStartup();
+    expect(result.agentA.model).toBe("claude-haiku-4-5");
+  });
+
+  test("custom model validates regex for Codex", async () => {
+    const config = defaultConfig();
+    mockLoadConfig.mockReturnValue(config);
+    mockSelect
+      .mockResolvedValueOnce("aicers")
+      .mockResolvedValueOnce("codex") // agent A CLI
+      .mockResolvedValueOnce("__custom__")
+      .mockResolvedValueOnce("high") // agent A effort
+      .mockResolvedValueOnce("claude") // agent B CLI
+      .mockResolvedValueOnce("opus")
+      .mockResolvedValueOnce("200k")
+      .mockResolvedValueOnce("high")
+      .mockResolvedValueOnce("auto")
+      .mockResolvedValueOnce("en");
+    mockSearch.mockResolvedValueOnce("agentcoop");
+
+    let valueCallDone = false;
+    mockInput.mockImplementation(
+      async (opts: {
+        message: string;
+        validate?: (v: string) => string | true;
+        default?: string;
+      }) => {
+        if (opts.message === "Issue number:") return "42";
+        if (!valueCallDone && opts.validate) {
+          valueCallDone = true;
+          expect(opts.validate("INVALID")).not.toBe(true);
+          expect(opts.validate("claude-opus-4-7")).not.toBe(true);
+          // Valid Codex values
+          expect(opts.validate("gpt-6")).toBe(true);
+          expect(opts.validate("gpt-5.5-turbo")).toBe(true);
+          expect(opts.validate("o3-mini")).toBe(true);
+          return "gpt-6";
+        }
+        return "GPT-6";
+      },
+    );
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    const result = await runStartup();
+    expect(result.agentA.model).toBe("gpt-6");
+  });
+
+  test("custom model rejects duplicate values", async () => {
+    const config = defaultConfig();
+    mockLoadConfig.mockReturnValue(config);
+    mockSelect
+      .mockResolvedValueOnce("aicers")
+      .mockResolvedValueOnce("claude")
+      .mockResolvedValueOnce("__custom__")
+      .mockResolvedValueOnce("200k")
+      .mockResolvedValueOnce("high")
+      .mockResolvedValueOnce("codex")
+      .mockResolvedValueOnce("gpt-5.4")
+      .mockResolvedValueOnce("high")
+      .mockResolvedValueOnce("auto")
+      .mockResolvedValueOnce("en");
+    mockSearch.mockResolvedValueOnce("agentcoop");
+
+    let valueCallDone = false;
+    mockInput.mockImplementation(
+      async (opts: {
+        message: string;
+        validate?: (v: string) => string | true;
+        default?: string;
+      }) => {
+        if (opts.message === "Issue number:") return "42";
+        if (!valueCallDone && opts.validate) {
+          valueCallDone = true;
+          // "opus" already exists in the merged list via mockGetModels
+          const result = opts.validate("opus");
+          expect(result).not.toBe(true);
+          expect(result).toContain("Already exists");
+          // A truly new value should pass
+          expect(opts.validate("claude-opus-4-7")).toBe(true);
+          return "claude-opus-4-7";
+        }
+        return "Claude Opus 4.7";
+      },
+    );
+    mockCheckbox.mockResolvedValueOnce([]).mockResolvedValueOnce(["bell"]);
+    mockListRepositories.mockReturnValue([
+      { name: "agentcoop", description: "" },
+    ]);
+    mockGetIssue.mockReturnValue(defaultIssue());
+    mockConfirm.mockResolvedValueOnce(true);
+
+    await runStartup();
+  });
+
+  test("model selector includes custom model option", async () => {
+    setupHappyPath();
+    await runStartup();
+
+    // Agent A model selection is the 3rd select call (index 2)
+    const agentAModelCall = mockSelect.mock.calls[2][0];
+    const lastChoice =
+      agentAModelCall.choices[agentAModelCall.choices.length - 1];
+    expect(lastChoice.name).toBe("Enter custom model...");
+    expect(lastChoice.value).toBe("__custom__");
   });
 });

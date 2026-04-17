@@ -52,6 +52,19 @@ export interface Messages {
   "startup.proceedWithIssue": string;
   "startup.issueNotConfirmed": string;
 
+  // ---- custom model entry (startup.ts) -------------------------------------
+
+  "startup.customModelOption": string;
+  "startup.customModelValue": string;
+  "startup.customModelName": string;
+  "startup.customModelInvalidClaude": string;
+  "startup.customModelInvalidCodex": string;
+  "startup.customModelDuplicate": (existingName: string) => string;
+
+  // ---- model registry (models.ts / index.ts) --------------------------------
+
+  "models.loadFailed": (detail: string) => string;
+
   // ---- resume / run state (index.ts) -------------------------------------
 
   "resume.savedStateFound": string;

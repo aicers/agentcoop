@@ -46,6 +46,10 @@ export interface Config {
   agentA?: SavedAgentConfig;
   agentB?: SavedAgentConfig;
   executionMode?: "auto" | "step";
+  customModels?: {
+    claude?: Array<{ name: string; value: string }>;
+    codex?: Array<{ name: string; value: string }>;
+  };
 }
 
 const DEFAULT_CONFIG: Config = {
@@ -80,6 +84,36 @@ function loadSavedAgentConfig(raw: unknown): SavedAgentConfig | undefined {
       typeof r.contextWindow === "string" ? r.contextWindow : undefined,
     effortLevel: typeof r.effortLevel === "string" ? r.effortLevel : undefined,
   };
+}
+
+function loadModelEntries(
+  raw: unknown,
+): Array<{ name: string; value: string }> {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(
+      (e): e is { name: string; value: string } =>
+        typeof e === "object" &&
+        e !== null &&
+        !Array.isArray(e) &&
+        typeof (e as Record<string, unknown>).name === "string" &&
+        typeof (e as Record<string, unknown>).value === "string",
+    )
+    .map((e) => ({ name: e.name, value: e.value }));
+}
+
+function loadCustomModels(raw: unknown): Config["customModels"] | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return undefined;
+  }
+  const r = raw as Record<string, unknown>;
+  const claude = loadModelEntries(r.claude);
+  const codex = loadModelEntries(r.codex);
+  if (claude.length === 0 && codex.length === 0) return undefined;
+  const result: NonNullable<Config["customModels"]> = {};
+  if (claude.length > 0) result.claude = claude;
+  if (codex.length > 0) result.codex = codex;
+  return result;
 }
 
 function loadNotificationSettings(raw: unknown): NotificationSettings {
@@ -164,6 +198,7 @@ export function loadConfig(): Config {
       raw.executionMode === "auto" || raw.executionMode === "step"
         ? raw.executionMode
         : undefined,
+    customModels: loadCustomModels(raw.customModels),
   };
 }
 

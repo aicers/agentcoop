@@ -281,9 +281,18 @@ Settings are stored in `~/.agentcoop/config.json`:
 | `pipelineSettings.autoResumeAttempts` | Max auto-resumes | `3` |
 | `notifications.bell` | Terminal bell on input wait | `true` |
 | `notifications.desktop` | Desktop notification | `false` |
+| `customModels.claude` | Extra Claude model entries | _(none)_ |
+| `customModels.codex` | Extra Codex/GPT model entries | _(none)_ |
 
 Agent presets (CLI, model, context window, effort level) are also
 saved per agent slot.
+
+**Custom models**: During agent setup, choose "Enter custom model..."
+to register a model not in the default list. You are prompted for a
+model identifier (the `--model` CLI argument) and an optional display
+name. The entry is saved under `customModels` and appears in the
+model picker on subsequent runs. Default models are defined in
+`models.json` at the repository root.
 
 ## Notifications
 

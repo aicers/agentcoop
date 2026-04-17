@@ -553,6 +553,138 @@ describe("loadConfig", () => {
     const config2 = loadConfig();
     expect(config2.notifications.bell).toBe(true);
   });
+
+  // ---- customModels -----------------------------------------------------------
+
+  test("default config has no customModels", () => {
+    const config = loadConfig();
+    expect(config.customModels).toBeUndefined();
+  });
+
+  test("reads valid customModels with both CLIs", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        customModels: {
+          claude: [{ name: "Claude Opus 4.7", value: "claude-opus-4-7" }],
+          codex: [{ name: "GPT-6", value: "gpt-6" }],
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.customModels).toEqual({
+      claude: [{ name: "Claude Opus 4.7", value: "claude-opus-4-7" }],
+      codex: [{ name: "GPT-6", value: "gpt-6" }],
+    });
+  });
+
+  test("reads customModels with only one CLI key", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        customModels: {
+          claude: [{ name: "My Model", value: "my-model" }],
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.customModels?.claude).toEqual([
+      { name: "My Model", value: "my-model" },
+    ]);
+    expect(config.customModels?.codex).toBeUndefined();
+  });
+
+  test("filters out malformed entries in customModels arrays", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        customModels: {
+          claude: [
+            { name: "Valid", value: "valid" },
+            { name: 42, value: "bad-name" },
+            { name: "Missing Value" },
+            "not-an-object",
+            null,
+            { name: "Also Valid", value: "also-valid" },
+          ],
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.customModels?.claude).toEqual([
+      { name: "Valid", value: "valid" },
+      { name: "Also Valid", value: "also-valid" },
+    ]);
+  });
+
+  test("returns undefined customModels when all entries are invalid", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        customModels: {
+          claude: [{ bad: true }, null],
+          codex: ["not-object"],
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.customModels).toBeUndefined();
+  });
+
+  test("returns undefined customModels when value is not an object", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ owners: [], customModels: "invalid" }),
+    );
+    const config = loadConfig();
+    expect(config.customModels).toBeUndefined();
+  });
+
+  test("returns undefined customModels when value is null", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ owners: [], customModels: null }),
+    );
+    const config = loadConfig();
+    expect(config.customModels).toBeUndefined();
+  });
+
+  test("returns undefined customModels when value is an array", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ owners: [], customModels: [1, 2] }),
+    );
+    const config = loadConfig();
+    expect(config.customModels).toBeUndefined();
+  });
+
+  test("returns undefined customModels when CLI key is not an array", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        customModels: { claude: "not-array", codex: 42 },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.customModels).toBeUndefined();
+  });
+
+  test("customModels roundtrips with saveConfig", () => {
+    const config = loadConfig();
+    config.customModels = {
+      claude: [{ name: "Test Model", value: "test-model" }],
+    };
+    saveConfig(config);
+    const reloaded = loadConfig();
+    expect(reloaded.customModels).toEqual({
+      claude: [{ name: "Test Model", value: "test-model" }],
+    });
+  });
 });
 
 describe("saveConfig", () => {

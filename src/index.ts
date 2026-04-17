@@ -26,6 +26,7 @@ import {
   type IssueChange,
   type IssueSyncStatus,
 } from "./issue-sync.js";
+import { initModels, ModelsLoadError, setCustomModels } from "./models.js";
 import type {
   PipelineOptions,
   PipelineResult,
@@ -308,6 +309,9 @@ const bootConfig = loadConfig();
 await initI18n(bootConfig.language);
 
 try {
+  initModels();
+  setCustomModels(bootConfig.customModels);
+
   // Phase 1: select target (owner / repo / issue).
   const target = await selectTarget();
   const { owner, repo, issueNumber } = target;
@@ -382,8 +386,10 @@ try {
     const result = await runStartup(target);
     // Re-initialise i18n if the user changed language during startup.
     await initI18n(result.language);
-    // Reload config to pick up any notification changes made during startup.
+    // Reload config to pick up any notification or custom-model changes
+    // made during startup.
     const freshConfig = loadConfig();
+    setCustomModels(freshConfig.customModels);
     return {
       agentAConfig: result.agentA,
       agentBConfig: result.agentB,
@@ -948,6 +954,10 @@ try {
     error.message.includes("User force closed the prompt")
   ) {
     process.exit(130);
+  }
+  if (error instanceof ModelsLoadError) {
+    console.error(t()["models.loadFailed"](error.message));
+    process.exit(1);
   }
   console.error(error instanceof Error ? error.message : error);
   process.exit(1);
