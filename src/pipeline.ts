@@ -852,6 +852,9 @@ async function runStage(
 /** Result of the `checkMergeable` callback. */
 export type MergeableState = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
 
+/** Result of the `queryPrState` callback. */
+export type PrLifecycleState = "OPEN" | "CLOSED" | "MERGED";
+
 /** Result of the `rebaseOntoMain` callback. */
 export interface RebaseResult {
   /** Whether the rebase succeeded and was force-pushed. */
@@ -869,6 +872,13 @@ export interface DoneStageOptions {
    * Returns the resolved mergeable state (with retries for UNKNOWN).
    */
   checkMergeable: (ctx: StageContext) => Promise<MergeableState>;
+  /**
+   * Query the PR's lifecycle state (OPEN / CLOSED / MERGED).  Used to
+   * short-circuit Stage 9 into the silent cleanup path when the user
+   * merged the PR on GitHub while the pipeline was running.  Fails
+   * open: real implementations return "OPEN" on error.
+   */
+  queryPrState?: (ctx: StageContext) => Promise<PrLifecycleState>;
   /** Prompt the user for conflict/unknown/merge choices. */
   prompt: {
     confirmMerge: (
@@ -925,6 +935,36 @@ export interface DoneStageOptions {
 }
 
 /**
+ * Short-circuit the Done stage when the PR has already been merged
+ * on GitHub.  Runs the same silent cleanup the success path uses
+ * (`stopServices` + `cleanup`) and returns a completed
+ * {@link StageResult}; returns `undefined` when the caller should
+ * proceed with the existing flow.
+ *
+ * Centralising the check here keeps the invariant at the API
+ * boundary so the three Done-stage `checkMergeable` sites cannot
+ * drift out of sync.
+ */
+async function ensurePrStillOpen(
+  ctx: StageContext,
+  options: DoneStageOptions,
+  summary: string,
+): Promise<StageResult | undefined> {
+  if (!options.queryPrState) return undefined;
+  const state = await options.queryPrState(ctx);
+  if (ctx.signal?.aborted) {
+    return { outcome: "completed", message: "" };
+  }
+  if (state !== "MERGED") return undefined;
+  options.stopServices();
+  options.cleanup();
+  return {
+    outcome: "completed",
+    message: `${summary} ${t()["pipeline.prAlreadyMerged"]}`,
+  };
+}
+
+/**
  * Built-in stage-9 handler.  Checks for merge conflicts, offers
  * agent rebase or manual resolution, then asks about merge.
  *
@@ -959,6 +999,10 @@ export function createDoneStageHandler(
       const mergeableLoop = async (): Promise<
         { done: true; result: StageResult } | { done: false }
       > => {
+        const alreadyMerged = await ensurePrStillOpen(ctx, options, summary);
+        if (alreadyMerged) {
+          return { done: true, result: alreadyMerged };
+        }
         const state = await options.checkMergeable(ctx);
         if (ctx.signal?.aborted) {
           return { done: true, result: { outcome: "completed", message: "" } };
@@ -1069,6 +1113,8 @@ export function createDoneStageHandler(
         ctx: StageContext,
         summary: string,
       ): Promise<StageResult | undefined> {
+        const alreadyMerged = await ensurePrStillOpen(ctx, options, summary);
+        if (alreadyMerged) return alreadyMerged;
         // Re-check mergeable after resolution.
         const state = await options.checkMergeable(ctx);
         if (ctx.signal?.aborted) {
@@ -1167,6 +1213,8 @@ export function createDoneStageHandler(
       // "check_conflicts" — inner loop lets UNKNOWN → "recheck" retry
       // checkMergeable without going through confirmMerge again.
       for (;;) {
+        const alreadyMerged = await ensurePrStillOpen(ctx, options, summary);
+        if (alreadyMerged) return alreadyMerged;
         const state = await options.checkMergeable(ctx);
         if (ctx.signal?.aborted) {
           return { outcome: "completed", message: "" };

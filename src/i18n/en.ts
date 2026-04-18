@@ -159,6 +159,7 @@ export const en: Messages = {
     "Agent could not resolve conflicts. Please resolve manually.",
   "pipeline.rebaseAlreadyAttempted":
     "Agent rebase was already attempted. Please resolve conflicts manually.",
+  "pipeline.prAlreadyMerged": "PR was already merged. Cleaning up worktree.",
 
   // ---- TUI user prompts --------------------------------------------------
 
@@ -273,6 +274,7 @@ export const en: Messages = {
     "Cannot perform the squash: the agent session required to continue " +
     "the conversation was lost. Re-run stage 8 or apply the suggestion " +
     "via GitHub's 'Squash and merge' at merge time.",
+  "squash.alreadyMerged": "PR was already merged; skipping squash.",
   "review.approved": (round) => `Review approved at round ${round}.`,
   "review.unresolvedItems": (base, summary) =>
     `${base}\n\nUnresolved items:\n${summary}`,

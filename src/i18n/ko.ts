@@ -192,6 +192,8 @@ export const ko: Messages = {
     "에이전트가 충돌을 해결하지 못했습니다. 수동으로 해결해 주세요.",
   "pipeline.rebaseAlreadyAttempted":
     "에이전트 리베이스가 이미 시도되었습니다. 수동으로 충돌을 해결해 주세요.",
+  "pipeline.prAlreadyMerged":
+    "PR이 이미 병합되었습니다. 워크트리를 정리합니다.",
 
   // ---- TUI user prompts --------------------------------------------------
 
@@ -312,6 +314,7 @@ export const ko: Messages = {
     "스쿼시를 수행할 수 없습니다: 대화를 이어갈 에이전트 세션이 유실되었습니다. " +
     "스테이지 8을 다시 실행하거나, 병합 시 GitHub의 'Squash and merge'로 " +
     "제안을 적용하세요.",
+  "squash.alreadyMerged": "PR이 이미 병합되었습니다. 스쿼시를 건너뜁니다.",
   "review.approved": (round) => `${round}라운드에서 리뷰가 승인되었습니다.`,
   "review.unresolvedItems": (base, summary) =>
     `${base}\n\n미해결 항목:\n${summary}`,
