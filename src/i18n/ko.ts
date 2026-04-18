@@ -146,6 +146,7 @@ export const ko: Messages = {
 
   // ---- stage names -------------------------------------------------------
 
+  "stage.bootstrap": "\uBD80\uD2B8\uC2A4\uD2B8\uB7A9",
   "stage.implement": "\uAD6C\uD604",
   "stage.selfCheck": "\uC140\uD504 \uCCB4\uD06C",
   "stage.createPr": "PR \uC0DD\uC131",
@@ -229,6 +230,8 @@ export const ko: Messages = {
   "statusBar.stage": (number, name) => `${number}\uB2E8\uACC4: ${name}`,
   "statusBar.stageRound": (number, name, round) =>
     `${number}\uB2E8\uACC4: ${name} (\uB77C\uC6B4\uB4DC ${round})`,
+  "statusBar.bootstrapTransition": (fromNum, fromName, toNum, toName) =>
+    `${fromNum}\uB2E8\uACC4: ${fromName} \u2192 ${toNum}\uB2E8\uACC4: ${toName}`,
   "statusBar.last": (outcome) => `\uC774\uC804: ${outcome}`,
   "statusBar.base": (sha) => `\uAE30\uC900: ${sha}`,
   "statusBar.pr": (prNumber) => `PR: #${prNumber}`,

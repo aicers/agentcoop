@@ -1,6 +1,7 @@
 import { Box, type DOMElement, measureElement, Text, useInput } from "ink";
 import { useEffect, useRef, useState } from "react";
 import wrapAnsi from "wrap-ansi";
+import type { BootstrapLogEntry } from "../bootstrap-log.js";
 import { t } from "../i18n/index.js";
 import type {
   PipelineEventEmitter,
@@ -125,6 +126,18 @@ interface AgentPaneProps {
   arrowScrollEnabled?: boolean;
   /** Whether to show the separator line between header and content. */
   showSeparator?: boolean;
+  /**
+   * Buffered Stage 1 (Bootstrap) log entries to replay into this pane.
+   * Both A and B panes receive the same buffer so bootstrap state is
+   * visible symmetrically.
+   */
+  bootstrapLog?: readonly BootstrapLogEntry[];
+  /**
+   * First stage that will actually execute in this run.  Used to
+   * render the closing Stage 1 \u2192 Stage N transition divider as
+   * part of the initial mount when `bootstrapLog` is provided.
+   */
+  firstExecutingStage?: number;
 }
 
 export function AgentPane({
@@ -137,8 +150,13 @@ export function AgentPane({
   isActive = false,
   arrowScrollEnabled = false,
   showSeparator = true,
+  bootstrapLog,
+  firstExecutingStage,
 }: AgentPaneProps) {
-  const { lines, pendingLine } = useAgentLines(emitter, agent);
+  const { lines, pendingLine } = useAgentLines(emitter, agent, {
+    bootstrapLog,
+    firstExecutingStage,
+  });
   const contentRef = useRef<DOMElement>(null);
   const [visibleRows, setVisibleRows] = useState(0);
   const [contentWidth, setContentWidth] = useState(0);
@@ -317,8 +335,26 @@ export function AgentPane({
     (l) => typeof l === "string" || l.kind !== "diagnostic",
   );
 
+  // Suppress the empty-state placeholder while the pane's contents are
+  // exclusively Stage 1 (Bootstrap) rows.  Once any non-bootstrap entry
+  // arrives (e.g. a stage:enter divider for the first real stage), the
+  // normal placeholder logic resumes so Agent B's "idle" hint still
+  // appears at its usual time.
+  const hasOnlyBootstrap =
+    allLines.length > 0 &&
+    allLines.every(
+      (l) =>
+        typeof l !== "string" &&
+        l.kind === "diagnostic" &&
+        l.bootstrap === true,
+    );
+
   let placeholder: string | undefined;
-  if (effectiveOffset === 0 && (!hasOutput || visibleRowEntries.length === 0)) {
+  if (
+    effectiveOffset === 0 &&
+    (!hasOutput || visibleRowEntries.length === 0) &&
+    !hasOnlyBootstrap
+  ) {
     const m = t();
     if (hasOutput && visibleRowEntries.length === 0) {
       placeholder = m["agentPane.tooSmall"];

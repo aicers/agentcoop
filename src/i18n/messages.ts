@@ -112,6 +112,7 @@ export interface Messages {
 
   // ---- stage names -------------------------------------------------------
 
+  "stage.bootstrap": string;
   "stage.implement": string;
   "stage.selfCheck": string;
   "stage.createPr": string;
@@ -184,6 +185,12 @@ export interface Messages {
     number: number,
     name: string,
     round: number,
+  ) => string;
+  "statusBar.bootstrapTransition": (
+    fromNum: number,
+    fromName: string,
+    toNum: number,
+    toName: string,
   ) => string;
   "statusBar.last": (outcome: string) => string;
   "statusBar.base": (sha: string) => string;

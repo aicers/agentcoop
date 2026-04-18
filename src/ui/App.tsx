@@ -1,5 +1,6 @@
 import { Box, useInput, useStdout } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { BootstrapLogEntry } from "../bootstrap-log.js";
 import type { NotificationSettings } from "../config.js";
 import { t } from "../i18n/index.js";
 import { notifyInputWaiting } from "../notify.js";
@@ -266,6 +267,18 @@ export interface AppProps {
   initialReviewCount?: number;
   /** Persisted PR number from RunState; seeds the StatusBar on resume. */
   initialPrNumber?: number;
+  /**
+   * Bootstrap (Stage 1) log entries captured before the ink TUI
+   * mounted.  Replayed into both agent panes on mount so users see a
+   * complete timeline starting from Stage 1.
+   */
+  bootstrapLog?: readonly BootstrapLogEntry[];
+  /**
+   * First stage that will actually execute in this run.  Used to label
+   * the Stage 1 exit divider and the StatusBar's initial transition
+   * text ("Stage 1: Bootstrap \u2192 Stage N: <name>").
+   */
+  firstExecutingStage?: number;
 }
 
 export function App({
@@ -283,6 +296,8 @@ export function App({
   initialSelfCheckCount,
   initialReviewCount,
   initialPrNumber,
+  bootstrapLog,
+  firstExecutingStage,
 }: AppProps) {
   const { height: terminalHeight, width: terminalWidth } =
     useTerminalDimensions();
@@ -487,6 +502,8 @@ export function App({
           isActive={activeAgent === "a"}
           arrowScrollEnabled={!inputRequest}
           showSeparator={flags.showPaneSeparator}
+          bootstrapLog={bootstrapLog}
+          firstExecutingStage={firstExecutingStage}
         />
         <AgentPane
           label={labelB}
@@ -498,6 +515,8 @@ export function App({
           isActive={activeAgent === "b"}
           arrowScrollEnabled={!inputRequest}
           showSeparator={flags.showPaneSeparator}
+          bootstrapLog={bootstrapLog}
+          firstExecutingStage={firstExecutingStage}
         />
       </Box>
 
@@ -525,6 +544,7 @@ export function App({
         startedAt={startedAt}
         initialSelfCheckCount={initialSelfCheckCount}
         initialReviewCount={initialReviewCount}
+        firstExecutingStage={firstExecutingStage}
       />
       <InputArea request={inputRequest} onSubmit={handleSubmit} />
     </Box>

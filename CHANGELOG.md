@@ -8,6 +8,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Stage 1 (Bootstrap) is now surfaced retrospectively in the TUI. At first
+  render, the status bar shows `Stage 1: Bootstrap → Stage N: <name>` briefly
+  (where `N` is 2 on a fresh run or `startFromStage` on resume) before
+  collapsing to the normal single-stage display once the first real
+  `stage:enter` fires. Both agent panes prepend a Stage 1 enter divider, the
+  buffered bootstrap log lines (repository bootstrap, worktree ready, and
+  the conditional uncommitted-preserved / PR-exists-skip messages) as
+  timestamped `[HH:MM:SS] Pipeline: …` rows, and a Stage 1 → Stage N
+  transition divider. Terminal scrollback still receives the bootstrap
+  lines live before the TUI mounts.
 - Status bar now wraps the issue reference on line 1 with an OSC 8 terminal
   hyperlink so supporting terminals (iTerm2, WezTerm, Ghostty, Kitty, modern
   VS Code, Windows Terminal, Alacritty, etc.) render it as a clickable link
