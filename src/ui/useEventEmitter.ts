@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import type { BootstrapLogEntry } from "../bootstrap-log.js";
+import { t } from "../i18n/index.js";
 import type {
   AgentInvokeEvent,
   PipelineCiPollEvent,
@@ -35,6 +37,12 @@ export interface DiagnosticBlock {
   count?: number;
   /** Whether this is a global (cross-pane) diagnostic like stage transitions. */
   global?: boolean;
+  /**
+   * Whether this row was produced from the buffered Stage 1 (Bootstrap)
+   * log replay.  Used to suppress the pane's empty-state placeholder
+   * while the only contents are Stage 1 rows.
+   */
+  bootstrap?: boolean;
 }
 
 /** A line buffer entry: plain text, a prompt block, or a diagnostic line. */
@@ -62,12 +70,57 @@ export const PROMPT_SEPARATOR_CHAR = "\u2504";
  * Also listens for `agent:prompt` events and stores structured
  * `PromptBlock` entries so the pane can render them size-aware.
  */
+export interface UseAgentLinesOptions {
+  /** Maximum number of buffered completed lines and blocks. */
+  maxLines?: number;
+  /**
+   * Buffered Stage 1 (Bootstrap) log entries.  When provided and
+   * non-empty, the hook prepends a Stage 1 enter divider, then each
+   * entry as a non-global bootstrap diagnostic, then pre-arms the
+   * transition so the next `stage:enter` produces a
+   * "Stage 1 \u2192 Stage N" divider naturally.
+   */
+  bootstrapLog?: readonly BootstrapLogEntry[];
+}
+
 export function useAgentLines(
   emitter: PipelineEventEmitter,
   agent: "a" | "b",
-  maxLines = 500,
+  optionsOrMaxLines: UseAgentLinesOptions | number = {},
 ): AgentLinesResult {
-  const [lines, setLines] = useState<LineEntry[]>([]);
+  const options: UseAgentLinesOptions =
+    typeof optionsOrMaxLines === "number"
+      ? { maxLines: optionsOrMaxLines }
+      : optionsOrMaxLines;
+  const maxLines = options.maxLines ?? 500;
+  const bootstrapLog = options.bootstrapLog;
+
+  // Seed initial lines with the Stage 1 (Bootstrap) timeline so the
+  // user sees a complete stage sequence starting from Stage 1.  This
+  // is a one-shot initialisation; later re-renders do not re-seed.
+  const initialLines = (): LineEntry[] => {
+    if (!bootstrapLog || bootstrapLog.length === 0) return [];
+    const m = t();
+    const bootstrapName = m["stage.bootstrap"];
+    const seeded: LineEntry[] = [
+      {
+        kind: "diagnostic",
+        timestamp: bootstrapLog[0].timestamp,
+        message: `Entering Stage 1 (${bootstrapName})`,
+        global: true,
+        bootstrap: true,
+      },
+      ...bootstrapLog.map<DiagnosticBlock>((entry) => ({
+        kind: "diagnostic",
+        timestamp: entry.timestamp,
+        message: entry.message,
+        bootstrap: true,
+      })),
+    ];
+    return seeded;
+  };
+
+  const [lines, setLines] = useState<LineEntry[]>(initialLines);
   const [pendingLine, setPendingLine] = useState("");
   const bufferRef = useRef("");
   const stageNameRef = useRef<string | undefined>(undefined);
@@ -220,11 +273,23 @@ export function useAgentLines(
   // stage:enter / stage:exit → show combined stage transitions in both panes.
   // Buffer exit events and merge with the following enter to produce a single
   // transition line like "Stage 7 (Review) → Stage 8 (Squash) [outcome: completed]".
+  //
+  // When bootstrap (Stage 1) ran before the TUI mounted, pre-arm the
+  // pending exit with a synthetic "Stage 1 exited" so the first real
+  // stage:enter emits a "Stage 1 (Bootstrap) \u2192 Stage N (...)" divider.
   const pendingExitRef = useRef<{
     stageNumber: number;
     stageName: string | undefined;
     outcome: string;
-  } | null>(null);
+  } | null>(
+    bootstrapLog && bootstrapLog.length > 0
+      ? {
+          stageNumber: 1,
+          stageName: t()["stage.bootstrap"],
+          outcome: "completed",
+        }
+      : null,
+  );
 
   useEffect(() => {
     const exitHandler = (ev: StageExitEvent) => {

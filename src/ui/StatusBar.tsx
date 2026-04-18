@@ -2,6 +2,7 @@ import { Box, Text } from "ink";
 import { useEffect, useRef, useState } from "react";
 import stringWidth from "string-width";
 import { t } from "../i18n/index.js";
+import type { Messages } from "../i18n/messages.js";
 import type {
   PipelineEventEmitter,
   ReviewPostedEvent,
@@ -9,6 +10,39 @@ import type {
   StageExitEvent,
   StageNameOverrideEvent,
 } from "../pipeline-events.js";
+
+/**
+ * Map a 1-based stage number to its translated display name.  Returns
+ * `undefined` for unknown stages so callers can fall back to a bare
+ * "Stage N" label.
+ */
+export function stageDisplayName(
+  stageNumber: number,
+  m: Messages,
+): string | undefined {
+  switch (stageNumber) {
+    case 1:
+      return m["stage.bootstrap"];
+    case 2:
+      return m["stage.implement"];
+    case 3:
+      return m["stage.selfCheck"];
+    case 4:
+      return m["stage.createPr"];
+    case 5:
+      return m["stage.ciCheck"];
+    case 6:
+      return m["stage.testPlan"];
+    case 7:
+      return m["stage.review"];
+    case 8:
+      return m["stage.squash"];
+    case 9:
+      return m["stage.done"];
+    default:
+      return undefined;
+  }
+}
 
 /** Stage number for the self-check stage. */
 const SELF_CHECK_STAGE = 3;
@@ -52,6 +86,13 @@ interface StatusBarProps {
   initialSelfCheckCount?: number;
   /** Persisted review count from RunState (initial value on resume). */
   initialReviewCount?: number;
+  /**
+   * First stage that will actually execute in this run (2 on fresh
+   * runs, `startFromStage` on resume).  Drives the "Stage 1: Bootstrap
+   * \u2192 Stage N: <name>" text shown at mount until the first real
+   * `stage:enter` arrives.
+   */
+  firstExecutingStage?: number;
 }
 
 // ---- Elapsed time helpers ----------------------------------------------------
@@ -217,6 +258,7 @@ export function StatusBar({
   startedAt,
   initialSelfCheckCount,
   initialReviewCount,
+  firstExecutingStage,
 }: StatusBarProps) {
   const [stage, setStage] = useState<StageEnterEvent | null>(null);
   const [lastOutcome, setLastOutcome] = useState<string | null>(null);
@@ -263,11 +305,28 @@ export function StatusBar({
       stage.stageNumber === REVIEW_STAGE);
   const round = stage ? stage.iteration + 1 : 0;
 
-  const stageText = stage
-    ? showRound
+  let stageText: string;
+  if (stage) {
+    stageText = showRound
       ? m["statusBar.stageRound"](stage.stageNumber, stage.stageName, round)
-      : m["statusBar.stage"](stage.stageNumber, stage.stageName)
-    : m["statusBar.initialising"];
+      : m["statusBar.stage"](stage.stageNumber, stage.stageName);
+  } else if (firstExecutingStage !== undefined) {
+    // Bootstrap has completed synchronously before the TUI mounted; show
+    // a retrospective "Stage 1: Bootstrap \u2192 Stage N: <name>" label
+    // until the first real stage:enter arrives.
+    const bootstrapName = m["stage.bootstrap"];
+    const nextName =
+      stageDisplayName(firstExecutingStage, m) ??
+      `Stage ${firstExecutingStage}`;
+    stageText = m["statusBar.bootstrapTransition"](
+      1,
+      bootstrapName,
+      firstExecutingStage,
+      nextName,
+    );
+  } else {
+    stageText = m["statusBar.initialising"];
+  }
 
   const outcomeKey = lastOutcome
     ? (`outcome.${lastOutcome}` as keyof typeof m)

@@ -882,6 +882,68 @@ describe("StatusBar", () => {
     expect(lastFrame()).toContain("aicers/agentcoop#49");
   });
 
+  test("shows Stage 1 → Stage 2 bootstrap transition on fresh-run mount", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box width={200}>
+        <StatusBar
+          emitter={emitter}
+          owner="aicers"
+          repo="agentcoop"
+          issueNumber={49}
+          firstExecutingStage={2}
+        />
+      </Box>,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Stage 1: Bootstrap \u2192 Stage 2: Implement");
+    expect(frame).not.toContain("Initialising");
+  });
+
+  test("shows Stage 1 → Stage 5 bootstrap transition on resume-into-CI", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box width={200}>
+        <StatusBar
+          emitter={emitter}
+          owner="aicers"
+          repo="agentcoop"
+          issueNumber={49}
+          firstExecutingStage={5}
+        />
+      </Box>,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Stage 1: Bootstrap \u2192 Stage 5: CI check");
+  });
+
+  test("bootstrap transition text collapses when first real stage:enter fires", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box width={200}>
+        <StatusBar
+          emitter={emitter}
+          owner="aicers"
+          repo="agentcoop"
+          issueNumber={49}
+          firstExecutingStage={2}
+        />
+      </Box>,
+    );
+    emitter.emit("stage:enter", {
+      stageNumber: 2,
+      stageName: "Implement",
+      iteration: 0,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Stage 2: Implement");
+    expect(frame).not.toContain("Bootstrap \u2192");
+  });
+
   test("updates stage display on stage:enter", async () => {
     const emitter = new PipelineEventEmitter();
     const { lastFrame } = render(
@@ -3330,12 +3392,12 @@ describe("renderDiagnosticRow", () => {
     const row = renderDiagnosticRow({
       kind: "diagnostic",
       timestamp: "00:00:00",
-      message: "Entering Stage 1 (Implement)",
+      message: "Entering Stage 2 (Implement)",
       count: 2,
       global: true,
     });
     expect(row).toBe(
-      "\u2500\u2500 Entering Stage 1 (Implement) x2 \u2500\u2500",
+      "\u2500\u2500 Entering Stage 2 (Implement) x2 \u2500\u2500",
     );
   });
 });
@@ -3384,6 +3446,101 @@ describe("AgentPane diagnostic rendering", () => {
     expect(frame).toContain("waiting for output");
     expect(frame).toContain("\u2500\u2500");
     expect(frame).toContain("Implement");
+  });
+
+  test("prepends Stage 1 enter divider and bootstrap log rows on mount", async () => {
+    const emitter = new PipelineEventEmitter();
+    const bootstrapLog = [
+      { timestamp: "10:00:00", message: "Bootstrapping repository..." },
+      {
+        timestamp: "10:00:01",
+        message: "Worktree ready at /tmp/wt (branch: alice/issue-42)",
+      },
+    ];
+    const { lastFrame } = render(
+      <Box height={20} width={120}>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          bootstrapLog={bootstrapLog}
+        />
+      </Box>,
+    );
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Entering Stage 1 (Bootstrap)");
+    expect(frame).toContain("[10:00:00] Pipeline: Bootstrapping repository...");
+    expect(frame).toContain(
+      "[10:00:01] Pipeline: Worktree ready at /tmp/wt (branch: alice/issue-42)",
+    );
+    // No placeholder should appear when Stage 1 rows are the only contents.
+    expect(frame).not.toContain("waiting for output");
+  });
+
+  test("bootstrap replay pre-arms the Stage 1 transition divider", async () => {
+    const emitter = new PipelineEventEmitter();
+    const bootstrapLog = [
+      { timestamp: "09:00:00", message: "Bootstrapping repository..." },
+    ];
+    const { lastFrame } = render(
+      <Box height={20} width={120}>
+        <AgentPane
+          label="Agent A"
+          agent="a"
+          emitter={emitter}
+          color="blue"
+          bootstrapLog={bootstrapLog}
+        />
+      </Box>,
+    );
+    // First real stage:enter should produce a Stage 1 → Stage N transition.
+    emitter.emit("stage:enter", {
+      stageNumber: 5,
+      stageName: "CI check",
+      iteration: 0,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain(
+      "Stage 1 (Bootstrap) \u2192 Stage 5 (CI check) [outcome: completed]",
+    );
+    // After the transition arrives, placeholder suppression is lifted —
+    // Agent A with no output now shows the "waiting" placeholder.
+    expect(frame).toContain("waiting for output");
+  });
+
+  test("Agent B idle placeholder returns after Stage 1 rows are not the only contents", async () => {
+    const emitter = new PipelineEventEmitter();
+    const bootstrapLog = [
+      { timestamp: "09:00:00", message: "Bootstrapping repository..." },
+    ];
+    const { lastFrame } = render(
+      <Box height={20} width={120}>
+        <AgentPane
+          label="Agent B"
+          agent="b"
+          emitter={emitter}
+          color="green"
+          bootstrapLog={bootstrapLog}
+        />
+      </Box>,
+    );
+    // On mount: only Stage 1 rows, so no placeholder.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastFrame() ?? "").not.toContain("idle");
+
+    // After stage 2 enters, Agent B should show the idle placeholder.
+    emitter.emit("stage:enter", {
+      stageNumber: 2,
+      stageName: "Implement",
+      iteration: 0,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastFrame() ?? "").toContain("idle");
   });
 
   test("diagnostic after partial chunk preserves chronological order", async () => {

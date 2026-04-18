@@ -3,6 +3,7 @@
 import { confirm, select } from "@inquirer/prompts";
 
 import type { AgentAdapter, AgentStream } from "./agent.js";
+import { type BootstrapLog, createBootstrapLog } from "./bootstrap-log.js";
 import { pollCiAndFix } from "./ci-poll.js";
 import { createClaudeAdapter } from "./claude-adapter.js";
 import {
@@ -258,6 +259,7 @@ async function runCancellationCleanup(opts: {
 function stageNames(): Record<number, string> {
   const m = t();
   return {
+    1: m["stage.bootstrap"],
     2: m["stage.implement"],
     3: m["stage.selfCheck"],
     4: m["stage.createPr"],
@@ -429,9 +431,14 @@ try {
 
   const m = t();
 
+  // Buffer bootstrap (Stage 1) log lines so they can be replayed into
+  // the ink TUI panes once the TUI mounts.  The buffer also prints each
+  // line to stdout/stderr live so terminal scrollback is unaffected.
+  const bootstrapLog: BootstrapLog = createBootstrapLog();
+
   // Bootstrap the repository and create a worktree.
   console.log();
-  console.log(m["boot.bootstrapping"]);
+  bootstrapLog.log(m["boot.bootstrapping"]);
   bootstrapRepo(owner, repo);
 
   const defaultBranch = detectDefaultBranch(owner, repo);
@@ -444,10 +451,10 @@ try {
     branch: `${username}/issue-${issueNumber}`,
     conflictChoice: startFresh ? "clean" : "reuse",
   });
-  console.log(m["boot.worktreeReady"](wt.path, wt.branch));
+  bootstrapLog.log(m["boot.worktreeReady"](wt.path, wt.branch));
 
   if (wt.hadUncommittedChanges) {
-    console.warn(m["boot.uncommittedPreserved"]);
+    bootstrapLog.warn(m["boot.uncommittedPreserved"]);
   }
 
   // Skip stage 4 (PR creation) on resume when the PR already exists.
@@ -456,7 +463,7 @@ try {
   // completion check finished.
   let startFromStage = rawStartFromStage;
   if (startFromStage === 4 && findPrNumber(owner, repo, wt.branch)) {
-    console.log(m["boot.prExistsSkip"]);
+    bootstrapLog.log(m["boot.prExistsSkip"]);
     startFromStage = 5;
   }
 
@@ -927,6 +934,8 @@ try {
       initialSelfCheckCount: runState.selfCheckCount,
       initialReviewCount: runState.reviewCount,
       initialPrNumber: runState.prNumber,
+      bootstrapLog: [...bootstrapLog.entries],
+      firstExecutingStage: startFromStage ?? 2,
     });
   });
 

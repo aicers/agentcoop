@@ -114,6 +114,7 @@ export const en: Messages = {
 
   // ---- stage names -------------------------------------------------------
 
+  "stage.bootstrap": "Bootstrap",
   "stage.implement": "Implement",
   "stage.selfCheck": "Self-check",
   "stage.createPr": "Create PR",
@@ -194,6 +195,8 @@ export const en: Messages = {
   "statusBar.stage": (number, name) => `Stage ${number}: ${name}`,
   "statusBar.stageRound": (number, name, round) =>
     `Stage ${number}: ${name} (round ${round})`,
+  "statusBar.bootstrapTransition": (fromNum, fromName, toNum, toName) =>
+    `Stage ${fromNum}: ${fromName} \u2192 Stage ${toNum}: ${toName}`,
   "statusBar.last": (outcome) => `Last: ${outcome}`,
   "statusBar.base": (sha) => `Base: ${sha}`,
   "statusBar.pr": (prNumber) => `PR: #${prNumber}`,

@@ -18,6 +18,7 @@ the [README](../README.md).
   - [Additional feedback injection](#additional-feedback-injection)
   - [Ambiguous response clarification](#ambiguous-response-clarification)
 - [Stage reference](#stage-reference)
+  - [Stage 1: Bootstrap](#stage-1-bootstrap)
   - [Stage 2: Implement](#stage-2-implement)
   - [Stage 3: Self-check loop](#stage-3-self-check-loop)
   - [Stage 4: Create PR](#stage-4-create-pr)
@@ -31,12 +32,15 @@ the [README](../README.md).
 ## Pipeline overview
 
 ```text
-Implement -> Self-check -> Create PR -> CI check
-   (A)       (A, loop)       (A)       (A, loop)
+Bootstrap -> Implement -> Self-check -> Create PR -> CI check
+  (orch)       (A)        (A, loop)       (A)       (A, loop)
 
   -> Test plan -> Review -> Squash -> Done
      (A, loop)  (B<->A, loop) (A)    (user)
 ```
+
+Stage 1 (Bootstrap) is orchestrator-managed and runs before the TUI
+mounts; see [Stage 1: Bootstrap](#stage-1-bootstrap) below.
 
 Agent A is the author (implements the issue). Agent B is the
 reviewer. The orchestrator manages transitions, CI polling, and
@@ -234,6 +238,35 @@ Do not include any other commentary — just the keyword.
 ```
 
 ## Stage reference
+
+### Stage 1: Bootstrap
+
+**Agent:** none (orchestrator-managed)\
+**Purpose:** Prepare the repository, default branch, and worktree so
+later stages can run against a known-good local checkout.
+
+Stage 1 runs synchronously before the ink TUI mounts.  It performs:
+
+- **Repository bootstrap:** If the repository is not cloned under
+  `cloneBaseDir/{owner}/{repo}`, clone it. If already cloned, fetch
+  the latest remote state. If a worktree for the same branch already
+  exists, prompt the user to reuse, clean up, or halt.
+- **Default branch detection:** Query via
+  `gh repo view {owner}/{repo} --json defaultBranchRef` instead of
+  assuming `main`.
+- **Worktree creation:** Create a git worktree from the latest remote
+  default branch at
+  `~/.agentcoop/worktrees/{owner}/{repo}/issue-{number}`, outside the
+  repository to avoid pollution.
+- **Resume pre-flight:** On resume, if `startFromStage === 4` and a PR
+  already exists, promote the starting stage to 5 (CI check) so the
+  side-effectful `gh pr create` is not replayed.
+
+Because Stage 1 completes before the TUI mounts, it is surfaced
+retrospectively.  The `StatusBar` shows `Stage 1: Bootstrap
+\u2192 Stage N: <name>` briefly on first render, and both agent panes
+prepend a Stage 1 enter divider, the buffered bootstrap log lines, and
+a Stage 1 \u2192 Stage N transition divider before live output begins.
 
 ### Stage 2: Implement
 
@@ -1561,19 +1594,11 @@ Do not include any other commentary — just the keyword.
 ## Orchestrator-managed operations
 
 The following operations are handled directly by the orchestrator,
-not delegated to agents:
+not delegated to agents.  Repository cloning, default-branch
+detection, and worktree creation are the three Stage 1 (Bootstrap)
+operations — see [Stage 1: Bootstrap](#stage-1-bootstrap) above for
+details.
 
-- **Repository bootstrap:** If the repository is not cloned under
-  `cloneBaseDir/{owner}/{repo}`, clone it. If already cloned,
-  fetch the latest remote state. If a worktree for the same branch
-  already exists, prompt the user to reuse, clean up, or halt.
-- **Default branch detection:** Query via
-  `gh repo view {owner}/{repo} --json defaultBranchRef` instead
-  of assuming `main`.
-- **Worktree creation:** Create a git worktree from the latest
-  remote default branch at
-  `~/.agentcoop/worktrees/{owner}/{repo}/issue-{number}`, outside
-  the repository to avoid pollution.
 - **PR number extraction:** After Agent A creates a PR, extract
   the number via `gh pr list --head {branch} --json number`.
 - **CI status polling:** Check CI status and collect failure
