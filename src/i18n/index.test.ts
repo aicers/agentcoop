@@ -78,6 +78,7 @@ describe("catalogs are complete", () => {
       "statusBar.stage": [1, "Implement"],
       "statusBar.stageRound": [3, "Self-check", 1],
       "statusBar.last": ["ok"],
+      "statusBar.pr": [42],
       "statusBar.completed": [2, 3],
       "stageError.maxTurns": [" (stage 1)"],
       "stageError.inactivityTimeout": [" (stage 2)"],

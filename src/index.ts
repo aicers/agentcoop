@@ -868,6 +868,9 @@ try {
       // Update PR number when entering stage 5+ (PR should exist by then).
       if (stageNumber >= 5 && runState.prNumber === undefined) {
         runState.prNumber = findPrNumber(owner, repo, wt.branch);
+        if (runState.prNumber !== undefined) {
+          emitter.emit("pr:resolved", { prNumber: runState.prNumber });
+        }
       }
       // Track review round.
       if (stageNumber === 7) {
@@ -923,6 +926,7 @@ try {
       notifications,
       initialSelfCheckCount: runState.selfCheckCount,
       initialReviewCount: runState.reviewCount,
+      initialPrNumber: runState.prNumber,
     });
   });
 

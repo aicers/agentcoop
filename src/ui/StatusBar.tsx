@@ -15,6 +15,18 @@ const SELF_CHECK_STAGE = 3;
 /** Stage number for the review stage. */
 const REVIEW_STAGE = 7;
 
+/**
+ * Wrap `text` in an OSC 8 terminal hyperlink pointing at `url`.
+ * Terminals that support OSC 8 render the text as a clickable link;
+ * others render the text unchanged. `string-width` strips ANSI
+ * escapes before measuring, so width calculations are unaffected.
+ */
+export function wrapTerminalHyperlink(url: string, text: string): string {
+  const OSC = "\x1b]8;;";
+  const BEL = "\x07";
+  return `${OSC}${url}${BEL}${text}${OSC}${BEL}`;
+}
+
 interface StatusBarProps {
   emitter: PipelineEventEmitter;
   owner: string;
@@ -22,6 +34,8 @@ interface StatusBarProps {
   issueNumber: number;
   /** Title of the GitHub issue, shown after the issue reference. */
   issueTitle?: string;
+  /** PR number associated with the run, once known. */
+  prNumber?: number;
   /** Full SHA of the base commit; displayed abbreviated in the bar. */
   baseSha?: string;
   /** Current pane layout direction. */
@@ -194,6 +208,7 @@ export function StatusBar({
   repo,
   issueNumber,
   issueTitle,
+  prNumber,
   baseSha,
   layout,
   showKeyHints = true,
@@ -302,10 +317,12 @@ export function StatusBar({
     }
   }
 
-  const issueLine =
+  const issueLineTruncated =
     issueBudget !== undefined
       ? truncateWithEllipsis(issueLineText, issueBudget)
       : issueLineText;
+  const issueUrl = `https://github.com/${owner}/${repo}/issues/${issueNumber}`;
+  const issueLine = wrapTerminalHyperlink(issueUrl, issueLineTruncated);
 
   // Line 2: Pipeline status segments with drop priorities.
   // Priority 0 = required (never dropped); higher = dropped sooner.
@@ -313,6 +330,13 @@ export function StatusBar({
   const pipelineSegments: InfoSegment[] = [];
   if (baseText) {
     pipelineSegments.push({ text: baseText, dropPriority: 1 });
+  }
+  if (prNumber !== undefined) {
+    const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
+    pipelineSegments.push({
+      text: wrapTerminalHyperlink(prUrl, m["statusBar.pr"](prNumber)),
+      dropPriority: 1,
+    });
   }
   pipelineSegments.push({ text: stageText, bold: true, dropPriority: 0 });
   if (outcomeText) {

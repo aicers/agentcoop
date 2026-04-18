@@ -196,6 +196,7 @@ export const en: Messages = {
     `Stage ${number}: ${name} (round ${round})`,
   "statusBar.last": (outcome) => `Last: ${outcome}`,
   "statusBar.base": (sha) => `Base: ${sha}`,
+  "statusBar.pr": (prNumber) => `PR: #${prNumber}`,
   "statusBar.completed": (selfCheckCount, reviewCount) =>
     `Completed: self-check \u00d7${selfCheckCount}, review \u00d7${reviewCount}`,
   "statusBar.layout": (mode) => `Layout: ${mode}`,

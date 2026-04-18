@@ -78,6 +78,46 @@ describe("App dispatch notifications", () => {
     );
   });
 
+  test("renders PR segment after pr:resolved event", async () => {
+    initI18n("en");
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <App
+        emitter={emitter}
+        pipelineOptions={minimalOptions}
+        onExit={vi.fn()}
+      />,
+    );
+
+    // Before the event, no PR segment is rendered.
+    await vi.waitFor(() => {
+      expect(lastFrame() ?? "").not.toContain("PR: #");
+    });
+
+    emitter.emit("pr:resolved", { prNumber: 523 });
+
+    await vi.waitFor(() => {
+      expect(lastFrame() ?? "").toContain("PR: #523");
+    });
+  });
+
+  test("seeds PR segment from initialPrNumber on resume", async () => {
+    initI18n("en");
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <App
+        emitter={emitter}
+        pipelineOptions={minimalOptions}
+        onExit={vi.fn()}
+        initialPrNumber={42}
+      />,
+    );
+
+    await vi.waitFor(() => {
+      expect(lastFrame() ?? "").toContain("PR: #42");
+    });
+  });
+
   test("does not call notifyInputWaiting when notifications prop is undefined", async () => {
     initI18n("en");
     const emitter = new PipelineEventEmitter();

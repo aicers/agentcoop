@@ -231,6 +231,7 @@ export const ko: Messages = {
     `${number}\uB2E8\uACC4: ${name} (\uB77C\uC6B4\uB4DC ${round})`,
   "statusBar.last": (outcome) => `\uC774\uC804: ${outcome}`,
   "statusBar.base": (sha) => `\uAE30\uC900: ${sha}`,
+  "statusBar.pr": (prNumber) => `PR: #${prNumber}`,
   "statusBar.completed": (selfCheckCount, reviewCount) =>
     `\uC644\uB8CC: \uC140\uD504 \uCCB4\uD06C \u00d7${selfCheckCount}, \uB9AC\uBDF0 \u00d7${reviewCount}`,
   "statusBar.layout": (mode) => `\uB808\uC774\uC544\uC6C3: ${mode}`,

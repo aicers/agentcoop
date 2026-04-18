@@ -8,6 +8,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Status bar now wraps the issue reference on line 1 with an OSC 8 terminal
+  hyperlink so supporting terminals (iTerm2, WezTerm, Ghostty, Kitty, modern
+  VS Code, Windows Terminal, Alacritty, etc.) render it as a clickable link
+  pointing at the GitHub issue page. Older terminals render the text
+  unchanged.
+- Status bar line 2 now includes a `PR: #{n}` segment (between `Base:` and
+  `Stage:`) once the pull-request number is known, also wrapped with an
+  OSC 8 hyperlink pointing at the PR page.
 - Stage 8 (Squash) now offers a single-commit suggestion path: when the agent
   judges that one commit is appropriate, it writes the suggested title and
   body into a marker-delimited block in the PR body instead of force-pushing.

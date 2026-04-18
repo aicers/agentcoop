@@ -187,6 +187,7 @@ export interface Messages {
   ) => string;
   "statusBar.last": (outcome: string) => string;
   "statusBar.base": (sha: string) => string;
+  "statusBar.pr": (prNumber: number) => string;
   "statusBar.completed": (
     selfCheckCount: number,
     reviewCount: number,
