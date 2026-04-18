@@ -1957,6 +1957,103 @@ describe("createDoneStageHandler", () => {
     expect(opts.onNotMerged).toHaveBeenCalledOnce();
     expect(result.outcome).toBe("completed");
   });
+
+  // ---- PR already merged short-circuit -----------------------------------
+
+  test("PR already merged at mergeableLoop entry → silent cleanup, no checkMergeable or prompts", async () => {
+    const queryPrState = vi.fn().mockResolvedValue("MERGED");
+    const opts = makeDoneOpts({ queryPrState });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    const result = await stage.handler(ctx);
+    expect(queryPrState).toHaveBeenCalledOnce();
+    expect(opts.checkMergeable).not.toHaveBeenCalled();
+    expect(opts.prompt.confirmMerge).not.toHaveBeenCalled();
+    expect(opts.onNotMerged).not.toHaveBeenCalled();
+    expect(opts.stopServices).toHaveBeenCalledOnce();
+    expect(opts.cleanup).toHaveBeenCalledOnce();
+    expect(result.outcome).toBe("completed");
+    expect(result.message).toContain("already merged");
+  });
+
+  test("PR merges during conflict resolution (afterResolution) → silent cleanup, no second checkMergeable", async () => {
+    // First guard (mergeableLoop): OPEN → proceed to checkMergeable (CONFLICTING).
+    // Handle conflict via manual resolve.  Second guard (afterResolution):
+    // MERGED → short-circuit before the post-resolution checkMergeable.
+    const queryPrState = vi
+      .fn()
+      .mockResolvedValueOnce("OPEN")
+      .mockResolvedValueOnce("MERGED");
+    const checkMergeable = vi.fn().mockResolvedValueOnce("CONFLICTING");
+    const waitForManualResolve = vi.fn().mockResolvedValue(undefined);
+    const opts = makeDoneOpts({
+      queryPrState,
+      checkMergeable,
+      prompt: {
+        handleConflict: vi.fn().mockResolvedValue("manual"),
+        waitForManualResolve,
+      },
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    const result = await stage.handler(ctx);
+    expect(queryPrState).toHaveBeenCalledTimes(2);
+    // checkMergeable called exactly once: the initial CONFLICTING check.
+    // The post-resolution re-check must be skipped by the guard.
+    expect(checkMergeable).toHaveBeenCalledOnce();
+    expect(opts.prompt.confirmMerge).not.toHaveBeenCalled();
+    expect(opts.onNotMerged).not.toHaveBeenCalled();
+    expect(opts.stopServices).toHaveBeenCalledOnce();
+    expect(opts.cleanup).toHaveBeenCalledOnce();
+    expect(result.outcome).toBe("completed");
+    expect(result.message).toContain("already merged");
+  });
+
+  test("askMerge check_conflicts: PR merged on GitHub → silent cleanup, no inner checkMergeable", async () => {
+    // First guard in mergeableLoop returns OPEN; initial checkMergeable is
+    // MERGEABLE; user clicks "check_conflicts".  Inside the inner loop,
+    // the guard returns MERGED and short-circuits before checkMergeable
+    // runs a second time.
+    const queryPrState = vi
+      .fn()
+      .mockResolvedValueOnce("OPEN")
+      .mockResolvedValueOnce("MERGED");
+    const checkMergeable = vi.fn().mockResolvedValueOnce("MERGEABLE");
+    const confirmMerge = vi.fn().mockResolvedValue("check_conflicts");
+    const opts = makeDoneOpts({
+      queryPrState,
+      checkMergeable,
+      prompt: { confirmMerge },
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    const result = await stage.handler(ctx);
+    expect(queryPrState).toHaveBeenCalledTimes(2);
+    // checkMergeable runs only for the outer mergeableLoop; the inner
+    // check_conflicts loop must not re-query after the guard fires.
+    expect(checkMergeable).toHaveBeenCalledOnce();
+    expect(confirmMerge).toHaveBeenCalledOnce();
+    expect(opts.onNotMerged).not.toHaveBeenCalled();
+    expect(opts.stopServices).toHaveBeenCalledOnce();
+    expect(opts.cleanup).toHaveBeenCalledOnce();
+    expect(result.outcome).toBe("completed");
+    expect(result.message).toContain("already merged");
+  });
 });
 
 // ---------------------------------------------------------------------------

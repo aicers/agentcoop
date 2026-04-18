@@ -5,8 +5,13 @@ vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
 }));
 
-const { checkMergeable, findPrNumber, getPrBody, queryMergeableState } =
-  await import("./pr.js");
+const {
+  checkMergeable,
+  findPrNumber,
+  getPrBody,
+  queryMergeableState,
+  queryPrState,
+} = await import("./pr.js");
 
 const mockExecFileSync = vi.mocked(execFileSync);
 
@@ -165,6 +170,61 @@ describe("queryMergeableState", () => {
         "feature-branch",
         "--json",
         "mergeable",
+      ],
+      { encoding: "utf-8" },
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// queryPrState
+// ---------------------------------------------------------------------------
+describe("queryPrState", () => {
+  test("returns MERGED when gh reports merged", () => {
+    mockExecFileSync.mockReturnValue(JSON.stringify({ state: "MERGED" }));
+    expect(queryPrState("org", "repo", "branch")).toBe("MERGED");
+  });
+
+  test("returns CLOSED when gh reports closed", () => {
+    mockExecFileSync.mockReturnValue(JSON.stringify({ state: "CLOSED" }));
+    expect(queryPrState("org", "repo", "branch")).toBe("CLOSED");
+  });
+
+  test("returns OPEN when gh reports open", () => {
+    mockExecFileSync.mockReturnValue(JSON.stringify({ state: "OPEN" }));
+    expect(queryPrState("org", "repo", "branch")).toBe("OPEN");
+  });
+
+  test("fails open (OPEN) on unexpected state value", () => {
+    mockExecFileSync.mockReturnValue(JSON.stringify({ state: "WEIRD" }));
+    expect(queryPrState("org", "repo", "branch")).toBe("OPEN");
+  });
+
+  test("fails open (OPEN) when gh command throws", () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error("gh: not authenticated");
+    });
+    expect(queryPrState("org", "repo", "branch")).toBe("OPEN");
+  });
+
+  test("fails open (OPEN) on malformed JSON output", () => {
+    mockExecFileSync.mockReturnValue("not json");
+    expect(queryPrState("org", "repo", "branch")).toBe("OPEN");
+  });
+
+  test("calls gh with correct arguments", () => {
+    mockExecFileSync.mockReturnValue(JSON.stringify({ state: "OPEN" }));
+    queryPrState("aicers", "agentcoop", "feature-branch");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "gh",
+      [
+        "pr",
+        "view",
+        "--repo",
+        "aicers/agentcoop",
+        "feature-branch",
+        "--json",
+        "state",
       ],
       { encoding: "utf-8" },
     );

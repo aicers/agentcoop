@@ -96,6 +96,7 @@ function makeOpts(
     emptyRunsGracePeriodMs: 0,
     countBranchCommits: vi.fn().mockReturnValue(2),
     getPrBody: vi.fn().mockReturnValue(""),
+    queryPrState: vi.fn().mockReturnValue("OPEN"),
     chooseSquashApplyMode: vi.fn().mockResolvedValue("agent"),
     ...overrides,
   };
@@ -832,6 +833,99 @@ describe("createSquashStageHandler", () => {
     expect(result.outcome).toBe("blocked");
   });
 
+  // -- PR already merged short-circuit ---------------------------------------
+
+  test("SUGGESTED_SINGLE + PR already merged before user prompt → alreadyMerged, no chooseSquashApplyMode call", async () => {
+    const prBodyWithMarker = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** T\n\n**Body:**\nB\n${SQUASH_SUGGESTION_END_MARKER}`;
+    const agent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-squash", responseText: "Plan." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "SUGGESTED_SINGLE" })),
+        ),
+    };
+    const chooseSquashApplyMode = vi.fn().mockResolvedValue("agent");
+    const getPrBody = vi.fn().mockReturnValue(prBodyWithMarker);
+    const queryPrState = vi.fn().mockReturnValue("MERGED");
+    const onSquashSubStep = vi.fn();
+    const getCiStatus = vi.fn();
+    const opts = makeOpts({
+      agent,
+      chooseSquashApplyMode,
+      getPrBody,
+      queryPrState,
+      onSquashSubStep,
+      getCiStatus,
+    });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(result.message).toContain("already merged");
+    expect(chooseSquashApplyMode).not.toHaveBeenCalled();
+    expect(getCiStatus).not.toHaveBeenCalled();
+    expect(queryPrState).toHaveBeenCalledWith("org", "repo", "issue-42");
+    // Sub-step must be cleared so a resume does not re-enter the dead choice.
+    expect(onSquashSubStep).toHaveBeenLastCalledWith(undefined);
+  });
+
+  test("user picks agent, but PR merges between query and follow-up → alreadyMerged, no sendFollowUp call", async () => {
+    const prBodyWithMarker = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** T\n\n**Body:**\nB\n${SQUASH_SUGGESTION_END_MARKER}`;
+    const agent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-squash", responseText: "Plan." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "SUGGESTED_SINGLE" })),
+        ),
+    };
+    // First guardIfPrMerged call (before askUserAndApply) returns OPEN so
+    // the user prompt runs; the second guard call (inside askUserAndApply
+    // before the "agent" branch) returns MERGED.
+    const queryPrState = vi
+      .fn()
+      .mockReturnValueOnce("OPEN")
+      .mockReturnValueOnce("MERGED");
+    const chooseSquashApplyMode = vi.fn().mockResolvedValue("agent");
+    const getPrBody = vi.fn().mockReturnValue(prBodyWithMarker);
+    const onSquashSubStep = vi.fn();
+    const getCiStatus = vi.fn();
+    const opts = makeOpts({
+      agent,
+      chooseSquashApplyMode,
+      getPrBody,
+      queryPrState,
+      onSquashSubStep,
+      getCiStatus,
+    });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(result.message).toContain("already merged");
+    expect(chooseSquashApplyMode).toHaveBeenCalledTimes(1);
+    // Only the verdict resume happened — no follow-up squash resume.
+    expect(agent.resume).toHaveBeenCalledTimes(1);
+    expect(getCiStatus).not.toHaveBeenCalled();
+    const states = onSquashSubStep.mock.calls.map((c) => c[0]);
+    // Never transitioned to "squashing".
+    expect(states).not.toContain("squashing");
+    expect(states[states.length - 1]).toBe(undefined);
+  });
+
   // -- Post-clarification fallback ordering ----------------------------------
 
   describe("post-clarification fallback ordering", () => {
@@ -1057,6 +1151,65 @@ describe("createSquashStageHandler", () => {
       await stage.handler(BASE_CTX);
       // Last-resort fallback: planning prompt is sent via invoke.
       expect(opts.agent.invoke).toHaveBeenCalled();
+    });
+
+    // Regression for issue #260 reviewer round 1: resuming from
+    // "squashing" must re-check PR lifecycle, otherwise a PR merged
+    // between the interruption and the resume sends a wasted
+    // follow-up or burns a CI poll cycle on a closed branch.
+    test("squashing with PR already merged on resume → alreadyMerged, no follow-up, no CI poll", async () => {
+      const resume = vi.fn();
+      const invoke = vi.fn();
+      const agent: AgentAdapter = { invoke, resume };
+      const queryPrState = vi.fn().mockReturnValue("MERGED");
+      const onSquashSubStep = vi.fn();
+      const getCiStatus = vi.fn();
+      const opts = makeOpts({
+        agent,
+        savedSquashSubStep: "squashing",
+        countBranchCommits: vi.fn().mockReturnValue(3),
+        queryPrState,
+        onSquashSubStep,
+        getCiStatus,
+      });
+      const stage = createSquashStageHandler(opts);
+      const result = await stage.handler({
+        ...BASE_CTX,
+        savedAgentASessionId: "sess-squash",
+      });
+
+      expect(result.outcome).toBe("completed");
+      expect(result.message).toContain("already merged");
+      expect(invoke).not.toHaveBeenCalled();
+      expect(resume).not.toHaveBeenCalled();
+      expect(getCiStatus).not.toHaveBeenCalled();
+      expect(queryPrState).toHaveBeenCalledWith("org", "repo", "issue-42");
+      // Sub-step cleared so a later resume does not re-enter the dead state.
+      expect(onSquashSubStep).toHaveBeenLastCalledWith(undefined);
+    });
+
+    // Companion to the test above: the PR-merged guard fires even
+    // when the branch has already collapsed to one commit (the
+    // "jump straight to CI poll" path), so the wasted CI poll on a
+    // closed branch is also avoided.
+    test("squashing with collapsed branch but PR already merged → alreadyMerged, no CI poll", async () => {
+      const queryPrState = vi.fn().mockReturnValue("MERGED");
+      const getCiStatus = vi.fn();
+      const onSquashSubStep = vi.fn();
+      const opts = makeOpts({
+        savedSquashSubStep: "squashing",
+        countBranchCommits: vi.fn().mockReturnValue(1),
+        queryPrState,
+        getCiStatus,
+        onSquashSubStep,
+      });
+      const stage = createSquashStageHandler(opts);
+      const result = await stage.handler(BASE_CTX);
+
+      expect(result.outcome).toBe("completed");
+      expect(result.message).toContain("already merged");
+      expect(getCiStatus).not.toHaveBeenCalled();
+      expect(onSquashSubStep).toHaveBeenLastCalledWith(undefined);
     });
   });
 

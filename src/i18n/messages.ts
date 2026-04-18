@@ -149,6 +149,7 @@ export interface Messages {
   "pipeline.noConflicts": string;
   "pipeline.rebaseFailed": string;
   "pipeline.rebaseAlreadyAttempted": string;
+  "pipeline.prAlreadyMerged": string;
 
   // ---- TUI user prompts (TuiUserPrompt.ts) -------------------------------
 
@@ -258,6 +259,7 @@ export interface Messages {
   "squash.singleChoiceAgent": string;
   "squash.singleChoiceGithub": string;
   "squash.agentChoiceMissingSession": string;
+  "squash.alreadyMerged": string;
   "review.approved": (round: number) => string;
   "review.unresolvedItems": (base: string, summary: string) => string;
   "review.fixesApplied": (round: number) => string;

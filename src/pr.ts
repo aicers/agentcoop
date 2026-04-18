@@ -147,6 +147,44 @@ export function queryMergeableState(
   }
 }
 
+// ---- PR lifecycle state ------------------------------------------------------
+
+/**
+ * Possible values for the `state` field returned by the GitHub GraphQL
+ * API via `gh pr view --json state`.
+ */
+export type PrLifecycleState = "OPEN" | "CLOSED" | "MERGED";
+
+/**
+ * Query the lifecycle state for the PR associated with `branch`.
+ *
+ * Shells out to `gh pr view --json state`.  Fails open: on `gh`
+ * failure or malformed output returns `"OPEN"` so callers continue
+ * with the existing flow rather than taking a destructive
+ * short-circuit on unreliable data.
+ */
+export function queryPrState(
+  owner: string,
+  repo: string,
+  branch: string,
+): PrLifecycleState {
+  try {
+    const output = execFileSync(
+      "gh",
+      ["pr", "view", "--repo", `${owner}/${repo}`, branch, "--json", "state"],
+      { encoding: "utf-8" },
+    );
+    const parsed = JSON.parse(output) as { state: string };
+    const state = parsed.state;
+    if (state === "OPEN" || state === "CLOSED" || state === "MERGED") {
+      return state;
+    }
+    return "OPEN";
+  } catch {
+    return "OPEN";
+  }
+}
+
 /**
  * Check whether the PR for `branch` is mergeable, retrying with
  * exponential backoff when GitHub returns `UNKNOWN` (merge check

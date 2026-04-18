@@ -40,7 +40,7 @@ import type {
 } from "./pipeline.js";
 import { createDoneStageHandler } from "./pipeline.js";
 import { PipelineEventEmitter } from "./pipeline-events.js";
-import { checkMergeable, findPrNumber, getPrBody } from "./pr.js";
+import { checkMergeable, findPrNumber, getPrBody, queryPrState } from "./pr.js";
 import {
   fetchPrComments,
   type PrComment,
@@ -730,6 +730,7 @@ try {
   const doneStage = createDoneStageHandler({
     events: emitter,
     checkMergeable: async () => checkMergeable(owner, repo, wt.branch),
+    queryPrState: async () => queryPrState(owner, repo, wt.branch),
     prompt: {
       confirmMerge: async (msg) => {
         if (tuiPrompt) return tuiPrompt.confirmMerge(msg);

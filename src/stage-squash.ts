@@ -32,7 +32,11 @@ import { type CiPollResult, pollCiAndFix } from "./ci-poll.js";
 import { t } from "./i18n/index.js";
 import { buildPrSyncInstructions } from "./issue-sync.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
-import { getPrBody as defaultGetPrBody } from "./pr.js";
+import {
+  getPrBody as defaultGetPrBody,
+  queryPrState as defaultQueryPrState,
+  type PrLifecycleState,
+} from "./pr.js";
 import type { SquashSubStep } from "./run-state.js";
 import {
   invokeOrResume,
@@ -87,6 +91,17 @@ export interface SquashStageOptions {
     repo: string,
     branch: string,
   ) => string | undefined;
+  /**
+   * Query the PR's lifecycle state (OPEN / CLOSED / MERGED).  Used by
+   * {@link guardIfPrMerged} to short-circuit Stage 8 when the user
+   * merged the PR on GitHub while the pipeline was waiting on the
+   * SUGGESTED_SINGLE choice.  Defaults to `pr.queryPrState`.
+   */
+  queryPrState?: (
+    owner: string,
+    repo: string,
+    branch: string,
+  ) => PrLifecycleState;
   /**
    * Ask the user how to apply a single-commit squash suggestion.
    * Required for the SUGGESTED_SINGLE path; if absent the stage
@@ -406,6 +421,30 @@ async function resolveVerdict(
   };
 }
 
+/**
+ * Short-circuit Stage 8 when the PR has already been merged on
+ * GitHub.  Returns a completed {@link StageResult} (and clears the
+ * squash sub-step so a resume does not re-enter the dead choice),
+ * or `undefined` when the caller should proceed.
+ *
+ * Unlike Stage 9, Stage 8 does not own the worktree lifecycle, so
+ * cleanup stays in the Done stage — this guard only aborts the
+ * squash decision / follow-up and lets Stage 9 handle cleanup.
+ */
+function guardIfPrMerged(
+  ctx: StageContext,
+  opts: SquashStageOptions,
+): StageResult | undefined {
+  const query = opts.queryPrState ?? defaultQueryPrState;
+  const state = query(ctx.owner, ctx.repo, ctx.branch);
+  if (state !== "MERGED") return undefined;
+  opts.onSquashSubStep?.(undefined);
+  return {
+    outcome: "completed",
+    message: t()["squash.alreadyMerged"],
+  };
+}
+
 export function createSquashStageHandler(
   opts: SquashStageOptions,
 ): StageDefinition {
@@ -459,6 +498,13 @@ export function createSquashStageHandler(
         // potentially trigger another force-push / CI cycle — the
         // exact waste this feature is meant to avoid.
         //
+        // Re-check the PR lifecycle before deciding between
+        // "resume follow-up" and "go poll CI": if the user merged
+        // the PR on GitHub between the interruption and the resume,
+        // both paths would waste work on a closed branch.
+        const merged = guardIfPrMerged(ctx, opts);
+        if (merged) return merged;
+
         // Detect a completed squash deterministically (commit count
         // collapsed to 1) and jump to CI polling.  Otherwise, reuse
         // the saved session to re-send just the follow-up squash
@@ -503,6 +549,8 @@ export function createSquashStageHandler(
       if (saved === "awaiting_user_choice") {
         const prBody = getPrBody(ctx.owner, ctx.repo, ctx.branch);
         if (hasValidSuggestionBlock(prBody)) {
+          const merged = guardIfPrMerged(ctx, opts);
+          if (merged) return merged;
           return askUserAndApply(ctx, opts, undefined);
         }
         // Suggestion block missing or malformed — fall back to a
@@ -634,6 +682,8 @@ export function createSquashStageHandler(
             message: `${squashResult.responseText}\n\n---\n\n${verdictResponseText}`,
           };
         }
+        const merged = guardIfPrMerged(ctx, opts);
+        if (merged) return merged;
         return askUserAndApply(ctx, opts, verdictSessionId);
       }
 
@@ -667,6 +717,14 @@ async function askUserAndApply(
       message: t()["squash.messageAppended"],
     };
   }
+
+  // User picked "agent" — guard the narrow race where the PR was
+  // merged on GitHub after the first query but before the user
+  // clicked "Agent squashes now".  The destructive follow-up
+  // (force-push on a closed branch) would waste CI cycles and
+  // potentially resurrect a deleted branch.
+  const merged = guardIfPrMerged(ctx, opts);
+  if (merged) return merged;
 
   // User picked "agent" — send the follow-up squash prompt and run CI.
   opts.onSquashSubStep?.("squashing");
