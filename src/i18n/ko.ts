@@ -176,6 +176,11 @@ export const ko: Messages = {
     `${owner}/${repo}#${issue} \uD30C\uC774\uD504\uB77C\uC778\uC774 \uC644\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.`,
   "pipeline.mergeConfirm":
     "PR이 병합되었습니까? 확인하면 워크트리를 정리합니다.",
+  "pipeline.mergeConfirmSquashTip":
+    "이 저장소가 'Squash and merge'를 허용한다면, 제안된 커밋 메시지가 PR 본문에 있습니다.",
+  "pipeline.suggestedSquashTitle": (title) => `제안 제목: ${title}`,
+  "pipeline.suggestedSquashBody": "제안 본문:",
+  "pipeline.prUrl": (url) => `PR: ${url}`,
   "pipeline.worktreeCleanedUp": "워크트리가 정리되었습니다.",
   "pipeline.worktreePreserved": "워크트리가 보존되었습니다 (병합 미확인).",
   "pipeline.conflictsDetected":
@@ -291,6 +296,18 @@ export const ko: Messages = {
   "ci.agentError": (detail) => `CI 수정 중 에이전트 오류: ${detail}`,
   "squash.completed": "커밋이 스쿼시되고 CI를 통과했습니다.",
   "squash.singleCommitSkip": "커밋이 하나뿐이므로 스쿼시를 건너뜁니다.",
+  "squash.messageAppended":
+    "제안된 스쿼시 커밋 메시지가 PR 본문에 기록되었습니다. " +
+    "병합 시 GitHub의 'Squash and merge'로 적용하세요.",
+  "squash.singleChoicePrompt":
+    "단일 스쿼시 커밋이 적합해 보입니다. 제안 메시지를 어떻게 적용할까요?",
+  "squash.singleChoiceAgent": "에이전트가 지금 스쿼시 (강제 푸시, CI 재실행)",
+  "squash.singleChoiceGithub":
+    "병합 시 GitHub 'Squash and merge'로 적용 (CI 재실행 없음)",
+  "squash.agentChoiceMissingSession":
+    "스쿼시를 수행할 수 없습니다: 대화를 이어갈 에이전트 세션이 유실되었습니다. " +
+    "스테이지 8을 다시 실행하거나, 병합 시 GitHub의 'Squash and merge'로 " +
+    "제안을 적용하세요.",
   "review.approved": (round) => `${round}라운드에서 리뷰가 승인되었습니다.`,
   "review.unresolvedItems": (base, summary) =>
     `${base}\n\n미해결 항목:\n${summary}`,

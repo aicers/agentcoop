@@ -52,6 +52,7 @@ function makeRunState(overrides: Partial<RunState> = {}): RunState {
     },
     issueSyncStatus: "skipped",
     issueChanges: [],
+    squashSubStep: undefined,
     ...overrides,
   };
 }
@@ -244,6 +245,67 @@ describe("loadRunState — migration from v1 (unversioned)", () => {
     saveRunState(makeRunState({ currentStage: 7 }));
     const loaded = loadRunState("org", "repo", 42);
     expect(loaded?.currentStage).toBe(7);
+  });
+});
+
+describe("loadRunState — migration from v2", () => {
+  /**
+   * Write a raw v2 state (post-stage-swap, pre-squashSubStep) to disk.
+   * v2 files already have stages 7=review and 8=squash; the upgrade
+   * to v3 must not re-apply the v1→v2 swap.
+   */
+  function writeV2State(overrides: Record<string, unknown> = {}) {
+    const { squashSubStep: _, ...rest } = makeRunState();
+    const raw = { ...rest, version: 2, ...overrides };
+    const path = runStatePath("org", "repo", 42);
+    mkdirSync(join(tmpHome, ".agentcoop", "runs", "org", "repo"), {
+      recursive: true,
+    });
+    writeFileSync(path, JSON.stringify(raw));
+  }
+
+  test("preserves stage 7 across v2 → v3 upgrade", () => {
+    writeV2State({ currentStage: 7 });
+    const loaded = loadRunState("org", "repo", 42);
+    expect(loaded?.currentStage).toBe(7);
+    expect(loaded?.version).toBe(RUN_STATE_VERSION);
+  });
+
+  test("preserves stage 8 across v2 → v3 upgrade", () => {
+    writeV2State({ currentStage: 8 });
+    const loaded = loadRunState("org", "repo", 42);
+    expect(loaded?.currentStage).toBe(8);
+    expect(loaded?.version).toBe(RUN_STATE_VERSION);
+  });
+
+  test("backfills squashSubStep as undefined on v2 → v3 upgrade", () => {
+    writeV2State({ currentStage: 8 });
+    const loaded = loadRunState("org", "repo", 42);
+    expect(loaded?.squashSubStep).toBeUndefined();
+  });
+});
+
+describe("squashSubStep persistence", () => {
+  test("round-trips squashSubStep", () => {
+    const state = makeRunState({
+      currentStage: 8,
+      squashSubStep: "applied_in_pr_body",
+    });
+    saveRunState(state);
+    const loaded = loadRunState("org", "repo", 42);
+    expect(loaded?.squashSubStep).toBe("applied_in_pr_body");
+  });
+
+  test("defaults to undefined for old state files without squashSubStep", () => {
+    const { squashSubStep: _, ...raw } = makeRunState();
+    const path = runStatePath("org", "repo", 42);
+    mkdirSync(join(tmpHome, ".agentcoop", "runs", "org", "repo"), {
+      recursive: true,
+    });
+    writeFileSync(path, JSON.stringify(raw));
+    const loaded = loadRunState("org", "repo", 42);
+    expect(loaded).toBeDefined();
+    expect(loaded?.squashSubStep).toBeUndefined();
   });
 });
 

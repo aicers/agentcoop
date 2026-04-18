@@ -169,5 +169,17 @@ export function createTuiUserPrompt(dispatch: PromptDispatch): UserPrompt {
       });
       return response === "yes";
     },
+
+    async chooseSquashApplyMode(message: string): Promise<"agent" | "github"> {
+      const m = t();
+      const response = await dispatch({
+        message,
+        choices: [
+          { label: m["squash.singleChoiceAgent"], value: "agent" },
+          { label: m["squash.singleChoiceGithub"], value: "github" },
+        ],
+      });
+      return response === "agent" ? "agent" : "github";
+    },
   };
 }

@@ -39,7 +39,7 @@ import type {
 } from "./pipeline.js";
 import { createDoneStageHandler } from "./pipeline.js";
 import { PipelineEventEmitter } from "./pipeline-events.js";
-import { checkMergeable, findPrNumber } from "./pr.js";
+import { checkMergeable, findPrNumber, getPrBody } from "./pr.js";
 import {
   fetchPrComments,
   type PrComment,
@@ -60,7 +60,10 @@ import { createCreatePrStageHandler } from "./stage-createpr.js";
 import { createImplementStageHandler } from "./stage-implement.js";
 import { createReviewStageHandler } from "./stage-review.js";
 import { createSelfCheckStageHandler } from "./stage-selfcheck.js";
-import { createSquashStageHandler } from "./stage-squash.js";
+import {
+  createSquashStageHandler,
+  parseSquashSuggestionBlock,
+} from "./stage-squash.js";
 import { createTestPlanStageHandler } from "./stage-testplan.js";
 import type { AgentConfig } from "./startup.js";
 import { modelDisplayName, runStartup, selectTarget } from "./startup.js";
@@ -571,6 +574,27 @@ try {
         agent: agentA,
         ...issueCtx,
         defaultBranch,
+        chooseSquashApplyMode: async (msg) => {
+          if (tuiPrompt) return tuiPrompt.chooseSquashApplyMode(msg);
+          return "agent";
+        },
+        onSquashSubStep: (subStep) => {
+          runState.squashSubStep = subStep;
+          saveRunState(runState);
+        },
+        // Getter form — reads live persisted state on each handler
+        // invocation so that an in-process retry (e.g. after a
+        // ci_poll error) sees the sub-step the previous iteration
+        // persisted, not the startup snapshot.  Without this, a
+        // retry from ci_poll would see `undefined` and fall into the
+        // single-commit skip path once the branch has collapsed.
+        savedSquashSubStep: () => runState.squashSubStep,
+        // Same live-read pattern for the agent-A session id so the
+        // retry can re-use the conversation Stage 8 just persisted.
+        // `ctx.savedAgentASessionId` is cleared after the first
+        // iteration of the stage's inner loop and cannot be relied on
+        // for retries by itself.
+        getSavedAgentSessionId: () => runState.agentA.sessionId,
         ...opts,
       }),
     pipelineSettings,
@@ -621,6 +645,7 @@ try {
     selfCheckCount: 0,
     reviewCount: 0,
     reviewSubStep: undefined,
+    squashSubStep: undefined,
     lastVerdict: undefined,
     executionMode,
     agentA: {
@@ -654,6 +679,7 @@ try {
         handleUnknownMergeable: UserPrompt["handleUnknownMergeable"];
         waitForManualResolve: UserPrompt["waitForManualResolve"];
         confirmCleanup: UserPrompt["confirmCleanup"];
+        chooseSquashApplyMode: UserPrompt["chooseSquashApplyMode"];
       }
     | undefined;
 
@@ -730,6 +756,21 @@ try {
       }
     },
     hasRunningServices: () => hasDockerComposeRunning(wt.path),
+    getSquashMergeHint: () => {
+      if (runState.squashSubStep !== "applied_in_pr_body") return undefined;
+      const body = getPrBody(owner, repo, wt.branch);
+      const suggestion = parseSquashSuggestionBlock(body);
+      const prNum = runState.prNumber ?? findPrNumber(owner, repo, wt.branch);
+      const prUrl =
+        prNum !== undefined
+          ? `https://github.com/${owner}/${repo}/pull/${prNum}`
+          : undefined;
+      return {
+        title: suggestion?.title,
+        body: suggestion?.body,
+        prUrl,
+      };
+    },
     onNotMerged: async (signal) => {
       if (!tuiPrompt) return;
       const m = t();

@@ -92,7 +92,7 @@ Do not include any other commentary — just the keyword.
 | Test plan verdict | `FIXED` / `DONE` | `DONE` | `FIXED` → repeat |
 | PR creation check | `COMPLETED` / `BLOCKED` | `COMPLETED` | `BLOCKED` → user chooses |
 | CI findings review | _(no verdict keyword)_ | SHA unchanged | SHA changed → re-poll CI |
-| Squash check | `COMPLETED` / `BLOCKED` | `COMPLETED` | `BLOCKED` → user chooses |
+| Squash check | `SQUASHED_MULTI` / `SUGGESTED_SINGLE` / `BLOCKED` | `SQUASHED_MULTI` (CI poll), `SUGGESTED_SINGLE` (user choice) | `BLOCKED` → user chooses |
 | Reviewer verdict | `APPROVED` / `NOT_APPROVED` | `APPROVED` | `NOT_APPROVED` → repeat |
 | Author completion | `COMPLETED` / `BLOCKED` | `COMPLETED` | `BLOCKED` → user chooses |
 | Unresolved summary | `NONE` / `COMPLETED` | either | — |
@@ -135,6 +135,18 @@ The standard PR sync instructions appear in stages 5 through 8:
 > does. If the description is outdated or inaccurate, update it
 > using `gh pr edit --body "..."`. Keep the issue reference
 > (Closes #N or Part of #N) in the body.
+
+The squash stage extends this contract with a marker-delimited
+**squash suggestion block**.  When a single commit is the right
+shape for the branch, the agent writes the proposed title and body
+into the PR description between the markers
+`<!-- agentcoop:squash-suggestion:start -->` and
+`<!-- agentcoop:squash-suggestion:end -->` instead of force-pushing.
+The block is idempotent — re-runs replace any prior block between
+the same markers rather than stacking duplicates.  The Stage 9
+merge-confirm screen reads this block back so the user can apply
+the message via GitHub's "Squash and merge" without opening the
+browser.
 
 ### Issue-implementation reconciliation
 
@@ -1212,69 +1224,165 @@ avoiding re-execution of already-completed work within a round.
 ### Stage 8: Squash commits
 
 **Agent:** A\
-**Purpose:** Consolidate branch commits into one or a few
-meaningful commits. Skipped automatically if the branch has only
-one commit.
+**Purpose:** Decide whether the branch is best presented as a
+single squash commit (in which case the agent writes the suggested
+message into the PR body and lets GitHub's "Squash and merge"
+apply it at merge time) or several meaningful commits (rewrite
+history and force-push).  Skipped automatically if the branch has
+only one commit.
+
+The single-commit suggestion path was added to avoid wasting an
+extra CI cycle on a force-push that GitHub's "Squash and merge"
+button would perform anyway.
 
 **Prompt:**
 
-```text
-You are squashing commits for the following GitHub issue.
+The work prompt asks the agent to:
 
-## Repository
-- Owner: {owner}
-- Repo: {repo}
-- Branch: {branch}
-- Worktree: {worktree_path}
-
-## Issue #{number}: {title}
-
-{issue_body}
-
-## Instructions
-
-1. Before pushing, check whether the PR description still accurately
-   reflects the current code changes.  Run
-   `gh pr view --json body --jq .body` to read the current
-   description, then compare it against what the branch actually does.
-   If the description is outdated or inaccurate, update it using
-   `gh pr edit --body "..."`.  Keep the issue reference
-   (Closes #{number} or Part of #{number}) in the body.
-2. Review the commits after the base commit `{baseSha}` and
-   consolidate them into one or a few meaningful commits.  Only
-   commits introduced on this branch should be touched — do not
-   include commits from the base branch.  Use
-   `git reset --soft {baseSha}` followed by `git commit`, or an
-   interactive rebase — whichever is simpler.
-3. Write clear, concise commit messages that summarise the changes.
-   Do not include issue or PR numbers in the commit title.
-   Instead, reference the issue in the commit body using
-   `Closes #N` or `Part of #N`.
-4. Force-push the branch (`git push --force-with-lease`).
-```
+1. Sync the PR description (standard PR-sync instructions).
+2. Decide whether the work belongs in **one** commit or **several**.
+3. Branch on that decision:
+   - **Single commit appropriate:** do not rewrite history.  Draft
+     the squash title and body, then write them into the PR body
+     between the markers
+     `<!-- agentcoop:squash-suggestion:start -->` and
+     `<!-- agentcoop:squash-suggestion:end -->` (replacing any prior
+     block between the same markers).  Do not force-push.
+   - **Multiple commits appropriate:** consolidate the branch
+     commits — using `git reset --soft {baseSha}` + `git commit` or
+     interactive rebase — write clear messages, and force-push
+     (`git push --force-with-lease`).
 
 **Completion check:**
 
 ```text
-You have finished your squash attempt.  Please evaluate the result
-and respond with exactly one of the following keywords:
+You have finished your squash decision.  Respond with exactly one
+of the following keywords:
 
-- COMPLETED — if the commits were squashed and force-pushed
-- BLOCKED — if you could not squash and need user intervention
+- SQUASHED_MULTI — if you rewrote history into multiple meaningful
+  commits and force-pushed
+- SUGGESTED_SINGLE — if a single commit is appropriate and you
+  wrote the suggested title/body into the PR body marker block
+  (no force-push)
+- BLOCKED — if you could not complete either path and need user
+  intervention
 
 Do not include any other commentary — just the keyword.
 ```
 
-**Ambiguous response handling:** Same internal clarification
-retry pattern as stage 4 (Create PR).  If clarification also fails,
-the handler re-checks the branch commit count to verify whether the
-squash actually happened.  If the count decreased, the stage
-completes; otherwise it reports `BLOCKED`.
+The handler calls `parseVerdictKeyword` directly with these three
+keywords (rather than feeding them through the shared `KEYWORD_MAP`)
+because the three-way distinction is squash-specific.
 
-**Post-squash CI:** After a successful squash and force-push, the
-orchestrator polls CI and invokes Agent A to fix failures if
-needed (up to 3 internal fix attempts). The stage only completes
-when CI passes.
+**Verdict handling:**
+
+- `SQUASHED_MULTI` → poll CI after the force-push (existing
+  behaviour, up to 3 internal fix attempts) and finish with
+  `squash.completed` when CI passes.
+- `SUGGESTED_SINGLE` → verify a fully parseable suggestion block is
+  present in the PR body before asking the user.  "Parseable" means
+  both markers are present **and** `parseSquashSuggestionBlock`
+  succeeds (the block contains a `**Title:**` line).  A bare start
+  marker or a block missing `**Title:**`/the end marker fails
+  closed with `blocked` rather than completing as if the suggestion
+  were valid — Stage 9 reads the same block via
+  `parseSquashSuggestionBlock` to render the inline preview, so a
+  malformed block would leave the merge-confirm screen blank.  Once
+  validated, ask the user via `chooseSquashApplyMode`:
+  - **"Agent squashes now"** → send a follow-up prompt on the
+    same session telling the agent to perform the squash using
+    the message it already drafted, then run the post-squash CI
+    poll loop.
+  - **"Apply via GitHub"** → finish the stage with
+    `squash.messageAppended` and persist
+    `squashSubStep === "applied_in_pr_body"` so Stage 9 surfaces
+    the suggestion in the merge-confirm screen.  No CI rerun.
+- `BLOCKED` → existing blocked flow.
+
+**Ambiguous response handling:** Same internal clarification
+retry pattern as stage 4 (Create PR).  If clarification also
+fails, the handler runs a **deterministic fallback chain**:
+
+1. If the branch commit count **decreased** relative to the
+   snapshot taken at stage entry, treat as `SQUASHED_MULTI` (the
+   force-push has already happened — that hard-to-undo side
+   effect must be detected first).
+2. Else, fetch the PR body and check for a fully parseable
+   suggestion block (markers present **and**
+   `parseSquashSuggestionBlock` returns a value).  If present,
+   treat as `SUGGESTED_SINGLE`; a malformed block (e.g. only the
+   start marker) is treated as missing.
+3. Else, treat as `BLOCKED`.
+
+The order matters: checking the commit count first prevents a
+completed squash from being misclassified as a SINGLE suggestion
+when an earlier run left a stale marker block in the PR body.
+
+The derived verdict is emitted as a `pipeline:verdict` event just
+like a parsed-keyword verdict, so telemetry consumers see every
+verdict regardless of whether it came from the agent response or
+the fallback chain.
+
+**`SquashSubStep` state machine:**
+
+```text
+planning → verdict
+        ├── (SQUASHED_MULTI)   → ci_poll → done
+        ├── (SUGGESTED_SINGLE) → awaiting_user_choice
+        │       ├── (agent)  → squashing → ci_poll → done
+        │       └── (github) → applied_in_pr_body (stage done)
+        └── (BLOCKED)         → user chooses
+```
+
+`RunState.squashSubStep` persists the current substate so resume
+re-enters at the correct point:
+
+- `applied_in_pr_body` → stage already done; advance to Stage 9.
+- `awaiting_user_choice` → re-verify a parseable suggestion block is
+  still in the PR body (same strict check as the verdict path); if
+  present, re-present the user choice without re-invoking the agent.
+  If absent or malformed, fall back to `planning` rather than
+  re-presenting a choice the user could not act on.  If
+  the user then picks "agent squashes now" but no agent session is
+  available (neither the saved run state nor the current verdict
+  produced a session ID), the stage fails closed with `blocked`
+  rather than silently completing as if the user had picked
+  "github" — the user's choice must not be misrepresented.
+- `ci_poll` → resume the post-squash CI poll loop directly.
+- `squashing` → the user picked "agent squashes now" and the
+  follow-up prompt was sent, but we were interrupted before the
+  transition to `ci_poll`.  Resume runs a deterministic check
+  before doing anything expensive:
+  1. Re-count the branch commits.  If it collapsed to 1, the
+     squash already landed — jump straight to `ci_poll`.  This is
+     the common case and avoids a second force-push / CI cycle.
+  2. Otherwise, if a saved session is available, re-send **only**
+     the follow-up squash prompt on that session so the agent
+     continues the same conversation rather than restarting
+     planning.
+  3. As a last resort (no session persisted), fall back to a
+     fresh planning run.
+- `planning` (or absent) → run the agent prompt fresh (the work
+  prompt is idempotent — the agent will redo or confirm the same
+  decision).
+
+The stage reads the sub-step and the persisted agent-A session id
+via live getters on each handler invocation, so an in-process
+retry (e.g. after a transient `ci_poll` error) observes the
+values the previous iteration persisted rather than the startup
+snapshot.  Without this, a retry from `ci_poll` after the branch
+had already collapsed could fall into the single-commit skip path
+and falsely complete the stage.
+
+The stage also persists the **verdict turn's** session id (the one
+returned by `resolveVerdict`) before transitioning to
+`awaiting_user_choice`.  Adapters can surface a new session id on
+a follow-up turn, so the verdict session is not guaranteed to
+equal the planning session.  Persisting it ensures that a resume
+from `awaiting_user_choice` — where the user picks "agent
+squashes now" — re-sends the follow-up on the exact conversation
+that drafted the PR-body suggestion, rather than the earlier
+planning session.
 
 **Outcome handling:** `requiresArtifact: true` — if `BLOCKED`,
 only **Instruct** and **Halt** are offered.

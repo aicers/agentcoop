@@ -235,6 +235,15 @@ export interface UserPrompt {
    * worktree).  Used in stage 9 "not merged" path.
    */
   confirmCleanup(message: string): Promise<boolean>;
+
+  /**
+   * Ask the user how to apply a single-commit squash suggestion that
+   * the agent has written to the PR body.  Returns `"agent"` to ask
+   * the agent to perform the squash now (force-push, runs CI again),
+   * or `"github"` to leave it for GitHub's "Squash and merge" at
+   * merge time (no CI rerun).
+   */
+  chooseSquashApplyMode(message: string): Promise<"agent" | "github">;
 }
 
 // ---- loop control --------------------------------------------------------
@@ -896,6 +905,23 @@ export interface DoneStageOptions {
    * can bail out early on cancellation.
    */
   onNotMerged: (signal?: AbortSignal) => Promise<void>;
+  /**
+   * When the squash stage finished via the SUGGESTED_SINGLE / GitHub
+   * path, this returns a small bundle to render in the merge-confirm
+   * screen so the user can copy-paste the suggested squash message
+   * without opening the browser.  All fields are optional; missing
+   * fields are simply omitted from the output.
+   */
+  getSquashMergeHint?: () =>
+    | {
+        /** Suggested squash commit title parsed from the PR body. */
+        title?: string;
+        /** Suggested squash commit body parsed from the PR body. */
+        body?: string;
+        /** Hyperlink-friendly PR URL. */
+        prUrl?: string;
+      }
+    | undefined;
 }
 
 /**
@@ -1102,9 +1128,24 @@ export function createDoneStageHandler(
   ): Promise<StageResult> {
     const m = t();
     for (;;) {
-      const choice = await options.prompt.confirmMerge(
-        `${summary}\n\n${m["pipeline.mergeConfirm"]}`,
-      );
+      const hint = options.getSquashMergeHint?.();
+      const sections: string[] = [summary];
+      if (hint) {
+        const tipLines: string[] = [m["pipeline.mergeConfirmSquashTip"]];
+        if (hint.title) {
+          tipLines.push(m["pipeline.suggestedSquashTitle"](hint.title));
+        }
+        if (hint.body) {
+          tipLines.push(m["pipeline.suggestedSquashBody"]);
+          tipLines.push(hint.body);
+        }
+        if (hint.prUrl) {
+          tipLines.push(m["pipeline.prUrl"](hint.prUrl));
+        }
+        sections.push(tipLines.join("\n"));
+      }
+      sections.push(m["pipeline.mergeConfirm"]);
+      const choice = await options.prompt.confirmMerge(sections.join("\n\n"));
       if (ctx.signal?.aborted) {
         return { outcome: "completed", message: "" };
       }

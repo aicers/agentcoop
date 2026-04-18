@@ -33,6 +33,19 @@ export type ReviewSubStep =
   | "author_fix"
   | "ci_poll";
 
+/**
+ * Sub-step within stage 8 (squash).  Tracks the three-way decision
+ * the agent makes (one big commit suggestion vs. a real squash) so
+ * resume can re-enter at the correct point without re-running
+ * side-effectful work.
+ */
+export type SquashSubStep =
+  | "planning"
+  | "awaiting_user_choice"
+  | "squashing"
+  | "ci_poll"
+  | "applied_in_pr_body";
+
 export interface AgentState {
   cli: string;
   model: string;
@@ -49,8 +62,9 @@ export interface AgentState {
  * History:
  *  1 — original order (stages 7=squash, 8=review)
  *  2 — swapped stages 7↔8 (7=review, 8=squash)
+ *  3 — added `squashSubStep` for stage 8 single-commit suggestion flow
  */
-export const RUN_STATE_VERSION = 2;
+export const RUN_STATE_VERSION = 3;
 
 export interface RunState {
   version: number;
@@ -71,6 +85,8 @@ export interface RunState {
   reviewCount: number;
   /** Current sub-step within a review round.  Undefined outside stage 7. */
   reviewSubStep: ReviewSubStep | undefined;
+  /** Current sub-step within stage 8 (squash).  Undefined outside stage 8. */
+  squashSubStep: SquashSubStep | undefined;
   /** Last known review verdict for the current round. */
   lastVerdict: "APPROVED" | "NOT_APPROVED" | undefined;
   executionMode: "auto" | "step";
@@ -147,6 +163,7 @@ function isValidRunState(
     (r.selfCheckCount === undefined || typeof r.selfCheckCount === "number") &&
     (r.reviewCount === undefined || typeof r.reviewCount === "number") &&
     (r.reviewSubStep === undefined || typeof r.reviewSubStep === "string") &&
+    (r.squashSubStep === undefined || typeof r.squashSubStep === "string") &&
     (r.lastVerdict === undefined ||
       r.lastVerdict === "APPROVED" ||
       r.lastVerdict === "NOT_APPROVED") &&
@@ -163,22 +180,33 @@ function isValidRunState(
 }
 
 /**
- * Migrate a legacy (v1 / unversioned) run-state to the current version.
+ * Migrate a legacy run-state to the current version.
  *
- * v1 → v2: stages 7 (squash) and 8 (review) were swapped.  If
- * `currentStage` is one of those two, remap it so the run resumes
- * into the correct handler.
+ * Each step is applied only when the source version predates it,
+ * so an already-migrated state is never re-remapped on a later
+ * upgrade.
+ *
+ *  v1 / unversioned → v2: stages 7 (squash) and 8 (review) were
+ *                          swapped.  Remap `currentStage` so the run
+ *                          resumes into the correct handler.
+ *  v2 → v3:                added `squashSubStep`.  No remap required
+ *                          (`loadRunState` already backfills
+ *                          `undefined`), just bump the version tag.
  */
 function migrateRunState(state: RunState): RunState {
   if (state.version >= RUN_STATE_VERSION) return state;
 
   const migrated = { ...state };
 
-  // v1 → v2: swap stages 7 ↔ 8
-  if (migrated.currentStage === 7) {
-    migrated.currentStage = 8;
-  } else if (migrated.currentStage === 8) {
-    migrated.currentStage = 7;
+  // v1 → v2: swap stages 7 ↔ 8.  Must be skipped for v2+ states so
+  // that a v2 run persisted at stage 7 or 8 is not remapped to the
+  // wrong handler during the v2 → v3 upgrade.
+  if (migrated.version < 2) {
+    if (migrated.currentStage === 7) {
+      migrated.currentStage = 8;
+    } else if (migrated.currentStage === 8) {
+      migrated.currentStage = 7;
+    }
   }
 
   migrated.version = RUN_STATE_VERSION;
@@ -212,6 +240,7 @@ export function loadRunState(
     selfCheckCount: (r.selfCheckCount as number | undefined) ?? 0,
     reviewCount: (r.reviewCount as number | undefined) ?? 0,
     reviewSubStep: (r.reviewSubStep as ReviewSubStep | undefined) ?? undefined,
+    squashSubStep: (r.squashSubStep as SquashSubStep | undefined) ?? undefined,
     lastVerdict:
       (r.lastVerdict as "APPROVED" | "NOT_APPROVED" | undefined) ?? undefined,
     issueSyncStatus:
