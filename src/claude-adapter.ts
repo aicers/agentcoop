@@ -197,7 +197,7 @@ export class ClaudeStreamTransformer extends JsonlLineTransformer {
 // Adapter options + args builder
 // ---------------------------------------------------------------------------
 
-export type ClaudeEffortLevel = "low" | "medium" | "high" | "max";
+export type ClaudeEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ClaudeAdapterOptions {
   model?: string;

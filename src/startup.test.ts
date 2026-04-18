@@ -680,7 +680,7 @@ describe("runStartup — effort level choices", () => {
       (c: { value: string }) => c.value,
     );
     expect(agentAValues).toContain("max");
-    expect(agentAValues).toEqual(["low", "medium", "high", "max"]);
+    expect(agentAValues).toEqual(["low", "medium", "high", "xhigh", "max"]);
 
     // Agent B (Sonnet) effort prompt should NOT include "max"
     // index: 5=agentB CLI, 6=agentB model, 7=agentB context, 8=agentB effort
@@ -720,7 +720,7 @@ describe("runStartup — effort level choices", () => {
       (c: { value: string }) => c.value,
     );
     expect(agentAValues).toContain("max");
-    expect(agentAValues).toEqual(["low", "medium", "high", "max"]);
+    expect(agentAValues).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(result.agentA.effortLevel).toBe("max");
   });
 });

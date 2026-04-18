@@ -77,6 +77,7 @@ const CLAUDE_EFFORT_LEVELS = [
 
 const CLAUDE_OPUS_EFFORT_LEVELS = [
   ...CLAUDE_EFFORT_LEVELS,
+  { name: "Extra high", value: "xhigh" },
   { name: "Max", value: "max" },
 ];
 

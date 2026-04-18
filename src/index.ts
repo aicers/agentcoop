@@ -103,6 +103,8 @@ function createAdapter(
         | "low"
         | "medium"
         | "high"
+        | "xhigh"
+        | "max"
         | undefined,
       contextWindow: agentConfig.contextWindow,
       inactivityTimeoutMs,
