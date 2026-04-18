@@ -3471,7 +3471,8 @@ describe("AgentPane diagnostic rendering", () => {
     await new Promise((r) => setTimeout(r, 50));
 
     const frame = lastFrame() ?? "";
-    expect(frame).toContain("Entering Stage 1 (Bootstrap)");
+    expect(frame).toContain("Stage 1 (Bootstrap)");
+    expect(frame).not.toContain("Entering Stage 1 (Bootstrap)");
     expect(frame).toContain("[10:00:00] Pipeline: Bootstrapping repository...");
     expect(frame).toContain(
       "[10:00:01] Pipeline: Worktree ready at /tmp/wt (branch: alice/issue-42)",
@@ -3508,9 +3509,10 @@ describe("AgentPane diagnostic rendering", () => {
     expect(frame).toContain(
       "Stage 1 (Bootstrap) \u2192 Stage 5 (CI check) [outcome: completed]",
     );
-    // After the transition arrives, placeholder suppression is lifted —
-    // Agent A with no output now shows the "waiting" placeholder.
-    expect(frame).toContain("waiting for output");
+    // The transition divider counts as bootstrap content too, so the full
+    // Stage 1 block stays intact with no placeholder above it until real
+    // pane output begins.
+    expect(frame).not.toContain("waiting for output");
   });
 
   test("Agent B idle placeholder returns after Stage 1 rows are not the only contents", async () => {
@@ -3533,10 +3535,22 @@ describe("AgentPane diagnostic rendering", () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(lastFrame() ?? "").not.toContain("idle");
 
-    // After stage 2 enters, Agent B should show the idle placeholder.
+    // First stage:enter completes the Stage 1 retrospective; the resulting
+    // transition divider is still bootstrap content, so no placeholder yet.
     emitter.emit("stage:enter", {
       stageNumber: 2,
       stageName: "Implement",
+      iteration: 0,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastFrame() ?? "").not.toContain("idle");
+
+    // A subsequent stage transition is non-bootstrap content, so Agent B
+    // should now show the idle placeholder.
+    emitter.emit("stage:exit", { stageNumber: 2, outcome: "completed" });
+    emitter.emit("stage:enter", {
+      stageNumber: 3,
+      stageName: "Self-check",
       iteration: 0,
     });
     await new Promise((r) => setTimeout(r, 50));

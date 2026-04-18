@@ -106,7 +106,7 @@ export function useAgentLines(
       {
         kind: "diagnostic",
         timestamp: bootstrapLog[0].timestamp,
-        message: `Entering Stage 1 (${bootstrapName})`,
+        message: `Stage 1 (${bootstrapName})`,
         global: true,
         bootstrap: true,
       },
@@ -207,54 +207,57 @@ export function useAgentLines(
     maxLinesRef.current = maxLines;
   }, [maxLines]);
 
-  const pushDiagnostic = useRef((message: string, global?: boolean) => {
-    const now = hhmmss();
-    const base: DiagnosticBlock = {
-      kind: "diagnostic",
-      timestamp: now,
-      message,
-      ...(global ? { global: true } : {}),
-    };
-    // Flush any pending partial line before inserting the diagnostic
-    // so it appears in the correct chronological position.
-    if (bufferRef.current) {
-      const pending = bufferRef.current;
-      bufferRef.current = "";
-      setPendingLine("");
-      setLines((prev) => {
-        const next: LineEntry[] = [...prev, pending, base];
-        return next.length > maxLinesRef.current
-          ? next.slice(-maxLinesRef.current)
-          : next;
-      });
-    } else {
-      setLines((prev) => {
-        // Deduplicate: if the last entry is a diagnostic with the same
-        // message and global flag, update it in place with an
-        // incremented count and the latest timestamp.
-        const last = prev.length > 0 ? prev[prev.length - 1] : undefined;
-        if (
-          last != null &&
-          typeof last !== "string" &&
-          last.kind === "diagnostic" &&
-          last.message === message &&
-          (last.global ?? false) === (global ?? false)
-        ) {
-          const updated: DiagnosticBlock = {
-            ...last,
-            timestamp: now,
-            count: (last.count ?? 1) + 1,
-          };
-          const next: LineEntry[] = [...prev.slice(0, -1), updated];
-          return next;
-        }
-        const next: LineEntry[] = [...prev, base];
-        return next.length > maxLinesRef.current
-          ? next.slice(-maxLinesRef.current)
-          : next;
-      });
-    }
-  });
+  const pushDiagnostic = useRef(
+    (message: string, global?: boolean, bootstrap?: boolean) => {
+      const now = hhmmss();
+      const base: DiagnosticBlock = {
+        kind: "diagnostic",
+        timestamp: now,
+        message,
+        ...(global ? { global: true } : {}),
+        ...(bootstrap ? { bootstrap: true } : {}),
+      };
+      // Flush any pending partial line before inserting the diagnostic
+      // so it appears in the correct chronological position.
+      if (bufferRef.current) {
+        const pending = bufferRef.current;
+        bufferRef.current = "";
+        setPendingLine("");
+        setLines((prev) => {
+          const next: LineEntry[] = [...prev, pending, base];
+          return next.length > maxLinesRef.current
+            ? next.slice(-maxLinesRef.current)
+            : next;
+        });
+      } else {
+        setLines((prev) => {
+          // Deduplicate: if the last entry is a diagnostic with the same
+          // message and global flag, update it in place with an
+          // incremented count and the latest timestamp.
+          const last = prev.length > 0 ? prev[prev.length - 1] : undefined;
+          if (
+            last != null &&
+            typeof last !== "string" &&
+            last.kind === "diagnostic" &&
+            last.message === message &&
+            (last.global ?? false) === (global ?? false)
+          ) {
+            const updated: DiagnosticBlock = {
+              ...last,
+              timestamp: now,
+              count: (last.count ?? 1) + 1,
+            };
+            const next: LineEntry[] = [...prev.slice(0, -1), updated];
+            return next;
+          }
+          const next: LineEntry[] = [...prev, base];
+          return next.length > maxLinesRef.current
+            ? next.slice(-maxLinesRef.current)
+            : next;
+        });
+      }
+    },
+  );
 
   // --- Diagnostic event subscriptions ---
 
@@ -281,12 +284,15 @@ export function useAgentLines(
     stageNumber: number;
     stageName: string | undefined;
     outcome: string;
+    /** True if this exit was synthesized from the Stage 1 bootstrap replay. */
+    bootstrap?: boolean;
   } | null>(
     bootstrapLog && bootstrapLog.length > 0
       ? {
           stageNumber: 1,
           stageName: t()["stage.bootstrap"],
           outcome: "completed",
+          bootstrap: true,
         }
       : null,
   );
@@ -309,6 +315,7 @@ export function useAgentLines(
         pushDiagnostic.current(
           `${from} → Stage ${ev.stageNumber} (${ev.stageName}) [outcome: ${pending.outcome}]`,
           true,
+          pending.bootstrap,
         );
       } else {
         pushDiagnostic.current(
