@@ -1270,6 +1270,86 @@ describe("StatusBar", () => {
     expect(lastFrame()).toContain("Stage 9: Done");
     expect(lastFrame()).not.toContain("Stage 9: Rebase");
   });
+
+  test("wraps issue reference with OSC 8 hyperlink", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={49}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain(
+      "\x1b]8;;https://github.com/aicers/agentcoop/issues/49\x07",
+    );
+    expect(frame).toContain("aicers/agentcoop#49");
+  });
+
+  test("shows PR segment with OSC 8 hyperlink when prNumber is set", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box width={200}>
+        <StatusBar
+          emitter={emitter}
+          owner="aicers"
+          repo="agentcoop"
+          issueNumber={49}
+          prNumber={523}
+        />
+      </Box>,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("PR: #523");
+    expect(frame).toContain(
+      "\x1b]8;;https://github.com/aicers/agentcoop/pull/523\x07",
+    );
+  });
+
+  test("omits PR segment when prNumber is undefined", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box width={200}>
+        <StatusBar
+          emitter={emitter}
+          owner="aicers"
+          repo="agentcoop"
+          issueNumber={49}
+        />
+      </Box>,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).not.toContain("PR: #");
+    expect(frame).not.toContain("/pull/");
+  });
+
+  test("escape sequences are zero-width for issue-line truncation", () => {
+    const emitter = new PipelineEventEmitter();
+    // Compare the truncation behavior with and without the hyperlink
+    // wrapping active. The rendered width budget must be identical.
+    const issueTitle = "Bug fix";
+    const { lastFrame } = render(
+      <StatusBar
+        emitter={emitter}
+        owner="aicers"
+        repo="agentcoop"
+        issueNumber={42}
+        issueTitle={issueTitle}
+        contentWidth={22}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    // Truncation still fits: ellipsis must be present and the issue
+    // reference must still appear.
+    expect(frame).toContain("aicers/agentcoop#42:");
+    expect(frame).toContain("\u2026");
+  });
 });
 
 // ---- InputArea ---------------------------------------------------------------

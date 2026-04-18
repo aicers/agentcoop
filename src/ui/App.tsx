@@ -12,6 +12,7 @@ import { runPipeline } from "../pipeline.js";
 import type {
   AgentInvokeEvent,
   PipelineEventEmitter,
+  PrResolvedEvent,
 } from "../pipeline-events.js";
 import { AgentPane, splitIntoRows } from "./AgentPane.js";
 import { InputArea, type InputRequest } from "./InputArea.js";
@@ -263,6 +264,8 @@ export interface AppProps {
   initialSelfCheckCount?: number;
   /** Persisted review count for StatusBar initialisation on resume. */
   initialReviewCount?: number;
+  /** Persisted PR number from RunState; seeds the StatusBar on resume. */
+  initialPrNumber?: number;
 }
 
 export function App({
@@ -279,6 +282,7 @@ export function App({
   startedAt,
   initialSelfCheckCount,
   initialReviewCount,
+  initialPrNumber,
 }: AppProps) {
   const { height: terminalHeight, width: terminalWidth } =
     useTerminalDimensions();
@@ -294,6 +298,15 @@ export function App({
     "row",
   );
   const [hasTokenData, setHasTokenData] = useState(false);
+  const [prNumber, setPrNumber] = useState<number | undefined>(initialPrNumber);
+
+  useEffect(() => {
+    const onPrResolved = (ev: PrResolvedEvent) => setPrNumber(ev.prNumber);
+    emitter.on("pr:resolved", onPrResolved);
+    return () => {
+      emitter.off("pr:resolved", onPrResolved);
+    };
+  }, [emitter]);
 
   // AbortController for pipeline cancellation on Ctrl+C.
   const abortController = useMemo(() => new AbortController(), []);
@@ -503,6 +516,7 @@ export function App({
         repo={pipelineOptions.context.repo}
         issueNumber={pipelineOptions.context.issueNumber}
         issueTitle={pipelineOptions.context.issueTitle}
+        prNumber={prNumber}
         baseSha={pipelineOptions.context.baseSha}
         layout={effectiveLayout}
         showKeyHints={flags.showKeyHints}

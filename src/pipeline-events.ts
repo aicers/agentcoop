@@ -25,6 +25,10 @@ export interface ReviewPostedEvent {
   round: number;
 }
 
+export interface PrResolvedEvent {
+  prNumber: number;
+}
+
 export interface AgentInvokeEvent {
   agent: "a" | "b";
   type: "invoke" | "resume";
@@ -114,6 +118,7 @@ interface PipelineEventMap {
   "stage:exit": [StageExitEvent];
   "stage:name-override": [StageNameOverrideEvent];
   "review:posted": [ReviewPostedEvent];
+  "pr:resolved": [PrResolvedEvent];
   "agent:invoke": [AgentInvokeEvent];
   "pipeline:verdict": [PipelineVerdictEvent];
   "pipeline:loop": [PipelineLoopEvent];
