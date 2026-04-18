@@ -139,12 +139,14 @@ export function TokenBar({
       : textB;
 
   const boxHeight = contentWidth !== undefined ? 3 : undefined;
+  // In column layout, flexBasis={0}+flexGrow={1} would collapse the explicit
+  // `height` inside a bounded-height parent, leaving only borders.
+  const mainAxisSizing = layout === "row" ? { flexGrow: 1, flexBasis: 0 } : {};
 
   return (
     <Box flexDirection={layout} flexShrink={0}>
       <Box
-        flexGrow={1}
-        flexBasis={0}
+        {...mainAxisSizing}
         borderStyle="single"
         borderColor="gray"
         paddingX={1}
@@ -154,8 +156,7 @@ export function TokenBar({
         <Text>{displayA}</Text>
       </Box>
       <Box
-        flexGrow={1}
-        flexBasis={0}
+        {...mainAxisSizing}
         borderStyle="single"
         borderColor="gray"
         paddingX={1}
