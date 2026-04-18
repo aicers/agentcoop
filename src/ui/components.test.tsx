@@ -2322,6 +2322,29 @@ describe("TokenBar layout prop", () => {
     expect(agentBIdx).toBeGreaterThanOrEqual(0);
     expect(agentAIdx).not.toBe(agentBIdx);
   });
+
+  test("shows agent text in column layout inside a bounded-height parent", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <Box height={20} flexDirection="column">
+        <TokenBar emitter={emitter} layout="column" contentWidth={76} />
+      </Box>,
+    );
+
+    emitter.emit("agent:usage", {
+      agent: "a",
+      usage: { inputTokens: 1000, outputTokens: 500, cachedInputTokens: 0 },
+    });
+    emitter.emit("agent:usage", {
+      agent: "b",
+      usage: { inputTokens: 2000, outputTokens: 800, cachedInputTokens: 0 },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Agent A (author)");
+    expect(frame).toContain("Agent B (reviewer)");
+  });
 });
 
 // ---- cliDisplayName ----------------------------------------------------------
