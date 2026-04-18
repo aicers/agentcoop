@@ -344,4 +344,45 @@ describe("parseVerdictKeyword", () => {
       keyword: "NOT_APPROVED",
     });
   });
+
+  // -- squash three-way verdict ---------------------------------------------
+  describe("squash three-way verdict", () => {
+    const squashKw = ["SQUASHED_MULTI", "SUGGESTED_SINGLE", "BLOCKED"] as const;
+
+    test("returns SQUASHED_MULTI on exact match", () => {
+      expect(parseVerdictKeyword("SQUASHED_MULTI", squashKw)).toEqual({
+        keyword: "SQUASHED_MULTI",
+      });
+    });
+
+    test("returns SUGGESTED_SINGLE on exact match", () => {
+      expect(parseVerdictKeyword("SUGGESTED_SINGLE", squashKw)).toEqual({
+        keyword: "SUGGESTED_SINGLE",
+      });
+    });
+
+    test("rejects when both SQUASHED_MULTI and SUGGESTED_SINGLE appear", () => {
+      expect(
+        parseVerdictKeyword(
+          "I started with SQUASHED_MULTI but then chose SUGGESTED_SINGLE",
+          squashKw,
+        ),
+      ).toEqual({ keyword: undefined });
+    });
+
+    test("rejects when SUGGESTED_SINGLE appears with extra commentary", () => {
+      expect(
+        parseVerdictKeyword(
+          "SUGGESTED_SINGLE — wrote the marker block",
+          squashKw,
+        ),
+      ).toEqual({ keyword: undefined });
+    });
+
+    test("ignores out-of-scope COMPLETED for squash keywords", () => {
+      expect(parseVerdictKeyword("COMPLETED", squashKw)).toEqual({
+        keyword: undefined,
+      });
+    });
+  });
 });

@@ -1119,6 +1119,50 @@ describe("createDoneStageHandler", () => {
     expect(stage.name).toBe("Done");
   });
 
+  test("MERGEABLE: includes squash suggestion hint in confirmMerge message", async () => {
+    const confirmMerge = vi.fn().mockResolvedValue("merged");
+    const opts = makeDoneOpts({
+      prompt: { confirmMerge },
+      getSquashMergeHint: () => ({
+        title: "Fix widget rendering",
+        body: "Body line\n\nCloses #5",
+        prUrl: "https://github.com/org/repo/pull/123",
+      }),
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    await stage.handler(ctx);
+    expect(confirmMerge).toHaveBeenCalledOnce();
+    const message = confirmMerge.mock.calls[0][0] as string;
+    expect(message).toContain("Squash and merge");
+    expect(message).toContain("Fix widget rendering");
+    expect(message).toContain("Closes #5");
+    expect(message).toContain("https://github.com/org/repo/pull/123");
+  });
+
+  test("MERGEABLE: omits hint when getSquashMergeHint returns undefined", async () => {
+    const confirmMerge = vi.fn().mockResolvedValue("merged");
+    const opts = makeDoneOpts({
+      prompt: { confirmMerge },
+      getSquashMergeHint: () => undefined,
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    await stage.handler(ctx);
+    const message = confirmMerge.mock.calls[0][0] as string;
+    expect(message).not.toContain("Squash and merge");
+  });
+
   test("MERGEABLE: confirms merge, stops services, then cleans up", async () => {
     const opts = makeDoneOpts();
     const stage = createDoneStageHandler(opts);

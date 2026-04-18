@@ -90,6 +90,8 @@ function makePrompt(overrides: Partial<UserPrompt> = {}): UserPrompt {
     handleConflict: vi.fn().mockResolvedValue("manual"),
     handleUnknownMergeable: vi.fn().mockResolvedValue("exit"),
     waitForManualResolve: vi.fn().mockResolvedValue(undefined),
+    confirmCleanup: vi.fn().mockResolvedValue(true),
+    chooseSquashApplyMode: vi.fn().mockResolvedValue("agent"),
     ...overrides,
   };
 }
@@ -1674,7 +1676,9 @@ describe("Stage 8 (Squash) through pipeline", () => {
         ),
       resume: vi
         .fn()
-        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "SQUASHED_MULTI" })),
+        ),
     };
 
     const stage = createSquashStageHandler({
@@ -1746,7 +1750,9 @@ describe("Stage 8 (Squash) baseSha integration", () => {
       }),
       resume: vi
         .fn()
-        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "SQUASHED_MULTI" })),
+        ),
     };
 
     const stage = createSquashStageHandler({
@@ -1781,7 +1787,9 @@ describe("Stage 8 (Squash) baseSha integration", () => {
       }),
       resume: vi
         .fn()
-        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "SQUASHED_MULTI" })),
+        ),
     };
 
     const stage = createSquashStageHandler({
@@ -2305,7 +2313,9 @@ describe("Stages 7+8 (Review + Squash) through pipeline", () => {
         ),
       resume: vi
         .fn()
-        .mockReturnValue(makeStream(makeResult({ responseText: "COMPLETED" }))),
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "SQUASHED_MULTI" })),
+        ),
     };
 
     const agentA: AgentAdapter = {

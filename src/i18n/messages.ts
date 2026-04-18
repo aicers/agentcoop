@@ -137,6 +137,10 @@ export interface Messages {
     issue: number,
   ) => string;
   "pipeline.mergeConfirm": string;
+  "pipeline.mergeConfirmSquashTip": string;
+  "pipeline.suggestedSquashTitle": (title: string) => string;
+  "pipeline.suggestedSquashBody": string;
+  "pipeline.prUrl": (url: string) => string;
   "pipeline.worktreeCleanedUp": string;
   "pipeline.worktreePreserved": string;
   "pipeline.conflictsDetected": string;
@@ -241,6 +245,11 @@ export interface Messages {
   "ci.agentError": (detail: string) => string;
   "squash.completed": string;
   "squash.singleCommitSkip": string;
+  "squash.messageAppended": string;
+  "squash.singleChoicePrompt": string;
+  "squash.singleChoiceAgent": string;
+  "squash.singleChoiceGithub": string;
+  "squash.agentChoiceMissingSession": string;
   "review.approved": (round: number) => string;
   "review.unresolvedItems": (base: string, summary: string) => string;
   "review.fixesApplied": (round: number) => string;

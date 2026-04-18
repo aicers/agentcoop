@@ -1,15 +1,25 @@
 /**
  * Stage 8 — Squash commits.
  *
- * Two-step flow + internal CI polling:
- *   1. Send a squash prompt to Agent A instructing it to squash all
- *      branch commits into one and force-push.
- *   2. Resume the session with a completion check (COMPLETED/BLOCKED).
- *   3. Poll CI after force-push.  If CI fails, the agent is invoked
- *      to fix the issue and CI is re-polled (internal loop, max 3).
+ * Three-way verdict: the agent decides whether the branch is best
+ * consolidated into one commit (write the suggested message into the
+ * PR body and let GitHub's "Squash and merge" apply it at merge
+ * time, avoiding an extra CI cycle) or several meaningful commits
+ * (rewrite history and force-push as before).
  *
- * `requiresArtifact` is true because the squash must succeed before
- * the pipeline proceeds to Done.
+ *   1. Send the squash prompt instructing the agent to choose between
+ *      the SUGGESTED_SINGLE and SQUASHED_MULTI paths.
+ *   2. Resume the session with a verdict prompt
+ *      (SQUASHED_MULTI / SUGGESTED_SINGLE / BLOCKED).
+ *   3. Branch on the verdict:
+ *        - SQUASHED_MULTI    → poll CI after force-push.
+ *        - SUGGESTED_SINGLE  → ask the user how to apply the
+ *                              suggestion (agent squash now, or
+ *                              GitHub "Squash and merge" later).
+ *        - BLOCKED           → existing blocked flow.
+ *
+ * `requiresArtifact` is true because the squash decision must succeed
+ * before the pipeline proceeds to Done.
  */
 
 import type { AgentAdapter } from "./agent.js";
@@ -22,17 +32,32 @@ import { type CiPollResult, pollCiAndFix } from "./ci-poll.js";
 import { t } from "./i18n/index.js";
 import { buildPrSyncInstructions } from "./issue-sync.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
+import { getPrBody as defaultGetPrBody } from "./pr.js";
+import type { SquashSubStep } from "./run-state.js";
 import {
   invokeOrResume,
   mapAgentError,
-  mapResponseToResult,
   sendFollowUp,
   type VerdictContext,
 } from "./stage-util.js";
-import { buildClarificationPrompt } from "./step-parser.js";
+import {
+  buildClarificationPrompt,
+  parseVerdictKeyword,
+} from "./step-parser.js";
 import { countBranchCommits as defaultCountBranchCommits } from "./worktree.js";
 
 // ---- public types ------------------------------------------------------------
+
+/** Marker block delimiters used in the PR body for the SUGGESTED_SINGLE path. */
+export const SQUASH_SUGGESTION_START_MARKER =
+  "<!-- agentcoop:squash-suggestion:start -->";
+export const SQUASH_SUGGESTION_END_MARKER =
+  "<!-- agentcoop:squash-suggestion:end -->";
+
+export interface SquashSuggestion {
+  title: string;
+  body: string;
+}
 
 export interface SquashStageOptions {
   agent: AgentAdapter;
@@ -56,6 +81,45 @@ export interface SquashStageOptions {
   delay?: (ms: number) => Promise<void>;
   /** Injected for testability. Defaults to `worktree.countBranchCommits`. */
   countBranchCommits?: (cwd: string, baseBranch: string) => number;
+  /** Injected for testability. Defaults to `pr.getPrBody`. */
+  getPrBody?: (
+    owner: string,
+    repo: string,
+    branch: string,
+  ) => string | undefined;
+  /**
+   * Ask the user how to apply a single-commit squash suggestion.
+   * Required for the SUGGESTED_SINGLE path; if absent the stage
+   * conservatively defaults to "agent".
+   */
+  chooseSquashApplyMode?: (message: string) => Promise<"agent" | "github">;
+  /**
+   * Persist the current squash sub-step so resume can re-enter at
+   * the correct point.  Optional — when omitted, sub-step transitions
+   * are not persisted (used by tests).
+   */
+  onSquashSubStep?: (subStep: SquashSubStep | undefined) => void;
+  /**
+   * Restored sub-step from a prior run.  When set, the handler skips
+   * earlier sub-steps and re-enters at the saved point.
+   *
+   * May be a value (snapshot at resume time) or a getter (reads live
+   * persisted state on each retry).  The getter form is required for
+   * in-process retries after the handler has already transitioned the
+   * sub-step — e.g. `ci_poll` failing and triggering a fresh handler
+   * invocation.  Without the live read, the retry would see the
+   * startup snapshot (`undefined`) and fall into the single-commit
+   * skip path instead of resuming CI polling.
+   */
+  savedSquashSubStep?: SquashSubStep | (() => SquashSubStep | undefined);
+  /**
+   * Getter for the persisted agent-A session id.  Read on each handler
+   * invocation so that in-process retries see the session the stage
+   * persisted during a previous iteration.  The pipeline-supplied
+   * `ctx.savedAgentASessionId` is one-shot — cleared after the first
+   * iteration — so it cannot be relied on for retries alone.
+   */
+  getSavedAgentSessionId?: () => string | undefined;
 }
 
 // ---- prompt builders ---------------------------------------------------------
@@ -80,25 +144,65 @@ export function buildSquashPrompt(
     `## Instructions`,
     ``,
     `1. ${buildPrSyncInstructions(ctx.issueNumber)}`,
+    `2. Decide whether the work on this branch is best presented as`,
+    `   **one** commit or as **several** meaningful commits.  Inspect the`,
+    `   existing commits' scope, file overlap, and intent.`,
+    ``,
+    `   - **One commit is appropriate** when all changes belong to a`,
+    `     single logical change (typical small fix or feature).`,
+    `   - **Multiple commits are appropriate** when the branch contains`,
+    `     genuinely independent changes that benefit from separate`,
+    `     history (e.g. a refactor preceding a feature).`,
+    ``,
+    `3. Branch on your decision:`,
+    ``,
+    `   **If a single commit is appropriate:**`,
+    `   - Do NOT rewrite history.  Do NOT force-push.`,
+    `   - Draft the commit title and body that should be used when the`,
+    `     PR is squash-merged.  The title must not include issue or PR`,
+    `     numbers; reference the issue in the body using \`Closes #N\``,
+    `     or \`Part of #N\`.`,
+    `   - Update the PR body to include a marker-delimited block`,
+    `     containing the suggestion.  The block must be idempotent —`,
+    `     replace any existing block between the same markers, do not`,
+    `     stack duplicates.  Use exactly these markers:`,
+    ``,
+    `     \`\`\`text`,
+    `     ${SQUASH_SUGGESTION_START_MARKER}`,
+    `     ## Suggested squash commit`,
+    ``,
+    `     **Title:** <your title>`,
+    ``,
+    `     **Body:**`,
+    `     <your body — may include \`Closes #N\` / \`Part of #N\`>`,
+    `     ${SQUASH_SUGGESTION_END_MARKER}`,
+    `     \`\`\``,
+    ``,
+    `     Read the current body with`,
+    `     \`gh pr view --json body --jq .body\`, replace any prior`,
+    `     suggestion block, and write the result back via`,
+    `     \`gh pr edit --body "..."\`.`,
+    ``,
+    `   **If multiple commits are appropriate:**`,
     ...(ctx.baseSha
       ? [
-          `2. Review the commits after the base commit \`${ctx.baseSha}\` and`,
-          `   consolidate them into one or a few meaningful commits.  Only`,
-          `   commits introduced on this branch should be touched — do not`,
-          `   include commits from the base branch.  Use`,
-          `   \`git reset --soft ${ctx.baseSha}\` followed by \`git commit\`, or`,
-          `   an interactive rebase — whichever is simpler.`,
+          `   - Review the commits after the base commit \`${ctx.baseSha}\``,
+          `     and consolidate them into a few meaningful commits.  Only`,
+          `     commits introduced on this branch should be touched — do not`,
+          `     include commits from the base branch.  Use`,
+          `     \`git reset --soft ${ctx.baseSha}\` followed by \`git commit\`,`,
+          `     or an interactive rebase — whichever is simpler.`,
         ]
       : [
-          `2. Review all commits on this branch and consolidate them into one`,
-          `   or a few meaningful commits.  Use an interactive rebase or`,
-          `   reset-based approach — whichever is simpler.`,
+          `   - Review all commits on this branch and consolidate them into`,
+          `     a few meaningful commits.  Use an interactive rebase or`,
+          `     reset-based approach — whichever is simpler.`,
         ]),
-    `3. Write clear, concise commit messages that summarise the changes.`,
-    `   Do not include issue or PR numbers in the commit title.`,
-    `   Instead, reference the issue in the commit body using`,
-    `   \`Closes #N\` or \`Part of #N\`.`,
-    `4. Force-push the branch (\`git push --force-with-lease\`).`,
+    `   - Write clear, concise commit messages that summarise the changes.`,
+    `     Do not include issue or PR numbers in the commit title.`,
+    `     Instead, reference the issue in the commit body using`,
+    `     \`Closes #N\` or \`Part of #N\`.`,
+    `   - Force-push the branch (\`git push --force-with-lease\`).`,
   ];
 
   if (ctx.userInstruction) {
@@ -108,21 +212,199 @@ export function buildSquashPrompt(
   return lines.join("\n");
 }
 
-export const SQUASH_CHECK_KEYWORDS = ["COMPLETED", "BLOCKED"] as const;
+/**
+ * Three-way verdict keywords for the squash stage.  Kept out of the
+ * shared `KEYWORD_MAP` / `StepStatus` enum because they are
+ * squash-specific; the handler branches on the raw keyword from
+ * `parseVerdictKeyword` instead.
+ */
+export const SQUASH_CHECK_KEYWORDS = [
+  "SQUASHED_MULTI",
+  "SUGGESTED_SINGLE",
+  "BLOCKED",
+] as const;
+
+export type SquashVerdict = (typeof SQUASH_CHECK_KEYWORDS)[number];
 
 export function buildSquashCompletionCheckPrompt(): string {
   return [
-    `You have finished your squash attempt.  Please evaluate the result`,
-    `and respond with exactly one of the following keywords:`,
+    `You have finished your squash decision.  Respond with exactly one`,
+    `of the following keywords:`,
     ``,
-    `- COMPLETED — if the commits were squashed and force-pushed`,
-    `- BLOCKED — if you could not squash and need user intervention`,
+    `- SQUASHED_MULTI — if you rewrote history into multiple meaningful`,
+    `  commits and force-pushed`,
+    `- SUGGESTED_SINGLE — if a single commit is appropriate and you`,
+    `  wrote the suggested title/body into the PR body marker block`,
+    `  (no force-push)`,
+    `- BLOCKED — if you could not complete either path and need user`,
+    `  intervention`,
     ``,
     `Do not include any other commentary — just the keyword.`,
   ].join("\n");
 }
 
+/**
+ * Follow-up prompt sent on the same session when the user picks
+ * "agent squashes now" after a SUGGESTED_SINGLE verdict.  The agent
+ * already drafted the message in the PR body, so this just asks it
+ * to perform the squash with the same message.
+ */
+export function buildAgentSquashFollowupPrompt(): string {
+  return [
+    `The user chose to have you perform the squash now using the title`,
+    `and body you wrote into the PR body marker block.`,
+    ``,
+    `Squash the branch into a single commit using that exact title and`,
+    `body, then force-push (\`git push --force-with-lease\`).  You may`,
+    `leave the marker block in the PR body — it does not interfere with`,
+    `merging.`,
+  ].join("\n");
+}
+
+// ---- marker block parsing ----------------------------------------------------
+
+/**
+ * Extract the title and body from the squash suggestion marker block
+ * in `prBody`.  Returns `undefined` when the markers are missing or
+ * the block does not contain a parseable title.
+ */
+export function parseSquashSuggestionBlock(
+  prBody: string | undefined,
+): SquashSuggestion | undefined {
+  if (!prBody) return undefined;
+  const startIdx = prBody.indexOf(SQUASH_SUGGESTION_START_MARKER);
+  const endIdx = prBody.indexOf(SQUASH_SUGGESTION_END_MARKER);
+  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) return undefined;
+
+  const inner = prBody
+    .slice(startIdx + SQUASH_SUGGESTION_START_MARKER.length, endIdx)
+    .trim();
+
+  // Match `**Title:** <title>` on its own line.
+  const titleMatch = inner.match(/\*\*Title:\*\*\s*(.+?)\s*$/m);
+  if (!titleMatch) return undefined;
+  const title = titleMatch[1].trim();
+
+  // Body starts after `**Body:**`.
+  const bodyMarker = "**Body:**";
+  const bodyStart = inner.indexOf(bodyMarker);
+  let body = "";
+  if (bodyStart !== -1) {
+    body = inner.slice(bodyStart + bodyMarker.length).trim();
+  }
+
+  return { title, body };
+}
+
+/**
+ * True when `prBody` contains a fully parseable squash suggestion
+ * block (start + end markers AND a `**Title:**` line that
+ * `parseSquashSuggestionBlock` can extract).
+ *
+ * Stage 8 must use this strict check rather than a marker-presence
+ * check because Stage 9 reads the same block via
+ * `parseSquashSuggestionBlock` to render the inline preview.  If
+ * Stage 8 accepted a malformed block (e.g. only the start marker, or
+ * a block missing `**Title:**`/the end marker), the SUGGESTED_SINGLE
+ * path could complete with `applied_in_pr_body` while leaving Stage 9
+ * with nothing to show.
+ */
+function hasValidSuggestionBlock(prBody: string | undefined): boolean {
+  return parseSquashSuggestionBlock(prBody) !== undefined;
+}
+
 // ---- handler -----------------------------------------------------------------
+
+interface VerdictHandle {
+  verdict: SquashVerdict | undefined;
+  responseText: string;
+  sessionId: string | undefined;
+}
+
+/**
+ * Run the verdict prompt + one clarification retry.  Returns the
+ * resolved verdict (or `undefined` when both attempts were ambiguous)
+ * along with the latest response text and session id.
+ */
+async function resolveVerdict(
+  agent: AgentAdapter,
+  squashSessionId: string | undefined,
+  ctx: StageContext,
+  verdictCtx: VerdictContext | undefined,
+  worktreePath: string,
+): Promise<VerdictHandle | StageResult> {
+  const checkPrompt = buildSquashCompletionCheckPrompt();
+  ctx.promptSinks?.a?.(checkPrompt, "verdict-followup", { resume: true });
+  let checkResult = await sendFollowUp(
+    agent,
+    squashSessionId,
+    checkPrompt,
+    worktreePath,
+    ctx.streamSinks?.a,
+    undefined,
+    ctx.usageSinks?.a,
+  );
+
+  if (checkResult.status === "error") {
+    return mapAgentError(checkResult, "during squash completion check");
+  }
+
+  let verdict = parseVerdictKeyword(
+    checkResult.responseText,
+    SQUASH_CHECK_KEYWORDS,
+  ).keyword as SquashVerdict | undefined;
+
+  if (verdict !== undefined) {
+    verdictCtx?.events.emit("pipeline:verdict", {
+      agent: verdictCtx.agent,
+      keyword: verdict,
+      raw: checkResult.responseText,
+    });
+    return {
+      verdict,
+      responseText: checkResult.responseText,
+      sessionId: checkResult.sessionId ?? squashSessionId,
+    };
+  }
+
+  // Single clarification retry.
+  const clarifyPrompt = buildClarificationPrompt(
+    checkResult.responseText,
+    SQUASH_CHECK_KEYWORDS,
+  );
+  ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup", { resume: true });
+  const retryResult = await sendFollowUp(
+    agent,
+    checkResult.sessionId ?? squashSessionId,
+    clarifyPrompt,
+    worktreePath,
+    ctx.streamSinks?.a,
+    undefined,
+    ctx.usageSinks?.a,
+  );
+
+  if (retryResult.status === "error") {
+    return mapAgentError(retryResult, "during squash completion clarification");
+  }
+
+  checkResult = retryResult;
+  verdict = parseVerdictKeyword(checkResult.responseText, SQUASH_CHECK_KEYWORDS)
+    .keyword as SquashVerdict | undefined;
+
+  if (verdict !== undefined) {
+    verdictCtx?.events.emit("pipeline:verdict", {
+      agent: verdictCtx.agent,
+      keyword: verdict,
+      raw: checkResult.responseText,
+    });
+  }
+
+  return {
+    verdict,
+    responseText: checkResult.responseText,
+    sessionId: checkResult.sessionId ?? squashSessionId,
+  };
+}
 
 export function createSquashStageHandler(
   opts: SquashStageOptions,
@@ -133,24 +415,119 @@ export function createSquashStageHandler(
     primaryAgent: "a",
     requiresArtifact: true,
     handler: async (ctx: StageContext): Promise<StageResult> => {
+      const countCommits = opts.countBranchCommits ?? defaultCountBranchCommits;
+      const getPrBody = opts.getPrBody ?? defaultGetPrBody;
+
+      // Read the persisted agent-A session id (live) with a fallback
+      // to the one-shot pipeline value, so in-process retries can
+      // resume the same conversation.
+      const resolveSavedSessionId = (): string | undefined =>
+        opts.getSavedAgentSessionId?.() ?? ctx.savedAgentASessionId;
+
+      // ---- resume routing -------------------------------------------------
+      //
+      // Handle known post-planning substates FIRST so that the
+      // single-commit skip check below cannot mask a completed squash
+      // (where the branch now has only one commit because the agent
+      // already force-pushed).
+      //
+      // Resolve the saved sub-step through the getter (if supplied)
+      // so in-process retries see the live persisted value instead of
+      // a startup snapshot.
+      const saved =
+        typeof opts.savedSquashSubStep === "function"
+          ? opts.savedSquashSubStep()
+          : opts.savedSquashSubStep;
+
+      if (saved === "applied_in_pr_body") {
+        // Stage already finished via the SUGGESTED_SINGLE / github path.
+        return {
+          outcome: "completed",
+          message: t()["squash.messageAppended"],
+        };
+      }
+
+      if (saved === "ci_poll") {
+        return runCiPollAndFinish(ctx, opts);
+      }
+
+      if (saved === "squashing") {
+        // The user picked "agent squashes now" and the follow-up
+        // prompt was sent, but we were interrupted before
+        // transitioning to `ci_poll`.  Falling through to a fresh
+        // planning run would re-send the entire decision prompt and
+        // potentially trigger another force-push / CI cycle — the
+        // exact waste this feature is meant to avoid.
+        //
+        // Detect a completed squash deterministically (commit count
+        // collapsed to 1) and jump to CI polling.  Otherwise, reuse
+        // the saved session to re-send just the follow-up squash
+        // prompt so the agent continues the same conversation.
+        const resumeCount = countCommits(ctx.worktreePath, opts.defaultBranch);
+        if (resumeCount <= 1) {
+          return runCiPollAndFinish(ctx, opts);
+        }
+
+        const sessionId = resolveSavedSessionId();
+        if (sessionId !== undefined) {
+          const followupPrompt = buildAgentSquashFollowupPrompt();
+          ctx.promptSinks?.a?.(followupPrompt, "work", { resume: true });
+          const followup = await sendFollowUp(
+            opts.agent,
+            sessionId,
+            followupPrompt,
+            ctx.worktreePath,
+            ctx.streamSinks?.a,
+            undefined,
+            ctx.usageSinks?.a,
+          );
+
+          if (followup.sessionId) {
+            ctx.onSessionId?.("a", followup.sessionId);
+          }
+
+          if (followup.status === "error") {
+            return mapAgentError(
+              followup,
+              "during resumed agent squash follow-up",
+            );
+          }
+
+          return runCiPollAndFinish(ctx, opts);
+        }
+        // No session available — fall through to a fresh planning run
+        // as a last resort.  This should be rare: the session id is
+        // persisted alongside `squashSubStep`.
+      }
+
+      if (saved === "awaiting_user_choice") {
+        const prBody = getPrBody(ctx.owner, ctx.repo, ctx.branch);
+        if (hasValidSuggestionBlock(prBody)) {
+          return askUserAndApply(ctx, opts, undefined);
+        }
+        // Suggestion block missing or malformed — fall back to a
+        // fresh planning run rather than re-presenting a choice that
+        // the user could not act on.
+      }
+
       // Skip squash when the branch has only one commit.
-      const count = (opts.countBranchCommits ?? defaultCountBranchCommits)(
-        ctx.worktreePath,
-        opts.defaultBranch,
-      );
-      if (count <= 1) {
+      const initialCount = countCommits(ctx.worktreePath, opts.defaultBranch);
+      if (initialCount <= 1) {
+        opts.onSquashSubStep?.(undefined);
         return {
           outcome: "completed",
           message: t()["squash.singleCommitSkip"],
         };
       }
 
-      // Step 1: Send the squash prompt (resume if saved session).
+      // ---- planning: send the squash work prompt --------------------------
+      opts.onSquashSubStep?.("planning");
+
       const prompt = buildSquashPrompt(ctx, opts);
       ctx.promptSinks?.a?.(prompt, "work");
       const squashResult = await invokeOrResume(
         opts.agent,
-        ctx.savedAgentASessionId,
+        resolveSavedSessionId(),
         prompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
@@ -166,122 +543,206 @@ export function createSquashStageHandler(
         return mapAgentError(squashResult, "during squash");
       }
 
-      // Step 2: Completion check (same internal-clarification pattern as
-      // stage 4).
-      const squashCheckPrompt = buildSquashCompletionCheckPrompt();
-      ctx.promptSinks?.a?.(squashCheckPrompt, "verdict-followup", {
-        resume: true,
-      });
-      let checkResult = await sendFollowUp(
-        opts.agent,
-        squashResult.sessionId,
-        squashCheckPrompt,
-        ctx.worktreePath,
-        ctx.streamSinks?.a,
-        undefined,
-        ctx.usageSinks?.a,
-      );
-
-      if (checkResult.status === "error") {
-        return mapAgentError(checkResult, "during squash completion check");
-      }
-
+      // ---- verdict --------------------------------------------------------
       const verdictCtx: VerdictContext | undefined = ctx.events
         ? { events: ctx.events, agent: "a" }
         : undefined;
 
-      let result = mapResponseToResult(
-        checkResult.responseText,
-        undefined,
-        SQUASH_CHECK_KEYWORDS,
+      const handle = await resolveVerdict(
+        opts.agent,
+        squashResult.sessionId,
+        ctx,
         verdictCtx,
+        ctx.worktreePath,
       );
 
-      if (result.outcome === "needs_clarification") {
-        const clarifyPrompt = buildClarificationPrompt(
-          checkResult.responseText,
-          SQUASH_CHECK_KEYWORDS,
-        );
-        ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup", {
-          resume: true,
-        });
-        const retryResult = await sendFollowUp(
-          opts.agent,
-          checkResult.sessionId ?? squashResult.sessionId,
-          clarifyPrompt,
-          ctx.worktreePath,
-          ctx.streamSinks?.a,
-          undefined,
-          ctx.usageSinks?.a,
-        );
-
-        if (retryResult.status === "error") {
-          return mapAgentError(
-            retryResult,
-            "during squash completion clarification",
-          );
-        }
-
-        checkResult = retryResult;
-        result = mapResponseToResult(
-          checkResult.responseText,
-          undefined,
-          SQUASH_CHECK_KEYWORDS,
-          verdictCtx,
-        );
+      if ("outcome" in handle) {
+        // Agent error inside resolveVerdict — already a StageResult.
+        return handle;
       }
 
-      // If still ambiguous after the in-session retry, verify
-      // the squash actually happened by checking whether the
-      // commit count decreased.
-      if (result.outcome === "needs_clarification") {
-        const postCount = (
-          opts.countBranchCommits ?? defaultCountBranchCommits
-        )(ctx.worktreePath, opts.defaultBranch);
-        if (postCount < count) {
-          result = { outcome: "completed", message: result.message };
+      let verdict: SquashVerdict | undefined = handle.verdict;
+      const verdictResponseText = handle.responseText;
+      const verdictSessionId = handle.sessionId;
+
+      // Persist the latest session id from the verdict turn before
+      // potentially entering `awaiting_user_choice`.  Adapters may
+      // surface a new session id on follow-up turns (see
+      // `src/claude-adapter.ts`), so the verdict session can differ
+      // from the planning session that was persisted earlier at
+      // `squashResult.sessionId`.  Without this, a resume from
+      // `awaiting_user_choice` that routes the user's "agent" choice
+      // back to the older planning session would not continue the
+      // exact conversation that drafted the PR-body suggestion.
+      if (verdictSessionId) {
+        ctx.onSessionId?.("a", verdictSessionId);
+      }
+
+      // ---- post-clarification deterministic fallback chain -----------------
+      // Order matters: a completed force-push is the hard-to-undo side
+      // effect, so detect it first.  Only then check the suggestion
+      // block, because an earlier run may have left a stale block in
+      // the PR body that would otherwise be misclassified.  The block
+      // must be fully parseable (markers + `**Title:**`) — a malformed
+      // block is treated as missing because Stage 9 cannot render a
+      // preview from it.
+      if (verdict === undefined) {
+        const postCount = countCommits(ctx.worktreePath, opts.defaultBranch);
+        if (postCount < initialCount) {
+          verdict = "SQUASHED_MULTI";
         } else {
-          result = {
+          const prBody = getPrBody(ctx.owner, ctx.repo, ctx.branch);
+          if (hasValidSuggestionBlock(prBody)) {
+            verdict = "SUGGESTED_SINGLE";
+          } else {
+            verdict = "BLOCKED";
+          }
+        }
+        // The verdict was derived deterministically rather than parsed
+        // from the agent response, but telemetry consumers still need
+        // the `pipeline:verdict` event so the stage outcome is
+        // attributable.  The raw text is the last clarification
+        // response — the best signal we have for "what the agent said
+        // before we overrode it".
+        verdictCtx?.events.emit("pipeline:verdict", {
+          agent: verdictCtx.agent,
+          keyword: verdict,
+          raw: verdictResponseText,
+        });
+      }
+
+      // Branch on the resolved verdict.
+      if (verdict === "BLOCKED") {
+        opts.onSquashSubStep?.(undefined);
+        return {
+          outcome: "blocked",
+          message: `${squashResult.responseText}\n\n---\n\n${verdictResponseText}`,
+        };
+      }
+
+      if (verdict === "SUGGESTED_SINGLE") {
+        // Verify the PR body holds a fully parseable suggestion block
+        // before asking the user.  A bare start marker or a block
+        // missing `**Title:**`/the end marker would let the stage
+        // complete with `applied_in_pr_body` but leave Stage 9 unable
+        // to render the inline preview, so fail closed instead.
+        const prBody = getPrBody(ctx.owner, ctx.repo, ctx.branch);
+        if (!hasValidSuggestionBlock(prBody)) {
+          opts.onSquashSubStep?.(undefined);
+          return {
             outcome: "blocked",
-            message: `${squashResult.responseText}\n\n---\n\n${checkResult.responseText}`,
+            message: `${squashResult.responseText}\n\n---\n\n${verdictResponseText}`,
           };
         }
+        return askUserAndApply(ctx, opts, verdictSessionId);
       }
 
-      if (result.outcome === "blocked") {
-        result.message = `${squashResult.responseText}\n\n---\n\n${checkResult.responseText}`;
-        return result;
-      }
-
-      if (result.outcome !== "completed") {
-        return result;
-      }
-
-      // Step 3: Poll CI after force-push.
-      const ciResult: CiPollResult = await pollCiAndFix({
-        ctx,
-        agent: opts.agent,
-        issueTitle: opts.issueTitle,
-        issueBody: opts.issueBody,
-        getCiStatus: opts.getCiStatus ?? defaultGetCiStatus,
-        collectFailureLogs:
-          opts.collectFailureLogs ?? defaultCollectFailureLogs,
-        getHeadSha: opts.getHeadSha,
-        emptyRunsGracePeriodMs: opts.emptyRunsGracePeriodMs,
-        pollIntervalMs: opts.pollIntervalMs,
-        pollTimeoutMs: opts.pollTimeoutMs,
-        maxFixAttempts: opts.maxFixAttempts,
-        delay: opts.delay,
-      });
-
-      if (!ciResult.passed) {
-        return { outcome: "error", message: ciResult.message };
-      }
-
-      return {
-        outcome: "completed",
-        message: t()["squash.completed"],
-      };
+      // SQUASHED_MULTI — proceed with the existing CI poll path.
+      return runCiPollAndFinish(ctx, opts);
     },
+  };
+}
+
+/**
+ * Present the user with the SUGGESTED_SINGLE choice and dispatch.
+ * `verdictSessionId` is the session that just produced the verdict;
+ * it is needed when the user picks "agent" so the follow-up prompt
+ * is sent on the same conversation.
+ */
+async function askUserAndApply(
+  ctx: StageContext,
+  opts: SquashStageOptions,
+  verdictSessionId: string | undefined,
+): Promise<StageResult> {
+  opts.onSquashSubStep?.("awaiting_user_choice");
+
+  const choice = opts.chooseSquashApplyMode
+    ? await opts.chooseSquashApplyMode(t()["squash.singleChoicePrompt"])
+    : "agent";
+
+  if (choice === "github") {
+    opts.onSquashSubStep?.("applied_in_pr_body");
+    return {
+      outcome: "completed",
+      message: t()["squash.messageAppended"],
+    };
+  }
+
+  // User picked "agent" — send the follow-up squash prompt and run CI.
+  opts.onSquashSubStep?.("squashing");
+
+  const sessionId =
+    verdictSessionId ??
+    opts.getSavedAgentSessionId?.() ??
+    ctx.savedAgentASessionId;
+  if (sessionId === undefined) {
+    // Without a session we cannot ask the agent to continue.  The
+    // user explicitly chose "agent", so silently completing as if
+    // they had picked "github" would misrepresent what happened.
+    // Fail closed and let the user retry or switch paths.  This
+    // should be rare: both invoke and verdict normally produce
+    // session IDs that get persisted alongside `squashSubStep`.
+    opts.onSquashSubStep?.(undefined);
+    return {
+      outcome: "blocked",
+      message: t()["squash.agentChoiceMissingSession"],
+    };
+  }
+
+  const followupPrompt = buildAgentSquashFollowupPrompt();
+  ctx.promptSinks?.a?.(followupPrompt, "work", { resume: true });
+  const followup = await sendFollowUp(
+    opts.agent,
+    sessionId,
+    followupPrompt,
+    ctx.worktreePath,
+    ctx.streamSinks?.a,
+    undefined,
+    ctx.usageSinks?.a,
+  );
+
+  if (followup.sessionId) {
+    ctx.onSessionId?.("a", followup.sessionId);
+  }
+
+  if (followup.status === "error") {
+    return mapAgentError(followup, "during agent squash follow-up");
+  }
+
+  return runCiPollAndFinish(ctx, opts);
+}
+
+/**
+ * Poll CI after a force-push and return the final stage result.
+ */
+async function runCiPollAndFinish(
+  ctx: StageContext,
+  opts: SquashStageOptions,
+): Promise<StageResult> {
+  opts.onSquashSubStep?.("ci_poll");
+
+  const ciResult: CiPollResult = await pollCiAndFix({
+    ctx,
+    agent: opts.agent,
+    issueTitle: opts.issueTitle,
+    issueBody: opts.issueBody,
+    getCiStatus: opts.getCiStatus ?? defaultGetCiStatus,
+    collectFailureLogs: opts.collectFailureLogs ?? defaultCollectFailureLogs,
+    getHeadSha: opts.getHeadSha,
+    emptyRunsGracePeriodMs: opts.emptyRunsGracePeriodMs,
+    pollIntervalMs: opts.pollIntervalMs,
+    pollTimeoutMs: opts.pollTimeoutMs,
+    maxFixAttempts: opts.maxFixAttempts,
+    delay: opts.delay,
+  });
+
+  if (!ciResult.passed) {
+    return { outcome: "error", message: ciResult.message };
+  }
+
+  opts.onSquashSubStep?.(undefined);
+  return {
+    outcome: "completed",
+    message: t()["squash.completed"],
   };
 }

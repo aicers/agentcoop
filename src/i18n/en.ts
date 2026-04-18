@@ -141,6 +141,12 @@ export const en: Messages = {
     `Pipeline for ${owner}/${repo}#${issue} completed.`,
   "pipeline.mergeConfirm":
     "Has the PR been merged? Confirm to clean up the worktree.",
+  "pipeline.mergeConfirmSquashTip":
+    "If this repo allows 'Squash and merge', the suggested commit " +
+    "message is in the PR body.",
+  "pipeline.suggestedSquashTitle": (title) => `Suggested title: ${title}`,
+  "pipeline.suggestedSquashBody": "Suggested body:",
+  "pipeline.prUrl": (url) => `PR: ${url}`,
   "pipeline.worktreeCleanedUp": "Worktree cleaned up.",
   "pipeline.worktreePreserved": "Worktree preserved (merge not confirmed).",
   "pipeline.conflictsDetected":
@@ -249,6 +255,20 @@ export const en: Messages = {
   "ci.agentError": (detail) => `Agent error during CI fix: ${detail}`,
   "squash.completed": "Commits squashed and CI passed.",
   "squash.singleCommitSkip": "Single commit — skipping squash.",
+  "squash.messageAppended":
+    "Suggested squash commit message written to PR body. " +
+    "Apply it via GitHub's 'Squash and merge' at merge time.",
+  "squash.singleChoicePrompt":
+    "A single squash commit looks appropriate. " +
+    "How should the suggested message be applied?",
+  "squash.singleChoiceAgent":
+    "Let agent squash now (force-push, runs CI again)",
+  "squash.singleChoiceGithub":
+    "Apply via GitHub 'Squash and merge' at merge time (no CI rerun)",
+  "squash.agentChoiceMissingSession":
+    "Cannot perform the squash: the agent session required to continue " +
+    "the conversation was lost. Re-run stage 8 or apply the suggestion " +
+    "via GitHub's 'Squash and merge' at merge time.",
   "review.approved": (round) => `Review approved at round ${round}.`,
   "review.unresolvedItems": (base, summary) =>
     `${base}\n\nUnresolved items:\n${summary}`,
