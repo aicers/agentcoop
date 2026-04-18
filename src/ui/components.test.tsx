@@ -3448,7 +3448,7 @@ describe("AgentPane diagnostic rendering", () => {
     expect(frame).toContain("Implement");
   });
 
-  test("prepends Stage 1 enter divider and bootstrap log rows on mount", async () => {
+  test("prepends full Stage 1 retrospective block on mount", async () => {
     const emitter = new PipelineEventEmitter();
     const bootstrapLog = [
       { timestamp: "10:00:00", message: "Bootstrapping repository..." },
@@ -3465,6 +3465,7 @@ describe("AgentPane diagnostic rendering", () => {
           emitter={emitter}
           color="blue"
           bootstrapLog={bootstrapLog}
+          firstExecutingStage={2}
         />
       </Box>,
     );
@@ -3477,11 +3478,16 @@ describe("AgentPane diagnostic rendering", () => {
     expect(frame).toContain(
       "[10:00:01] Pipeline: Worktree ready at /tmp/wt (branch: alice/issue-42)",
     );
+    // Closing Stage 1 \u2192 Stage N divider must already be visible at mount,
+    // before any real stage:enter arrives.
+    expect(frame).toContain(
+      "Stage 1 (Bootstrap) \u2192 Stage 2 (Implement) [outcome: completed]",
+    );
     // No placeholder should appear when Stage 1 rows are the only contents.
     expect(frame).not.toContain("waiting for output");
   });
 
-  test("bootstrap replay pre-arms the Stage 1 transition divider", async () => {
+  test("seeds Stage 1 transition with the resolved first executing stage on resume", async () => {
     const emitter = new PipelineEventEmitter();
     const bootstrapLog = [
       { timestamp: "09:00:00", message: "Bootstrapping repository..." },
@@ -3494,10 +3500,20 @@ describe("AgentPane diagnostic rendering", () => {
           emitter={emitter}
           color="blue"
           bootstrapLog={bootstrapLog}
+          firstExecutingStage={5}
         />
       </Box>,
     );
-    // First real stage:enter should produce a Stage 1 → Stage N transition.
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Transition divider is present at mount (before any stage:enter fires).
+    const mountFrame = lastFrame() ?? "";
+    expect(mountFrame).toContain(
+      "Stage 1 (Bootstrap) \u2192 Stage 5 (CI check) [outcome: completed]",
+    );
+
+    // The first real stage:enter for the same stage must be silently
+    // consumed so we don't emit a duplicate "Entering Stage 5" row.
     emitter.emit("stage:enter", {
       stageNumber: 5,
       stageName: "CI check",
@@ -3505,14 +3521,10 @@ describe("AgentPane diagnostic rendering", () => {
     });
     await new Promise((r) => setTimeout(r, 50));
 
-    const frame = lastFrame() ?? "";
-    expect(frame).toContain(
-      "Stage 1 (Bootstrap) \u2192 Stage 5 (CI check) [outcome: completed]",
-    );
-    // The transition divider counts as bootstrap content too, so the full
-    // Stage 1 block stays intact with no placeholder above it until real
-    // pane output begins.
-    expect(frame).not.toContain("waiting for output");
+    const afterFrame = lastFrame() ?? "";
+    expect(afterFrame).not.toContain("Entering Stage 5");
+    // No placeholder above the Stage 1 block.
+    expect(afterFrame).not.toContain("waiting for output");
   });
 
   test("Agent B idle placeholder returns after Stage 1 rows are not the only contents", async () => {
@@ -3528,15 +3540,17 @@ describe("AgentPane diagnostic rendering", () => {
           emitter={emitter}
           color="green"
           bootstrapLog={bootstrapLog}
+          firstExecutingStage={2}
         />
       </Box>,
     );
-    // On mount: only Stage 1 rows, so no placeholder.
+    // On mount: full Stage 1 block (enter + bootstrap lines + transition),
+    // all flagged as bootstrap, so no placeholder.
     await new Promise((r) => setTimeout(r, 50));
     expect(lastFrame() ?? "").not.toContain("idle");
 
-    // First stage:enter completes the Stage 1 retrospective; the resulting
-    // transition divider is still bootstrap content, so no placeholder yet.
+    // The first real stage:enter for the same stage is silently consumed,
+    // so pane contents remain bootstrap-only and no placeholder appears.
     emitter.emit("stage:enter", {
       stageNumber: 2,
       stageName: "Implement",

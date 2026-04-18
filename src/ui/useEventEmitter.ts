@@ -10,6 +10,7 @@ import type {
   StageEnterEvent,
   StageExitEvent,
 } from "../pipeline-events.js";
+import { stageDisplayName } from "./StatusBar.js";
 
 /** Return a HH:MM:SS timestamp string for the current time. */
 function hhmmss(): string {
@@ -76,11 +77,19 @@ export interface UseAgentLinesOptions {
   /**
    * Buffered Stage 1 (Bootstrap) log entries.  When provided and
    * non-empty, the hook prepends a Stage 1 enter divider, then each
-   * entry as a non-global bootstrap diagnostic, then pre-arms the
-   * transition so the next `stage:enter` produces a
-   * "Stage 1 \u2192 Stage N" divider naturally.
+   * entry as a non-global bootstrap diagnostic.  When
+   * `firstExecutingStage` is also known, it also appends the closing
+   * "Stage 1 (Bootstrap) \u2192 Stage N" transition divider in the
+   * same initial mount so the full retrospective Stage 1 block is
+   * visible before any real stage event arrives.
    */
   bootstrapLog?: readonly BootstrapLogEntry[];
+  /**
+   * First stage that will actually execute in this run.  Used to
+   * render the closing Stage 1 \u2192 Stage N transition divider as
+   * part of the initial seed when `bootstrapLog` is provided.
+   */
+  firstExecutingStage?: number;
 }
 
 export function useAgentLines(
@@ -94,6 +103,7 @@ export function useAgentLines(
       : optionsOrMaxLines;
   const maxLines = options.maxLines ?? 500;
   const bootstrapLog = options.bootstrapLog;
+  const firstExecutingStage = options.firstExecutingStage;
 
   // Seed initial lines with the Stage 1 (Bootstrap) timeline so the
   // user sees a complete stage sequence starting from Stage 1.  This
@@ -102,6 +112,7 @@ export function useAgentLines(
     if (!bootstrapLog || bootstrapLog.length === 0) return [];
     const m = t();
     const bootstrapName = m["stage.bootstrap"];
+    const lastTs = bootstrapLog[bootstrapLog.length - 1].timestamp;
     const seeded: LineEntry[] = [
       {
         kind: "diagnostic",
@@ -117,6 +128,18 @@ export function useAgentLines(
         bootstrap: true,
       })),
     ];
+    if (firstExecutingStage !== undefined) {
+      const nextName =
+        stageDisplayName(firstExecutingStage, m) ??
+        `Stage ${firstExecutingStage}`;
+      seeded.push({
+        kind: "diagnostic",
+        timestamp: lastTs,
+        message: `Stage 1 (${bootstrapName}) \u2192 Stage ${firstExecutingStage} (${nextName}) [outcome: completed]`,
+        global: true,
+        bootstrap: true,
+      });
+    }
     return seeded;
   };
 
@@ -207,57 +230,54 @@ export function useAgentLines(
     maxLinesRef.current = maxLines;
   }, [maxLines]);
 
-  const pushDiagnostic = useRef(
-    (message: string, global?: boolean, bootstrap?: boolean) => {
-      const now = hhmmss();
-      const base: DiagnosticBlock = {
-        kind: "diagnostic",
-        timestamp: now,
-        message,
-        ...(global ? { global: true } : {}),
-        ...(bootstrap ? { bootstrap: true } : {}),
-      };
-      // Flush any pending partial line before inserting the diagnostic
-      // so it appears in the correct chronological position.
-      if (bufferRef.current) {
-        const pending = bufferRef.current;
-        bufferRef.current = "";
-        setPendingLine("");
-        setLines((prev) => {
-          const next: LineEntry[] = [...prev, pending, base];
-          return next.length > maxLinesRef.current
-            ? next.slice(-maxLinesRef.current)
-            : next;
-        });
-      } else {
-        setLines((prev) => {
-          // Deduplicate: if the last entry is a diagnostic with the same
-          // message and global flag, update it in place with an
-          // incremented count and the latest timestamp.
-          const last = prev.length > 0 ? prev[prev.length - 1] : undefined;
-          if (
-            last != null &&
-            typeof last !== "string" &&
-            last.kind === "diagnostic" &&
-            last.message === message &&
-            (last.global ?? false) === (global ?? false)
-          ) {
-            const updated: DiagnosticBlock = {
-              ...last,
-              timestamp: now,
-              count: (last.count ?? 1) + 1,
-            };
-            const next: LineEntry[] = [...prev.slice(0, -1), updated];
-            return next;
-          }
-          const next: LineEntry[] = [...prev, base];
-          return next.length > maxLinesRef.current
-            ? next.slice(-maxLinesRef.current)
-            : next;
-        });
-      }
-    },
-  );
+  const pushDiagnostic = useRef((message: string, global?: boolean) => {
+    const now = hhmmss();
+    const base: DiagnosticBlock = {
+      kind: "diagnostic",
+      timestamp: now,
+      message,
+      ...(global ? { global: true } : {}),
+    };
+    // Flush any pending partial line before inserting the diagnostic
+    // so it appears in the correct chronological position.
+    if (bufferRef.current) {
+      const pending = bufferRef.current;
+      bufferRef.current = "";
+      setPendingLine("");
+      setLines((prev) => {
+        const next: LineEntry[] = [...prev, pending, base];
+        return next.length > maxLinesRef.current
+          ? next.slice(-maxLinesRef.current)
+          : next;
+      });
+    } else {
+      setLines((prev) => {
+        // Deduplicate: if the last entry is a diagnostic with the same
+        // message and global flag, update it in place with an
+        // incremented count and the latest timestamp.
+        const last = prev.length > 0 ? prev[prev.length - 1] : undefined;
+        if (
+          last != null &&
+          typeof last !== "string" &&
+          last.kind === "diagnostic" &&
+          last.message === message &&
+          (last.global ?? false) === (global ?? false)
+        ) {
+          const updated: DiagnosticBlock = {
+            ...last,
+            timestamp: now,
+            count: (last.count ?? 1) + 1,
+          };
+          const next: LineEntry[] = [...prev.slice(0, -1), updated];
+          return next;
+        }
+        const next: LineEntry[] = [...prev, base];
+        return next.length > maxLinesRef.current
+          ? next.slice(-maxLinesRef.current)
+          : next;
+      });
+    }
+  });
 
   // --- Diagnostic event subscriptions ---
 
@@ -277,24 +297,22 @@ export function useAgentLines(
   // Buffer exit events and merge with the following enter to produce a single
   // transition line like "Stage 7 (Review) → Stage 8 (Squash) [outcome: completed]".
   //
-  // When bootstrap (Stage 1) ran before the TUI mounted, pre-arm the
-  // pending exit with a synthetic "Stage 1 exited" so the first real
-  // stage:enter emits a "Stage 1 (Bootstrap) \u2192 Stage N (...)" divider.
+  // When bootstrap (Stage 1) ran before the TUI mounted and
+  // `firstExecutingStage` is known, the Stage 1 \u2192 Stage N
+  // transition divider is already part of the initial seed.  In that
+  // case, silently consume the first real `stage:enter` so we don't
+  // emit a duplicate "Entering Stage N" line for the same event.
   const pendingExitRef = useRef<{
     stageNumber: number;
     stageName: string | undefined;
     outcome: string;
-    /** True if this exit was synthesized from the Stage 1 bootstrap replay. */
-    bootstrap?: boolean;
-  } | null>(
-    bootstrapLog && bootstrapLog.length > 0
-      ? {
-          stageNumber: 1,
-          stageName: t()["stage.bootstrap"],
-          outcome: "completed",
-          bootstrap: true,
-        }
-      : null,
+  } | null>(null);
+  const suppressFirstEnterRef = useRef(
+    !!(
+      bootstrapLog &&
+      bootstrapLog.length > 0 &&
+      firstExecutingStage !== undefined
+    ),
   );
 
   useEffect(() => {
@@ -306,6 +324,10 @@ export function useAgentLines(
       };
     };
     const enterHandler = (ev: StageEnterEvent) => {
+      if (suppressFirstEnterRef.current) {
+        suppressFirstEnterRef.current = false;
+        return;
+      }
       const pending = pendingExitRef.current;
       pendingExitRef.current = null;
       if (pending) {
@@ -315,7 +337,6 @@ export function useAgentLines(
         pushDiagnostic.current(
           `${from} → Stage ${ev.stageNumber} (${ev.stageName}) [outcome: ${pending.outcome}]`,
           true,
-          pending.bootstrap,
         );
       } else {
         pushDiagnostic.current(

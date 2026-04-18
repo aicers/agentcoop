@@ -132,6 +132,12 @@ interface AgentPaneProps {
    * visible symmetrically.
    */
   bootstrapLog?: readonly BootstrapLogEntry[];
+  /**
+   * First stage that will actually execute in this run.  Used to
+   * render the closing Stage 1 \u2192 Stage N transition divider as
+   * part of the initial mount when `bootstrapLog` is provided.
+   */
+  firstExecutingStage?: number;
 }
 
 export function AgentPane({
@@ -145,9 +151,11 @@ export function AgentPane({
   arrowScrollEnabled = false,
   showSeparator = true,
   bootstrapLog,
+  firstExecutingStage,
 }: AgentPaneProps) {
   const { lines, pendingLine } = useAgentLines(emitter, agent, {
     bootstrapLog,
+    firstExecutingStage,
   });
   const contentRef = useRef<DOMElement>(null);
   const [visibleRows, setVisibleRows] = useState(0);

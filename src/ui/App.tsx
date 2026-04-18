@@ -503,6 +503,7 @@ export function App({
           arrowScrollEnabled={!inputRequest}
           showSeparator={flags.showPaneSeparator}
           bootstrapLog={bootstrapLog}
+          firstExecutingStage={firstExecutingStage}
         />
         <AgentPane
           label={labelB}
@@ -515,6 +516,7 @@ export function App({
           arrowScrollEnabled={!inputRequest}
           showSeparator={flags.showPaneSeparator}
           bootstrapLog={bootstrapLog}
+          firstExecutingStage={firstExecutingStage}
         />
       </Box>
 
