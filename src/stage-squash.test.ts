@@ -722,7 +722,7 @@ describe("createSquashStageHandler", () => {
   // -- SUGGESTED_SINGLE: user picks "agent" ----------------------------------
 
   test("SUGGESTED_SINGLE + user picks agent → follow-up + CI poll runs", async () => {
-    const prBodyWithMarker = `Hello\n${SQUASH_SUGGESTION_START_MARKER}\n## Suggested squash commit\n\n**Title:** My title\n\n**Body:**\nLine\n${SQUASH_SUGGESTION_END_MARKER}`;
+    const prBodyWithMarker = `Hello\n${SQUASH_SUGGESTION_START_MARKER}\n## Suggested squash commit\n\n**Title**\n\n\`\`\`text\nMy title\n\`\`\`\n\n**Body**\n\n\`\`\`text\nLine\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
     let resumeCall = 0;
     const resumeResults = [
       makeStream(makeResult({ responseText: "SUGGESTED_SINGLE" })),
@@ -770,7 +770,7 @@ describe("createSquashStageHandler", () => {
   // -- SUGGESTED_SINGLE: user picks "github" ---------------------------------
 
   test("SUGGESTED_SINGLE + user picks github → no CI poll, applied_in_pr_body", async () => {
-    const prBodyWithMarker = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** T\n\n**Body:**\nB\n${SQUASH_SUGGESTION_END_MARKER}`;
+    const prBodyWithMarker = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nT\n\`\`\`\n\n**Body**\n\n\`\`\`text\nB\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
     const agent: AgentAdapter = {
       invoke: vi
         .fn()
@@ -836,7 +836,7 @@ describe("createSquashStageHandler", () => {
   // -- PR already merged short-circuit ---------------------------------------
 
   test("SUGGESTED_SINGLE + PR already merged before user prompt → alreadyMerged, no chooseSquashApplyMode call", async () => {
-    const prBodyWithMarker = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** T\n\n**Body:**\nB\n${SQUASH_SUGGESTION_END_MARKER}`;
+    const prBodyWithMarker = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nT\n\`\`\`\n\n**Body**\n\n\`\`\`text\nB\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
     const agent: AgentAdapter = {
       invoke: vi
         .fn()
@@ -877,7 +877,7 @@ describe("createSquashStageHandler", () => {
   });
 
   test("user picks agent, but PR merges between query and follow-up → alreadyMerged, no sendFollowUp call", async () => {
-    const prBodyWithMarker = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** T\n\n**Body:**\nB\n${SQUASH_SUGGESTION_END_MARKER}`;
+    const prBodyWithMarker = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nT\n\`\`\`\n\n**Body**\n\n\`\`\`text\nB\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
     const agent: AgentAdapter = {
       invoke: vi
         .fn()
@@ -954,7 +954,7 @@ describe("createSquashStageHandler", () => {
     }
 
     test("count decreased AND marker present → SQUASHED_MULTI (count wins)", async () => {
-      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** stale\n\n**Body:**\nstale body\n${SQUASH_SUGGESTION_END_MARKER}`;
+      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nstale\n\`\`\`\n\n**Body**\n\n\`\`\`text\nstale body\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
       const opts = makeOpts({
         agent: makeAmbiguousAgent(),
         countBranchCommits: vi
@@ -970,7 +970,7 @@ describe("createSquashStageHandler", () => {
     });
 
     test("count unchanged AND marker present → SUGGESTED_SINGLE", async () => {
-      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** suggested\n\n**Body:**\nsuggested body\n${SQUASH_SUGGESTION_END_MARKER}`;
+      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nsuggested\n\`\`\`\n\n**Body**\n\n\`\`\`text\nsuggested body\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
       const chooseSquashApplyMode = vi.fn().mockResolvedValue("github");
       const opts = makeOpts({
         agent: makeAmbiguousAgent(),
@@ -1018,7 +1018,7 @@ describe("createSquashStageHandler", () => {
     });
 
     test("awaiting_user_choice with marker present → re-presents user choice", async () => {
-      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** T\n\n**Body:**\nB\n${SQUASH_SUGGESTION_END_MARKER}`;
+      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nT\n\`\`\`\n\n**Body**\n\n\`\`\`text\nB\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
       const chooseSquashApplyMode = vi.fn().mockResolvedValue("github");
       const opts = makeOpts({
         savedSquashSubStep: "awaiting_user_choice",
@@ -1036,7 +1036,7 @@ describe("createSquashStageHandler", () => {
     // available must be blocked, not silently routed to the github
     // completion message (which would misrepresent what happened).
     test("awaiting_user_choice + user picks agent + no session → blocked", async () => {
-      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** T\n\n**Body:**\nB\n${SQUASH_SUGGESTION_END_MARKER}`;
+      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nT\n\`\`\`\n\n**Body**\n\n\`\`\`text\nB\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
       const chooseSquashApplyMode = vi.fn().mockResolvedValue("agent");
       const onSquashSubStep = vi.fn();
       const getCiStatus = vi.fn();
@@ -1289,7 +1289,7 @@ describe("createSquashStageHandler", () => {
   // drafted the PR-body suggestion — not the older planning session.
   describe("verdict session id persistence", () => {
     test("SUGGESTED_SINGLE persists verdict session (distinct from planning) before awaiting choice", async () => {
-      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** T\n\n**Body:**\nB\n${SQUASH_SUGGESTION_END_MARKER}`;
+      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nT\n\`\`\`\n\n**Body**\n\n\`\`\`text\nB\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
       const invoke = vi.fn().mockReturnValue(
         makeStream(
           makeResult({
@@ -1348,7 +1348,7 @@ describe("createSquashStageHandler", () => {
     });
 
     test("resume from awaiting_user_choice + user picks agent resumes the verdict session id via getSavedAgentSessionId", async () => {
-      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** T\n\n**Body:**\nB\n${SQUASH_SUGGESTION_END_MARKER}`;
+      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nT\n\`\`\`\n\n**Body**\n\n\`\`\`text\nB\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
       const resume = vi.fn().mockReturnValue(
         makeStream(
           makeResult({
@@ -1432,7 +1432,7 @@ describe("createSquashStageHandler", () => {
     });
 
     test("emits SUGGESTED_SINGLE when marker block is present", async () => {
-      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** s\n\n**Body:**\ns body\n${SQUASH_SUGGESTION_END_MARKER}`;
+      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\ns\n\`\`\`\n\n**Body**\n\n\`\`\`text\ns body\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
       const events = new PipelineEventEmitter();
       const handler = vi.fn();
       events.on("pipeline:verdict", handler);
@@ -1471,14 +1471,14 @@ describe("createSquashStageHandler", () => {
   // Stage 9 reads the block via `parseSquashSuggestionBlock` to render
   // the inline preview, so Stage 8 must reject any block the parser
   // cannot handle (start marker only, missing end marker, missing
-  // `**Title:**`).  Otherwise the SUGGESTED_SINGLE path completes with
-  // `applied_in_pr_body` and Stage 9 has nothing to show.
+  // `**Title**` label).  Otherwise the SUGGESTED_SINGLE path completes
+  // with `applied_in_pr_body` and Stage 9 has nothing to show.
   describe("malformed suggestion block", () => {
     function makeMalformedBodies(): Array<{ name: string; body: string }> {
       return [
         {
           name: "start marker only (no end marker)",
-          body: `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** T\n**Body:**\nB`,
+          body: `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nT\n\`\`\`\n\n**Body**\n\n\`\`\`text\nB\n\`\`\``,
         },
         {
           name: "both markers but no Title line",
@@ -1745,131 +1745,9 @@ describe("parseSquashSuggestionBlock", () => {
     expect(parseSquashSuggestionBlock(body)).toBeUndefined();
   });
 
-  test("returns undefined when fenced-intent block has legacy-looking prose inside an unterminated fence", () => {
-    // Regression: a malformed fenced block whose contents happen to
-    // contain `**Title:**` / `**Body:**` strings must not be rescued
-    // by the legacy-format fallback.  The new-format `**Title**`
-    // label signals fenced intent, so the block must strictly fail
-    // rather than silently parse the prose as a legacy block.
-    const body = [
-      SQUASH_SUGGESTION_START_MARKER,
-      "## Suggested squash commit",
-      "",
-      "**Title**",
-      "",
-      "```text",
-      "Broken suggestion",
-      "",
-      "**Title:** this is just prose inside the broken fence",
-      "",
-      "**Body:**",
-      "still just prose inside the same broken fence",
-      SQUASH_SUGGESTION_END_MARKER,
-    ].join("\n");
-    expect(parseSquashSuggestionBlock(body)).toBeUndefined();
-  });
-
-  // ---- legacy format (deprecated, one release cycle) ------------------------
-
-  test("parses the deprecated legacy `**Title:**` / `**Body:**` format", () => {
-    const body = `noise\n${SQUASH_SUGGESTION_START_MARKER}\n## Suggested squash commit\n\n**Title:** Fix widget rendering\n\n**Body:**\nFirst line.\n\nCloses #42\n${SQUASH_SUGGESTION_END_MARKER}\nmore noise`;
-    expect(parseSquashSuggestionBlock(body)).toEqual({
-      title: "Fix widget rendering",
-      body: "First line.\n\nCloses #42",
-    });
-  });
-
-  test("legacy format parses when body contains a standalone `**Title**` line", () => {
-    // Regression: a valid legacy block whose body happens to include a
-    // standalone `**Title**` line (the new-format label) must still
-    // parse as legacy.  The format selector must key off the actual
-    // top-level fenced shape (label + opening fence), not the mere
-    // presence of `**Title**` anywhere inside the block.
-    const body = [
-      SQUASH_SUGGESTION_START_MARKER,
-      "## Suggested squash commit",
-      "",
-      "**Title:** Fix widget rendering",
-      "",
-      "**Body:**",
-      "Intro paragraph.",
-      "",
-      "**Title**",
-      "",
-      "Closes #42",
-      SQUASH_SUGGESTION_END_MARKER,
-    ].join("\n");
-    expect(parseSquashSuggestionBlock(body)).toEqual({
-      title: "Fix widget rendering",
-      body: "Intro paragraph.\n\n**Title**\n\nCloses #42",
-    });
-  });
-
-  test("legacy format parses when body contains `**Title**` immediately followed by a fenced block", () => {
-    // Regression: a valid legacy block whose body includes a
-    // standalone `**Title**` line directly followed by a fenced code
-    // sample must still parse as legacy.  The format selector must key
-    // off whichever top-level title label appears *first* in the
-    // block; the legacy `**Title:**` at the top wins over any later
-    // `**Title**` + fence shape found inside the legacy body.
-    const body = [
-      SQUASH_SUGGESTION_START_MARKER,
-      "## Suggested squash commit",
-      "",
-      "**Title:** Fix widget rendering",
-      "",
-      "**Body:**",
-      "Intro paragraph.",
-      "",
-      "**Title**",
-      "",
-      "```text",
-      "example",
-      "```",
-      "",
-      "Closes #42",
-      SQUASH_SUGGESTION_END_MARKER,
-    ].join("\n");
-    expect(parseSquashSuggestionBlock(body)).toEqual({
-      title: "Fix widget rendering",
-      body: "Intro paragraph.\n\n**Title**\n\n```text\nexample\n```\n\nCloses #42",
-    });
-  });
-
-  test("legacy format returns undefined when the `**Body:**` label is missing", () => {
-    // Regression: the legacy parser must require both labels on their
-    // own top-level lines.  A block with `**Title:** ...` but no
-    // `**Body:**` label is syntactically malformed and must fail so
-    // the Stage 8 strict gate blocks instead of silently accepting.
-    const body = [
-      SQUASH_SUGGESTION_START_MARKER,
-      "## Suggested squash commit",
-      "",
-      "**Title:** Fix widget rendering",
-      "",
-      "This forgot the body label entirely.",
-      SQUASH_SUGGESTION_END_MARKER,
-    ].join("\n");
-    expect(parseSquashSuggestionBlock(body)).toBeUndefined();
-  });
-
-  test("legacy format returns undefined when labels appear only inside prose", () => {
-    // Regression: stray `**Title:**` / `**Body:**` strings that appear
-    // mid-line inside prose must not be mistaken for real top-level
-    // legacy labels.  Both labels must be line-anchored.
-    const body = [
-      SQUASH_SUGGESTION_START_MARKER,
-      "## Suggested squash commit",
-      "",
-      "This paragraph mentions **Title:** inline and **Body:** inline too.",
-      SQUASH_SUGGESTION_END_MARKER,
-    ].join("\n");
-    expect(parseSquashSuggestionBlock(body)).toBeUndefined();
-  });
-
   // ---- malformed / missing --------------------------------------------------
 
-  test("returns undefined when the block is neither fenced nor legacy", () => {
+  test("returns undefined when the block has no title label or fence", () => {
     const body = [
       SQUASH_SUGGESTION_START_MARKER,
       "## Suggested squash commit",
