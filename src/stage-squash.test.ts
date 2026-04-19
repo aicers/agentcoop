@@ -1771,4 +1771,29 @@ describe("parseSquashSuggestionBlock", () => {
     const body = `${SQUASH_SUGGESTION_START_MARKER}\nNo title here\n${SQUASH_SUGGESTION_END_MARKER}`;
     expect(parseSquashSuggestionBlock(body)).toBeUndefined();
   });
+
+  // ---- legacy format rejection (regression) --------------------------------
+
+  // The deprecated `**Title:** …` / `**Body:** …` plain-text format was
+  // supported for one release cycle for backward compatibility with PRs
+  // already in `applied_in_pr_body` state.  Parsing it is now a hard
+  // rejection — this test pins the new contract directly so the legacy
+  // branch cannot silently reappear.
+  test("returns undefined for a legacy `**Title:** … / **Body:** …` block", () => {
+    const body = [
+      "noise",
+      SQUASH_SUGGESTION_START_MARKER,
+      "## Suggested squash commit",
+      "",
+      "**Title:** Fix widget rendering",
+      "",
+      "**Body:**",
+      "First line.",
+      "",
+      "Closes #42",
+      SQUASH_SUGGESTION_END_MARKER,
+      "more noise",
+    ].join("\n");
+    expect(parseSquashSuggestionBlock(body)).toBeUndefined();
+  });
 });
