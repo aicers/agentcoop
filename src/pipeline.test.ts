@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { createDonePromptOptions } from "./done-prompt-options.js";
 import type {
   PipelineOptions,
   StageContext,
@@ -1277,6 +1278,116 @@ describe("createDoneStageHandler", () => {
     const [message, hotkeys] = confirmMerge.mock.calls[0] as [string, unknown];
     expect(message).not.toContain("{{hk:");
     expect(hotkeys).toBeUndefined();
+  });
+
+  // Regression for #272: exercises the real prompt-options factory from
+  // `src/done-prompt-options.ts` (the same function `src/index.ts` uses)
+  // end-to-end through the Stage 9 MERGEABLE path.  If the `confirmMerge`
+  // wrapper ever drops the `hotkeys` argument again — the original defect
+  // that leaked `{{hk:...}}` sentinel tokens to the TUI — the inner
+  // `tuiPrompt.confirmMerge` spy will receive `undefined` for its second
+  // argument and this test fails.
+  //
+  // The factory is called with a late-bound getter that initially returns
+  // `undefined` and only resolves to the spy-backed prompt after the
+  // factory has been installed into the options object.  This mirrors the
+  // real `src/index.ts` lifecycle where `tuiPrompt` is assigned inside
+  // `onPromptReady` after `createDoneStageHandler` is already wired up,
+  // and guards against a regression where the wrapper snapshots the
+  // prompt value at factory-call time instead of reading it per-call.
+  test("MERGEABLE: done-prompt-options factory forwards hotkeys to tuiPrompt.confirmMerge via late-bound getter", async () => {
+    const tuiConfirmMerge = vi.fn().mockResolvedValue("merged" as const);
+    let tuiPromptRef: UserPrompt | undefined;
+    const opts = makeDoneOpts({
+      prompt: createDonePromptOptions(() => tuiPromptRef),
+      getSquashMergeHint: () => ({
+        title: "Fix widget rendering",
+        body: "Body line\n\nCloses #5",
+        prUrl: "https://github.com/org/repo/pull/123",
+      }),
+      detectClipboardSupport: () => ["pbcopy"],
+      writeToClipboard: vi.fn().mockResolvedValue("ok"),
+    });
+    // Assign the prompt only after the factory has been invoked and the
+    // options object assembled — matches `onPromptReady` in `src/index.ts`.
+    tuiPromptRef = makePrompt({ confirmMerge: tuiConfirmMerge });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    await stage.handler(ctx);
+    expect(tuiConfirmMerge).toHaveBeenCalledOnce();
+    const [message, hotkeys] = tuiConfirmMerge.mock.calls[0];
+    expect(message).toMatch(/\{\{hk:title-[0-9a-f]+\}\}/);
+    expect(message).toMatch(/\{\{hk:body-[0-9a-f]+\}\}/);
+    // Strong-form: the second argument must be the non-empty hotkeys
+    // array the pipeline built.  Rejects regressions that strip the
+    // value to `undefined` or `[]`.
+    expect(Array.isArray(hotkeys)).toBe(true);
+    expect(hotkeys).toHaveLength(2);
+    expect(hotkeys?.[0].key).toBe("t");
+    expect(hotkeys?.[1].key).toBe("b");
+  });
+
+  // Focused factory-level deep-equality check.  Unlike the Stage 9
+  // integration test above — which only asserts the `.key` shape of the
+  // forwarded array — this test pins the exact `InputHotkey[]` payload
+  // via `toEqual`, guarding `id` and `onPress` as well.  The real
+  // `InputArea` substitution contract depends on `id` (used to look up
+  // sentinels) and `onPress` (invoked on key press); a wrapper that
+  // forwarded objects with correct `.key` but stripped or mangled `id`
+  // or `onPress` would still break the TUI, so the regression test
+  // must guard the full payload.
+  test("done-prompt-options: confirmMerge deep-forwards the full InputHotkey[] payload", async () => {
+    const tuiConfirmMerge = vi.fn().mockResolvedValue("merged" as const);
+    const tuiPromptRef: UserPrompt = makePrompt({
+      confirmMerge: tuiConfirmMerge,
+    });
+    const promptOpts = createDonePromptOptions(() => tuiPromptRef);
+    const onPressTitle = vi.fn().mockResolvedValue("ok" as const);
+    const onPressBody = vi.fn().mockResolvedValue("ok" as const);
+    const hotkeys = [
+      { id: "title-abcd1234", key: "t", onPress: onPressTitle },
+      { id: "body-abcd1234", key: "b", onPress: onPressBody },
+    ];
+    const message =
+      "Suggested title: {{hk:title-abcd1234}}\nSuggested body: {{hk:body-abcd1234}}";
+    const result = await promptOpts.confirmMerge?.(message, hotkeys);
+    expect(result).toBe("merged");
+    expect(tuiConfirmMerge).toHaveBeenCalledOnce();
+    const [forwardedMessage, forwardedHotkeys] = tuiConfirmMerge.mock.calls[0];
+    expect(forwardedMessage).toBe(message);
+    // Deep equality rejects regressions that forward stripped values
+    // (e.g. `[]`, `undefined`, or objects missing `id` / `onPress`).
+    // Reference equality would over-constrain future implementations
+    // that immutably clone or wrap the array.
+    expect(forwardedHotkeys).toEqual(hotkeys);
+  });
+
+  // Guards against snapshotting the getter's initial value: the factory
+  // must read `tuiPrompt` per-call, so flipping the ref from a populated
+  // prompt back to `undefined` must route the next `confirmMerge` call
+  // to the non-TUI fallback and not to the stale spy.
+  test("MERGEABLE: done-prompt-options wrappers re-read the getter on each call", async () => {
+    const tuiConfirmMerge = vi.fn().mockResolvedValue("merged" as const);
+    let tuiPromptRef: UserPrompt | undefined = makePrompt({
+      confirmMerge: tuiConfirmMerge,
+    });
+    const promptOpts = createDonePromptOptions(() => tuiPromptRef);
+    // First call: getter resolves to the live prompt — spy is invoked.
+    const first = await promptOpts.confirmMerge?.("hello", []);
+    expect(first).toBe("merged");
+    expect(tuiConfirmMerge).toHaveBeenCalledOnce();
+    // Flip the ref back to undefined (simulates TUI teardown).  The
+    // wrapper must observe the change and take the fallback branch.
+    tuiPromptRef = undefined;
+    const second = await promptOpts.confirmMerge?.("hello again", []);
+    expect(second).toBe("merged");
+    // Spy must NOT have been called again — fallback was taken.
+    expect(tuiConfirmMerge).toHaveBeenCalledOnce();
   });
 
   test("MERGEABLE: omits hint when getSquashMergeHint returns undefined", async () => {
