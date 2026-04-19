@@ -1108,6 +1108,10 @@ function makeDoneOpts(
     stopServices: vi.fn(),
     hasRunningServices: vi.fn().mockReturnValue(false),
     onNotMerged: vi.fn().mockResolvedValue(undefined),
+    // Default: clipboard unavailable so the confirmMerge message keeps
+    // the bare "Suggested title:\n<title>" shape tests historically
+    // assert on.  Individual tests override to exercise hotkey paths.
+    detectClipboardSupport: () => [],
     ...rest,
   };
 }
@@ -1152,6 +1156,127 @@ describe("createDoneStageHandler", () => {
     expect(message).toContain("\n\nSuggested title:");
     expect(message).toContain("\n\nSuggested body:");
     expect(message).toMatch(/Closes #5\n\nPR: https:\/\//);
+  });
+
+  test("MERGEABLE: clipboard available embeds sentinels and forwards hotkeys", async () => {
+    const confirmMerge = vi.fn().mockResolvedValue("merged");
+    const writeToClipboard = vi.fn().mockResolvedValue("ok");
+    const opts = makeDoneOpts({
+      prompt: { confirmMerge },
+      getSquashMergeHint: () => ({
+        title: "Fix widget rendering",
+        body: "Body line\n\nCloses #5",
+        prUrl: "https://github.com/org/repo/pull/123",
+      }),
+      detectClipboardSupport: () => ["pbcopy"],
+      writeToClipboard,
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    await stage.handler(ctx);
+    expect(confirmMerge).toHaveBeenCalledOnce();
+    const [message, hotkeys] = confirmMerge.mock.calls[0] as [
+      string,
+      { id: string; key: string; onPress: () => Promise<"ok" | "error"> }[],
+    ];
+    // Sentinel ids carry a per-render random suffix so agent-authored
+    // title/body text cannot spoof them.  Assert the prefix shape only.
+    const titleSentinel = message.match(/\{\{hk:title-[0-9a-f]+\}\}/);
+    const bodySentinel = message.match(/\{\{hk:body-[0-9a-f]+\}\}/);
+    expect(titleSentinel).not.toBeNull();
+    expect(bodySentinel).not.toBeNull();
+    expect(message).toContain(
+      `Suggested title: ${titleSentinel?.[0]}\nFix widget`,
+    );
+    expect(message).toContain(
+      `Suggested body: ${bodySentinel?.[0]}\nBody line`,
+    );
+    expect(hotkeys).toHaveLength(2);
+    expect(hotkeys[0].id).toMatch(/^title-[0-9a-f]+$/);
+    expect(hotkeys[0].key).toBe("t");
+    expect(hotkeys[1].id).toMatch(/^body-[0-9a-f]+$/);
+    expect(hotkeys[1].key).toBe("b");
+    // Sentinel ids in the message must match the ids in the hotkeys
+    // array so InputArea can resolve them.
+    expect(titleSentinel?.[0]).toBe(`{{hk:${hotkeys[0].id}}}`);
+    expect(bodySentinel?.[0]).toBe(`{{hk:${hotkeys[1].id}}}`);
+
+    await hotkeys[0].onPress();
+    expect(writeToClipboard).toHaveBeenCalledWith("Fix widget rendering", [
+      "pbcopy",
+    ]);
+    await hotkeys[1].onPress();
+    expect(writeToClipboard).toHaveBeenCalledWith("Body line\n\nCloses #5", [
+      "pbcopy",
+    ]);
+  });
+
+  test("MERGEABLE: sentinel-looking substrings in body are rendered literally", async () => {
+    const confirmMerge = vi.fn().mockResolvedValue("merged");
+    const opts = makeDoneOpts({
+      prompt: { confirmMerge },
+      // Body contains both fixed tokens from earlier iterations of the
+      // design and a literal use of the current sentinel prefix.  Neither
+      // should collide with the real per-render sentinel ids.
+      getSquashMergeHint: () => ({
+        title: "Docs: document {{hk:title}} placeholder",
+        body: "Explain {{hk:body}} and {{hk:title}} in the guide",
+      }),
+      detectClipboardSupport: () => ["pbcopy"],
+      writeToClipboard: vi.fn().mockResolvedValue("ok"),
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    await stage.handler(ctx);
+    const [message, hotkeys] = confirmMerge.mock.calls[0] as [
+      string,
+      { id: string; key: string; onPress: () => Promise<"ok" | "error"> }[],
+    ];
+    // The literal `{{hk:title}}` / `{{hk:body}}` substrings from the
+    // user-authored content must survive untouched (they still appear in
+    // the message text), and the real sentinels are distinct per-render
+    // ids with a random suffix.
+    expect(message).toContain("Docs: document {{hk:title}} placeholder");
+    expect(message).toContain(
+      "Explain {{hk:body}} and {{hk:title}} in the guide",
+    );
+    expect(hotkeys[0].id).toMatch(/^title-[0-9a-f]+$/);
+    expect(hotkeys[0].id).not.toBe("title");
+    expect(hotkeys[1].id).toMatch(/^body-[0-9a-f]+$/);
+    expect(hotkeys[1].id).not.toBe("body");
+  });
+
+  test("MERGEABLE: clipboard unavailable omits sentinels and forwards no hotkeys", async () => {
+    const confirmMerge = vi.fn().mockResolvedValue("merged");
+    const opts = makeDoneOpts({
+      prompt: { confirmMerge },
+      getSquashMergeHint: () => ({
+        title: "Fix widget",
+        body: "body",
+      }),
+      detectClipboardSupport: () => [],
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    await stage.handler(ctx);
+    const [message, hotkeys] = confirmMerge.mock.calls[0] as [string, unknown];
+    expect(message).not.toContain("{{hk:");
+    expect(hotkeys).toBeUndefined();
   });
 
   test("MERGEABLE: omits hint when getSquashMergeHint returns undefined", async () => {

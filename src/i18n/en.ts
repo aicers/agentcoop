@@ -232,6 +232,9 @@ export const en: Messages = {
   // ---- input area --------------------------------------------------------
 
   "input.pipelineRunning": "Pipeline running...",
+  "input.copy": "copy",
+  "input.copied": "copied",
+  "input.copyFailed": "copy failed",
 
   // ---- agent pane / labels ------------------------------------------------
 
