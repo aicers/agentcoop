@@ -25,6 +25,7 @@ import {
   assembleSquashStage,
   loadConfig,
 } from "./config.js";
+import { createDonePromptOptions } from "./done-prompt-options.js";
 import { getGitHubUsername, getIssue } from "./github.js";
 import { initI18n, t } from "./i18n/index.js";
 import {
@@ -731,23 +732,7 @@ try {
     events: emitter,
     checkMergeable: async () => checkMergeable(owner, repo, wt.branch),
     queryPrState: async () => queryPrState(owner, repo, wt.branch),
-    prompt: {
-      confirmMerge: async (msg) => {
-        if (tuiPrompt) return tuiPrompt.confirmMerge(msg);
-        return "merged";
-      },
-      handleConflict: async (msg) => {
-        if (tuiPrompt) return tuiPrompt.handleConflict(msg);
-        return "manual";
-      },
-      handleUnknownMergeable: async (msg) => {
-        if (tuiPrompt) return tuiPrompt.handleUnknownMergeable(msg);
-        return "exit";
-      },
-      waitForManualResolve: async (msg) => {
-        if (tuiPrompt) return tuiPrompt.waitForManualResolve(msg);
-      },
-    },
+    prompt: createDonePromptOptions(() => tuiPrompt),
     rebaseOntoMain: createRebaseHandler(agentA, defaultBranch),
     pollCiAndFix: async (ctx) => {
       return pollCiAndFix({
