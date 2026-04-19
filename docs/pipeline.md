@@ -1524,6 +1524,18 @@ Cleanup
      delete the worktree, delete the remote branch, and close
      the PR. Each action is individually selectable.
 
+   When a squash suggestion is live in the PR body, the
+   merge-confirm screen also renders `[t] copy` / `[b] copy`
+   hotkey hints next to the suggested title and body.  Pressing
+   `t` or `b` writes the corresponding value to the system
+   clipboard (via `pbcopy` / `wl-copy` / `xclip` on local
+   sessions, or OSC 52 on SSH) so the user can paste it straight
+   into GitHub's "Squash and merge" dialog.  If the environment
+   can reach neither a native clipboard tool nor an OSC 52–capable
+   stdout, the hints are not rendered — the user falls back to
+   drag-select without being told about a feature that cannot
+   work here.
+
 **Agent rebase prompt:**
 
 ```text

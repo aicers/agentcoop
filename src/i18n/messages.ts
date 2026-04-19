@@ -230,6 +230,9 @@ export interface Messages {
   // ---- input area (InputArea.tsx) ----------------------------------------
 
   "input.pipelineRunning": string;
+  "input.copy": string;
+  "input.copied": string;
+  "input.copyFailed": string;
 
   // ---- agent pane / labels ------------------------------------------------
 

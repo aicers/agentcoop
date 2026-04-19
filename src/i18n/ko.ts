@@ -270,6 +270,9 @@ export const ko: Messages = {
 
   "input.pipelineRunning":
     "\uD30C\uC774\uD504\uB77C\uC778 \uC2E4\uD589 \uC911...",
+  "input.copy": "복사",
+  "input.copied": "복사됨",
+  "input.copyFailed": "복사 실패",
 
   // ---- agent pane / labels ------------------------------------------------
 

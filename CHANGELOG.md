@@ -36,6 +36,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   body, and PR URL inline when the squash stage finished via the
   PR-body suggestion path, so the user can copy-paste without opening the
   browser.
+- Stage 9 (Done) merge-confirm screen now renders `[t] copy` / `[b] copy`
+  hotkey hints next to the suggested squash title and body when the terminal
+  can write to the system clipboard.  Pressing `t` copies the title and `b`
+  copies the body (each independently, so the values line up with GitHub's
+  separate "Squash and merge" title / body fields).  A small clipboard
+  utility detects the environment and returns an ordered candidate list
+  (`pbcopy` / `wl-copy` / `xclip` on local sessions, OSC 52 first on SSH
+  sessions, OSC 52 as fallback everywhere stdout is a TTY), and the writer
+  tries candidates in order until one succeeds.  When no candidate is
+  reachable, the hints are not rendered at all — the user falls back to
+  drag-select as before, rather than seeing a hint that silently does
+  nothing.  Per-hotkey status (`copy` / `copied` / `copy failed`) is
+  reflected in the label; `copied` auto-reverts after ~1s, `copy failed`
+  persists until the next re-render.
 
 ### Changed
 

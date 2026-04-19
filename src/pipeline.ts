@@ -9,10 +9,17 @@
  * modules (issues #6, #7, #8).
  */
 
+import { randomBytes } from "node:crypto";
 import { t } from "./i18n/index.js";
 import type { PipelineEventEmitter } from "./pipeline-events.js";
 import type { PromptSink, StreamSink, UsageSink } from "./stage-util.js";
 import { buildClarificationPrompt } from "./step-parser.js";
+import {
+  type ClipboardCandidate,
+  detectClipboardSupport as defaultDetectClipboardSupport,
+  writeToClipboard as defaultWriteToClipboard,
+} from "./ui/clipboard.js";
+import type { InputHotkey } from "./ui/InputArea.js";
 
 // ---- public types --------------------------------------------------------
 
@@ -210,7 +217,10 @@ export interface UserPrompt {
    * - `"check_conflicts"` — check for conflicts and rebase if needed.
    * - `"exit"` — stop asking and proceed to cleanup options.
    */
-  confirmMerge(message: string): Promise<"merged" | "check_conflicts" | "exit">;
+  confirmMerge(
+    message: string,
+    hotkeys?: InputHotkey[],
+  ): Promise<"merged" | "check_conflicts" | "exit">;
 
   /**
    * Present a conflict notification and let the user choose between
@@ -883,6 +893,7 @@ export interface DoneStageOptions {
   prompt: {
     confirmMerge: (
       message: string,
+      hotkeys?: InputHotkey[],
     ) => Promise<"merged" | "check_conflicts" | "exit">;
     handleConflict: (message: string) => Promise<"agent_rebase" | "manual">;
     handleUnknownMergeable: (message: string) => Promise<"recheck" | "exit">;
@@ -932,6 +943,25 @@ export interface DoneStageOptions {
         prUrl?: string;
       }
     | undefined;
+  /**
+   * Return the ordered clipboard-candidate list for the current
+   * environment.  Called once per merge-confirm render so the
+   * detection picks up env changes (e.g. a newly attached SSH
+   * session) across re-prompts.  Defaults to the production
+   * detector from `ui/clipboard.ts`; tests inject a stable value.
+   * An empty list disables the `[t] copy` / `[b] copy` hints.
+   */
+  detectClipboardSupport?: () => ClipboardCandidate[];
+  /**
+   * Write `value` via the ordered candidate list.  Returns `"ok"`
+   * as soon as one candidate reports success, `"error"` only when
+   * the whole list fails.  Defaults to the production writer from
+   * `ui/clipboard.ts`.
+   */
+  writeToClipboard?: (
+    value: string,
+    candidates: ClipboardCandidate[],
+  ) => Promise<"ok" | "error">;
 }
 
 /**
@@ -1173,20 +1203,53 @@ export function createDoneStageHandler(
     summary: string,
   ): Promise<StageResult> {
     const m = t();
+    const detect =
+      options.detectClipboardSupport ?? defaultDetectClipboardSupport;
+    const write = options.writeToClipboard ?? defaultWriteToClipboard;
     for (;;) {
       const hint = options.getSquashMergeHint?.();
+      const candidates = hint ? detect() : [];
+      const clipboardAvailable = candidates.length > 0;
+      const hotkeys: InputHotkey[] = [];
       const sections: string[] = [summary];
       if (hint) {
+        // Generate per-render unique sentinel ids so that agent-generated
+        // title/body content containing a literal `{{hk:title}}` /
+        // `{{hk:body}}` token cannot shadow the real hotkey hints.  The
+        // random suffix is regenerated if it happens to collide with the
+        // interpolated content, though a 48-bit random is already
+        // astronomically unlikely to appear in free-form text.
+        const titleValue = hint.title ?? "";
+        const bodyValue = hint.body ?? "";
+        const sentinelSuffix = makeSentinelSuffix(titleValue, bodyValue);
+        const titleSentinelId = `title-${sentinelSuffix}`;
+        const bodySentinelId = `body-${sentinelSuffix}`;
         const tipSections: string[] = [m["pipeline.mergeConfirmSquashTip"]];
         if (hint.title) {
-          tipSections.push(
-            `${m["pipeline.suggestedSquashTitle"]}\n${hint.title}`,
-          );
+          const label = clipboardAvailable
+            ? `${m["pipeline.suggestedSquashTitle"]} {{hk:${titleSentinelId}}}`
+            : m["pipeline.suggestedSquashTitle"];
+          tipSections.push(`${label}\n${hint.title}`);
+          if (clipboardAvailable) {
+            hotkeys.push({
+              id: titleSentinelId,
+              key: "t",
+              onPress: () => write(titleValue, candidates),
+            });
+          }
         }
         if (hint.body) {
-          tipSections.push(
-            `${m["pipeline.suggestedSquashBody"]}\n${hint.body}`,
-          );
+          const label = clipboardAvailable
+            ? `${m["pipeline.suggestedSquashBody"]} {{hk:${bodySentinelId}}}`
+            : m["pipeline.suggestedSquashBody"];
+          tipSections.push(`${label}\n${hint.body}`);
+          if (clipboardAvailable) {
+            hotkeys.push({
+              id: bodySentinelId,
+              key: "b",
+              onPress: () => write(bodyValue, candidates),
+            });
+          }
         }
         if (hint.prUrl) {
           tipSections.push(m["pipeline.prUrl"](hint.prUrl));
@@ -1194,7 +1257,10 @@ export function createDoneStageHandler(
         sections.push(tipSections.join("\n\n"));
       }
       sections.push(m["pipeline.mergeConfirm"]);
-      const choice = await options.prompt.confirmMerge(sections.join("\n\n"));
+      const choice = await options.prompt.confirmMerge(
+        sections.join("\n\n"),
+        hotkeys.length > 0 ? hotkeys : undefined,
+      );
       if (ctx.signal?.aborted) {
         return { outcome: "completed", message: "" };
       }
@@ -1279,4 +1345,30 @@ export function createDoneStageHandler(
       }
     }
   }
+}
+
+/**
+ * Produce a random hex suffix for per-render sentinel ids that is
+ * guaranteed not to appear as a fully-formed `{{hk:title-<s>}}` /
+ * `{{hk:body-<s>}}` sentinel inside the title/body content.  48 bits of
+ * entropy make a natural collision essentially impossible, but the
+ * re-roll loop keeps the invariant strict for adversarial input.
+ */
+function makeSentinelSuffix(title: string, body: string): string {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const suffix = randomBytes(6).toString("hex");
+    const titleToken = `{{hk:title-${suffix}}}`;
+    const bodyToken = `{{hk:body-${suffix}}}`;
+    if (
+      !title.includes(titleToken) &&
+      !body.includes(titleToken) &&
+      !title.includes(bodyToken) &&
+      !body.includes(bodyToken)
+    ) {
+      return suffix;
+    }
+  }
+  // Unreachable in practice: 48 bits * 8 attempts vs attacker-controlled
+  // text means the loop would have to guess 384 random bits.
+  throw new Error("failed to generate unique sentinel suffix");
 }

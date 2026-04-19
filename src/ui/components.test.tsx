@@ -1575,6 +1575,199 @@ describe("InputArea", () => {
   });
 });
 
+// ---- InputArea: hotkey sentinel rendering ----------------------------------
+
+describe("InputArea hotkey sentinels", () => {
+  test("idle hotkey renders '[t] copy' at sentinel position; raw sentinel not visible", () => {
+    const request: InputRequest = {
+      message:
+        "Suggested title: {{hk:title}}\nFix widget\n\nHas the PR been merged?",
+      choices: [{ label: "Yes", value: "yes" }],
+      hotkeys: [{ id: "title", key: "t", onPress: async () => "ok" }],
+    };
+    const { lastFrame } = render(
+      <InputArea request={request} onSubmit={() => {}} />,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("[t] copy");
+    expect(frame).not.toContain("{{hk:title}}");
+    // Still on the same line as the "Suggested title:" label.
+    const labelLine = frame
+      .split("\n")
+      .find((l) => l.includes("Suggested title:"));
+    expect(labelLine ?? "").toContain("[t] copy");
+  });
+
+  test("pressing 't' calls onPress and swaps label to '[t] copied'; auto-reverts after ~1s", async () => {
+    const resolveRef: { current: ((v: "ok" | "error") => void) | null } = {
+      current: null,
+    };
+    const onPress = vi.fn(
+      () =>
+        new Promise<"ok" | "error">((r) => {
+          resolveRef.current = r;
+        }),
+    );
+    const request: InputRequest = {
+      message: "Suggested title: {{hk:title}}",
+      choices: [{ label: "Yes", value: "yes" }],
+      hotkeys: [{ id: "title", key: "t", onPress }],
+    };
+    const { lastFrame, stdin } = render(
+      <InputArea request={request} onSubmit={() => {}} />,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(lastFrame()).toContain("[t] copy");
+
+    stdin.write("t");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(onPress).toHaveBeenCalledOnce();
+
+    resolveRef.current?.("ok");
+    await new Promise((r) => setTimeout(r, 40));
+    expect(lastFrame()).toContain("[t] copied");
+
+    await new Promise((r) => setTimeout(r, 1100));
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("[t] copy");
+    expect(frame).not.toContain("[t] copied");
+  });
+
+  test("onPress 'error' renders '[t] copy failed' and does not auto-revert", async () => {
+    const onPress = vi.fn().mockResolvedValue("error" as const);
+    const request: InputRequest = {
+      message: "Suggested title: {{hk:title}}",
+      choices: [{ label: "Yes", value: "yes" }],
+      hotkeys: [{ id: "title", key: "t", onPress }],
+    };
+    const { lastFrame, stdin } = render(
+      <InputArea request={request} onSubmit={() => {}} />,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    stdin.write("t");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastFrame()).toContain("[t] copy failed");
+
+    await new Promise((r) => setTimeout(r, 1100));
+    expect(lastFrame()).toContain("[t] copy failed");
+  });
+
+  test("empty hotkeys: no sentinel in message means no '[t] copy' text; pressing 't' is a no-op and does not close the prompt", async () => {
+    const onSubmit = vi.fn();
+    const request: InputRequest = {
+      message: "Suggested title:\nFix widget",
+      choices: [{ label: "Yes", value: "yes" }],
+    };
+    const { lastFrame, stdin } = render(
+      <InputArea request={request} onSubmit={onSubmit} />,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    stdin.write("t");
+    await new Promise((r) => setTimeout(r, 40));
+    const frame = lastFrame() ?? "";
+    expect(frame).not.toContain("[t] copy");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  test("sentinel with unknown id is rendered as literal text", () => {
+    const request: InputRequest = {
+      message: "Hello {{hk:missing}} world",
+      choices: [{ label: "Yes", value: "yes" }],
+      hotkeys: [{ id: "title", key: "t", onPress: async () => "ok" }],
+    };
+    const { lastFrame } = render(
+      <InputArea request={request} onSubmit={() => {}} />,
+    );
+    expect(lastFrame()).toContain("{{hk:missing}}");
+  });
+
+  test("hotkey colliding with an active choice digit is ignored: choice dispatch wins and the sentinel renders as literal text", async () => {
+    const onSubmit = vi.fn();
+    const onPress = vi.fn().mockResolvedValue("ok" as const);
+    const request: InputRequest = {
+      message: "Pick: {{hk:one}}",
+      choices: [
+        { label: "Yes", value: "yes" },
+        { label: "No", value: "no" },
+      ],
+      hotkeys: [{ id: "one", key: "1", onPress }],
+    };
+    const { lastFrame, stdin } = render(
+      <InputArea request={request} onSubmit={onSubmit} />,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    // Sentinel for the dropped hotkey falls through to literal text
+    // (same rendering as an unknown id), so the caller bug is visible.
+    expect(lastFrame()).toContain("{{hk:one}}");
+
+    stdin.write("1");
+    await new Promise((r) => setTimeout(r, 40));
+    expect(onPress).not.toHaveBeenCalled();
+    expect(onSubmit).toHaveBeenCalledWith("yes");
+  });
+
+  test("out-of-order completions: older press must not overwrite newer press result", async () => {
+    // Press `t` twice while the first `onPress` is still pending.
+    // The second press resolves first (`ok`) and the label flips to
+    // `[t] copied`; when the first press resolves later with
+    // `error`, its stale completion must be dropped — the UI must
+    // not regress to `[t] copy failed`.
+    const resolvers: ((v: "ok" | "error") => void)[] = [];
+    const onPress = vi.fn(
+      () =>
+        new Promise<"ok" | "error">((r) => {
+          resolvers.push(r);
+        }),
+    );
+    const request: InputRequest = {
+      message: "Suggested title: {{hk:title}}",
+      choices: [{ label: "Yes", value: "yes" }],
+      hotkeys: [{ id: "title", key: "t", onPress }],
+    };
+    const { lastFrame, stdin } = render(
+      <InputArea request={request} onSubmit={() => {}} />,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+
+    stdin.write("t");
+    await new Promise((r) => setTimeout(r, 20));
+    stdin.write("t");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(onPress).toHaveBeenCalledTimes(2);
+
+    // Newer press resolves first with "ok".
+    resolvers[1]("ok");
+    await new Promise((r) => setTimeout(r, 40));
+    expect(lastFrame()).toContain("[t] copied");
+
+    // Older press resolves late with "error" — must be ignored.
+    resolvers[0]("error");
+    await new Promise((r) => setTimeout(r, 40));
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("[t] copied");
+    expect(frame).not.toContain("[t] copy failed");
+  });
+
+  test("numeric choice keys still work when hotkeys are present", async () => {
+    const onSubmit = vi.fn();
+    const request: InputRequest = {
+      message: "Suggested title: {{hk:title}}",
+      choices: [
+        { label: "Yes", value: "yes" },
+        { label: "No", value: "no" },
+      ],
+      hotkeys: [{ id: "title", key: "t", onPress: async () => "ok" }],
+    };
+    const { stdin } = render(
+      <InputArea request={request} onSubmit={onSubmit} />,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    stdin.write("1");
+    await new Promise((r) => setTimeout(r, 40));
+    expect(onSubmit).toHaveBeenCalledWith("yes");
+  });
+});
+
 // ---- Deferred resolution (issue #105) ----------------------------------------
 
 describe("deferred handleSubmit resolution", () => {

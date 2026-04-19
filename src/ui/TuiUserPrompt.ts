@@ -1,6 +1,6 @@
 import { t } from "../i18n/index.js";
 import type { UserAction, UserPrompt } from "../pipeline.js";
-import type { InputRequest } from "./InputArea.js";
+import type { InputHotkey, InputRequest } from "./InputArea.js";
 
 /**
  * Callback that the TUI uses to show a prompt and later resolve it.
@@ -114,6 +114,7 @@ export function createTuiUserPrompt(dispatch: PromptDispatch): UserPrompt {
 
     async confirmMerge(
       message: string,
+      hotkeys?: InputHotkey[],
     ): Promise<"merged" | "check_conflicts" | "exit"> {
       const m = t();
       const response = await dispatch({
@@ -126,6 +127,7 @@ export function createTuiUserPrompt(dispatch: PromptDispatch): UserPrompt {
           },
           { label: m["prompt.noExit"], value: "exit" },
         ],
+        hotkeys,
       });
       return response as "merged" | "check_conflicts" | "exit";
     },
