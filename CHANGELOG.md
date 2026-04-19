@@ -39,6 +39,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Stage 8's squash suggestion block in the PR body now emits the title and
+  body inside separate fenced code blocks (info string `text`) instead of
+  bold-labeled plain Markdown (`**Title:** …` / `**Body:** …`).  GitHub
+  renders a one-click copy icon on fenced blocks and does not reinterpret
+  Markdown characters inside, so the user can paste the suggestion verbatim
+  into the "Squash and merge" dialog.  The agent chooses each fence length
+  dynamically per the CommonMark rule
+  (`max(longest backtick run in content, 2) + 1`, minimum 3) so commit
+  bodies containing their own triple-backtick samples survive unchanged.
+- `parseSquashSuggestionBlock` now accepts either the new fenced format or
+  the legacy `**Title:** …` / `**Body:** …` plain-text format, returning
+  the same `{ title, body }` shape.  This is required because Stage 8
+  short-circuits on `squashSubStep === "applied_in_pr_body"` without
+  re-invoking the agent, so existing PRs in that state still render
+  correctly in the Stage 9 inline preview after upgrade.
 - Stage 8 verdict keywords are now `SQUASHED_MULTI` / `SUGGESTED_SINGLE` /
   `BLOCKED` (previously `COMPLETED` / `BLOCKED`).  When the verdict is
   ambiguous after a clarification retry, the handler runs a deterministic
@@ -51,6 +66,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Stage 9 merge-confirm screen now includes a conditional one-line tip
   (`pipeline.mergeConfirmSquashTip`) when a squash suggestion is live in
   the PR body.
+
+### Deprecated
+
+- The legacy `**Title:** …` / `**Body:** …` plain-text form of the squash
+  suggestion block (written by older versions of Stage 8) is deprecated.
+  `parseSquashSuggestionBlock` continues to accept it for one release cycle
+  so PRs already in the `applied_in_pr_body` state still render in the
+  Stage 9 inline preview after upgrade.  The legacy branch will be removed
+  in the following release — tracked by #267.
 
 ### Fixed
 

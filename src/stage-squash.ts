@@ -180,18 +180,54 @@ export function buildSquashPrompt(
     `   - Update the PR body to include a marker-delimited block`,
     `     containing the suggestion.  The block must be idempotent —`,
     `     replace any existing block between the same markers, do not`,
-    `     stack duplicates.  Use exactly these markers:`,
+    `     stack duplicates.  Inside the block, wrap the title and body`,
+    `     each in their own fenced code block (info string \`text\`) so`,
+    `     GitHub renders a one-click copy icon and does not`,
+    `     re-interpret Markdown characters inside the commit message.`,
+    `     Use exactly these markers and this structure:`,
     ``,
-    `     \`\`\`text`,
+    `     \`\`\`\`text`,
     `     ${SQUASH_SUGGESTION_START_MARKER}`,
     `     ## Suggested squash commit`,
     ``,
-    `     **Title:** <your title>`,
+    `     **Title**`,
     ``,
-    `     **Body:**`,
-    `     <your body — may include \`Closes #N\` / \`Part of #N\`>`,
-    `     ${SQUASH_SUGGESTION_END_MARKER}`,
+    `     \`\`\`text`,
+    `     <your title>`,
     `     \`\`\``,
+    ``,
+    `     **Body**`,
+    ``,
+    `     \`\`\`text`,
+    `     <your body — may include \`Closes #N\` / \`Part of #N\`>`,
+    `     \`\`\``,
+    `     ${SQUASH_SUGGESTION_END_MARKER}`,
+    `     \`\`\`\``,
+    ``,
+    `     **Choose each fence length dynamically.**  Per CommonMark, a`,
+    `     fenced code block closes only on a line containing a run of`,
+    `     the same character that is **as long or longer** than the`,
+    `     opening fence.  Commit bodies may legitimately contain code`,
+    `     samples with their own triple-backtick fences, so a fixed`,
+    `     three-backtick outer fence would close early at the first`,
+    `     \`\`\`\` line inside the content.  Compute:`,
+    ``,
+    `       fence_len = max(longest run of backticks in the content, 2) + 1`,
+    ``,
+    `     (minimum 3).  Calculate the title fence length from the`,
+    `     title string and the body fence length from the body string,`,
+    `     independently.  Use the same character (backtick) for both`,
+    `     the opening and closing line of a given block.`,
+    ``,
+    `     Worked example — if the body contains a line of triple`,
+    `     backticks anywhere (e.g. a README excerpt), open and close`,
+    `     the body with **four** backticks; a run of five backticks in`,
+    `     the content requires six on the fence; and so on.  The title`,
+    `     fence typically stays at three.`,
+    ``,
+    `     Do not add a blank line between the opening fence and the`,
+    `     first line of content, or between the last line of content`,
+    `     and the closing fence.  Do not indent the fences.`,
     ``,
     `     Read the current body with`,
     `     \`gh pr view --json body --jq .body\`, replace any prior`,
@@ -282,6 +318,22 @@ export function buildAgentSquashFollowupPrompt(): string {
  * Extract the title and body from the squash suggestion marker block
  * in `prBody`.  Returns `undefined` when the markers are missing or
  * the block does not contain a parseable title.
+ *
+ * Accepts two formats:
+ *
+ * 1. **Fenced** (current, written by the agent) — `**Title**` and
+ *    `**Body**` labels each followed by a CommonMark-style fenced code
+ *    block.  The fence length is chosen dynamically by the agent so
+ *    the block can survive commit bodies that themselves contain
+ *    triple-backtick samples; the parser mirrors that rule by
+ *    matching any opening fence of three or more backticks and
+ *    scanning for a closing line with a run of the same character
+ *    that is at least as long.
+ * 2. **Legacy** (deprecated) — `**Title:** <title>` / `**Body:**`
+ *    plain-text format.  Kept for one release cycle so that PRs
+ *    written by older versions still render in the stage 9 inline
+ *    preview after upgrade.  Remove once the deprecation window
+ *    expires.
  */
 export function parseSquashSuggestionBlock(
   prBody: string | undefined,
@@ -291,22 +343,179 @@ export function parseSquashSuggestionBlock(
   const endIdx = prBody.indexOf(SQUASH_SUGGESTION_END_MARKER);
   if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) return undefined;
 
-  const inner = prBody
-    .slice(startIdx + SQUASH_SUGGESTION_START_MARKER.length, endIdx)
-    .trim();
+  const inner = prBody.slice(
+    startIdx + SQUASH_SUGGESTION_START_MARKER.length,
+    endIdx,
+  );
 
-  // Match `**Title:** <title>` on its own line.
-  const titleMatch = inner.match(/\*\*Title:\*\*\s*(.+?)\s*$/m);
-  if (!titleMatch) return undefined;
-  const title = titleMatch[1].trim();
+  // Decide format by whichever top-level title label appears *first*
+  // in the block, not merely by whether a fenced-intent shape exists
+  // anywhere.  A legacy body may legitimately contain a standalone
+  // `**Title**` line followed by a fenced code sample as part of its
+  // own prose, so scanning the whole block for a fenced shape would
+  // misroute valid legacy blocks.  The first recognized top-level
+  // label wins: `**Title:** <content>` → legacy, `**Title**` + fence
+  // → fenced.  Once classified as fenced, a malformed fenced block
+  // must fail to `undefined` rather than silently fall through to
+  // legacy parsing (which would otherwise pick up `**Title:**` /
+  // `**Body:**` strings that appeared as prose inside an unterminated
+  // fence).
+  const format = detectFormat(inner);
+  if (format === "fenced") return parseFencedSuggestion(inner);
+  if (format === "legacy") return parseLegacySuggestion(inner);
+  return undefined;
+}
 
-  // Body starts after `**Body:**`.
-  const bodyMarker = "**Body:**";
-  const bodyStart = inner.indexOf(bodyMarker);
-  let body = "";
-  if (bodyStart !== -1) {
-    body = inner.slice(bodyStart + bodyMarker.length).trim();
+/**
+ * Classify the block by the first top-level title label it contains.
+ * Returns `"legacy"` if a `**Title:** <content>` line appears before
+ * any fenced-intent shape, `"fenced"` if a `**Title**` label line
+ * followed (after optional blank lines) by an opening code fence
+ * appears first, or `undefined` when neither shape is present.
+ */
+function detectFormat(inner: string): "fenced" | "legacy" | undefined {
+  const lines = inner.split("\n");
+  const legacyTitleRe = /^\s*\*\*Title:\*\*\s+\S/;
+  const fencedTitleRe = labelLineRe("Title");
+  const openFenceRe = /^\s*`{3,}[^`]*$/;
+  for (let i = 0; i < lines.length; i++) {
+    if (legacyTitleRe.test(lines[i])) return "legacy";
+    if (fencedTitleRe.test(lines[i])) {
+      let j = i + 1;
+      while (j < lines.length && lines[j].trim() === "") j++;
+      if (j < lines.length && openFenceRe.test(lines[j])) return "fenced";
+    }
   }
+  return undefined;
+}
+
+/** Label-line regex for the fenced format (`**Title**` / `**Body**`). */
+function labelLineRe(label: "Title" | "Body"): RegExp {
+  return new RegExp(`^\\s*\\*\\*${label}\\*\\*\\s*$`);
+}
+
+/**
+ * Parse the fenced format.  Returns `undefined` when either label is
+ * missing, when the fenced block that should follow the label is
+ * malformed (missing opening fence, unterminated), or when the
+ * blocks appear in the wrong order.
+ */
+function parseFencedSuggestion(inner: string): SquashSuggestion | undefined {
+  const lines = inner.split("\n");
+
+  const titleLabelIdx = findLabelLine(lines, 0, "Title");
+  if (titleLabelIdx === -1) return undefined;
+
+  const titleBlock = readFencedBlock(lines, titleLabelIdx + 1);
+  if (!titleBlock) return undefined;
+
+  const bodyLabelIdx = findLabelLine(lines, titleBlock.endIdx + 1, "Body");
+  if (bodyLabelIdx === -1) return undefined;
+
+  const bodyBlock = readFencedBlock(lines, bodyLabelIdx + 1);
+  if (!bodyBlock) return undefined;
+
+  return {
+    title: titleBlock.content.replace(/^\n+|\n+$/g, "").trim(),
+    body: bodyBlock.content.replace(/^\n+|\n+$/g, ""),
+  };
+}
+
+function findLabelLine(
+  lines: string[],
+  start: number,
+  label: "Title" | "Body",
+): number {
+  const re = labelLineRe(label);
+  for (let i = start; i < lines.length; i++) {
+    if (re.test(lines[i])) return i;
+  }
+  return -1;
+}
+
+/**
+ * Read a CommonMark-style fenced code block starting at or after
+ * `start`.  Skips blank lines before the opening fence, records the
+ * fence length, then scans for the first line that is a closing
+ * fence — a run of backticks of length `>=` the opening, optionally
+ * with surrounding whitespace, and no info string.
+ *
+ * Returns `{ content, endIdx }` where `endIdx` is the line index of
+ * the closing fence.  Returns `undefined` when no opening fence is
+ * found or the block is not terminated.
+ */
+function readFencedBlock(
+  lines: string[],
+  start: number,
+): { content: string; endIdx: number } | undefined {
+  let i = start;
+  while (i < lines.length && lines[i].trim() === "") i++;
+  if (i >= lines.length) return undefined;
+
+  // Opening fence: 3+ backticks, optional info string (no backticks).
+  const openMatch = lines[i].match(/^\s*(`{3,})([^`]*)$/);
+  if (!openMatch) return undefined;
+  const fenceLen = openMatch[1].length;
+
+  const contentStart = i + 1;
+  for (let j = contentStart; j < lines.length; j++) {
+    // Closing fence: run of backticks of length >= opening, nothing
+    // else on the line besides whitespace.
+    const closeMatch = lines[j].match(/^\s*(`{3,})\s*$/);
+    if (closeMatch && closeMatch[1].length >= fenceLen) {
+      return {
+        content: lines.slice(contentStart, j).join("\n"),
+        endIdx: j,
+      };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Parse the deprecated legacy format (`**Title:** <title>` /
+ * `**Body:**` plain text).  Maintained for one release cycle after
+ * the switch to fenced blocks so PRs written by older agent runs
+ * still render correctly in the stage 9 inline preview.
+ *
+ * Both labels must appear on their own top-level lines in order —
+ * `**Title:** <content>` with content on the same line, then a
+ * later line that is exactly `**Body:**`.  A whole-block
+ * `match()` / `indexOf()` approach would happily pick up stray
+ * `**Title:**` / `**Body:**` strings that appeared mid-prose and
+ * accept malformed blocks (e.g. missing the body label), weakening
+ * the Stage 8 strict gate in `hasValidSuggestionBlock`.
+ */
+function parseLegacySuggestion(inner: string): SquashSuggestion | undefined {
+  const lines = inner.split("\n");
+  const titleLineRe = /^\s*\*\*Title:\*\*\s+(.+?)\s*$/;
+  const bodyLabelRe = /^\s*\*\*Body:\*\*\s*$/;
+
+  let titleIdx = -1;
+  let title = "";
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(titleLineRe);
+    if (m) {
+      titleIdx = i;
+      title = m[1].trim();
+      break;
+    }
+  }
+  if (titleIdx === -1) return undefined;
+
+  let bodyIdx = -1;
+  for (let i = titleIdx + 1; i < lines.length; i++) {
+    if (bodyLabelRe.test(lines[i])) {
+      bodyIdx = i;
+      break;
+    }
+  }
+  if (bodyIdx === -1) return undefined;
+
+  const body = lines
+    .slice(bodyIdx + 1)
+    .join("\n")
+    .trim();
 
   return { title, body };
 }

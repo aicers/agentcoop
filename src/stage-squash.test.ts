@@ -954,7 +954,7 @@ describe("createSquashStageHandler", () => {
     }
 
     test("count decreased AND marker present → SQUASHED_MULTI (count wins)", async () => {
-      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** stale\n${SQUASH_SUGGESTION_END_MARKER}`;
+      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** stale\n\n**Body:**\nstale body\n${SQUASH_SUGGESTION_END_MARKER}`;
       const opts = makeOpts({
         agent: makeAmbiguousAgent(),
         countBranchCommits: vi
@@ -970,7 +970,7 @@ describe("createSquashStageHandler", () => {
     });
 
     test("count unchanged AND marker present → SUGGESTED_SINGLE", async () => {
-      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** suggested\n${SQUASH_SUGGESTION_END_MARKER}`;
+      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** suggested\n\n**Body:**\nsuggested body\n${SQUASH_SUGGESTION_END_MARKER}`;
       const chooseSquashApplyMode = vi.fn().mockResolvedValue("github");
       const opts = makeOpts({
         agent: makeAmbiguousAgent(),
@@ -1018,7 +1018,7 @@ describe("createSquashStageHandler", () => {
     });
 
     test("awaiting_user_choice with marker present → re-presents user choice", async () => {
-      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** T\n${SQUASH_SUGGESTION_END_MARKER}`;
+      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** T\n\n**Body:**\nB\n${SQUASH_SUGGESTION_END_MARKER}`;
       const chooseSquashApplyMode = vi.fn().mockResolvedValue("github");
       const opts = makeOpts({
         savedSquashSubStep: "awaiting_user_choice",
@@ -1432,7 +1432,7 @@ describe("createSquashStageHandler", () => {
     });
 
     test("emits SUGGESTED_SINGLE when marker block is present", async () => {
-      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** s\n${SQUASH_SUGGESTION_END_MARKER}`;
+      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title:** s\n\n**Body:**\ns body\n${SQUASH_SUGGESTION_END_MARKER}`;
       const events = new PipelineEventEmitter();
       const handler = vi.fn();
       events.on("pipeline:verdict", handler);
@@ -1591,12 +1591,293 @@ describe("createSquashStageHandler", () => {
 // ---- parseSquashSuggestionBlock --------------------------------------------
 
 describe("parseSquashSuggestionBlock", () => {
-  test("parses title and body from a well-formed block", () => {
+  // ---- fenced format (current) ---------------------------------------------
+
+  test("parses title and body from a well-formed fenced block", () => {
+    const body = [
+      "noise",
+      SQUASH_SUGGESTION_START_MARKER,
+      "## Suggested squash commit",
+      "",
+      "**Title**",
+      "",
+      "```text",
+      "Fix widget rendering",
+      "```",
+      "",
+      "**Body**",
+      "",
+      "```text",
+      "First line.",
+      "",
+      "Closes #42",
+      "```",
+      SQUASH_SUGGESTION_END_MARKER,
+      "more noise",
+    ].join("\n");
+    expect(parseSquashSuggestionBlock(body)).toEqual({
+      title: "Fix widget rendering",
+      body: "First line.\n\nCloses #42",
+    });
+  });
+
+  test("parses a body that contains a nested triple-backtick fenced block (outer fence length 4)", () => {
+    const body = [
+      SQUASH_SUGGESTION_START_MARKER,
+      "",
+      "**Title**",
+      "",
+      "```text",
+      "Fix code sample rendering",
+      "```",
+      "",
+      "**Body**",
+      "",
+      "````text",
+      "Repro:",
+      "",
+      "```js",
+      "foo();",
+      "```",
+      "",
+      "Closes #1",
+      "````",
+      SQUASH_SUGGESTION_END_MARKER,
+    ].join("\n");
+    expect(parseSquashSuggestionBlock(body)).toEqual({
+      title: "Fix code sample rendering",
+      body: "Repro:\n\n```js\nfoo();\n```\n\nCloses #1",
+    });
+  });
+
+  test("parses a body containing a run of five backticks (outer fence length 6)", () => {
+    const body = [
+      SQUASH_SUGGESTION_START_MARKER,
+      "",
+      "**Title**",
+      "",
+      "```text",
+      "Handle large fences",
+      "```",
+      "",
+      "**Body**",
+      "",
+      "``````text",
+      "Look at this nesting:",
+      "",
+      "`````",
+      "inner",
+      "`````",
+      "``````",
+      SQUASH_SUGGESTION_END_MARKER,
+    ].join("\n");
+    expect(parseSquashSuggestionBlock(body)).toEqual({
+      title: "Handle large fences",
+      body: "Look at this nesting:\n\n`````\ninner\n`````",
+    });
+  });
+
+  test("parses a title that contains a single backtick (fence length stays 3)", () => {
+    const body = [
+      SQUASH_SUGGESTION_START_MARKER,
+      "",
+      "**Title**",
+      "",
+      "```text",
+      "Rename `foo` to `bar`",
+      "```",
+      "",
+      "**Body**",
+      "",
+      "```text",
+      "See #9",
+      "```",
+      SQUASH_SUGGESTION_END_MARKER,
+    ].join("\n");
+    expect(parseSquashSuggestionBlock(body)).toEqual({
+      title: "Rename `foo` to `bar`",
+      body: "See #9",
+    });
+  });
+
+  test("fenced format tolerates extra blank lines around fences", () => {
+    const body = [
+      SQUASH_SUGGESTION_START_MARKER,
+      "",
+      "**Title**",
+      "",
+      "",
+      "```text",
+      "T",
+      "```",
+      "",
+      "",
+      "**Body**",
+      "",
+      "",
+      "```text",
+      "B",
+      "```",
+      "",
+      SQUASH_SUGGESTION_END_MARKER,
+    ].join("\n");
+    expect(parseSquashSuggestionBlock(body)).toEqual({
+      title: "T",
+      body: "B",
+    });
+  });
+
+  test("returns undefined when the title fenced block is unterminated", () => {
+    const body = [
+      SQUASH_SUGGESTION_START_MARKER,
+      "**Title**",
+      "",
+      "```text",
+      "no close",
+      "",
+      "**Body**",
+      "",
+      "```text",
+      "B",
+      "```",
+      SQUASH_SUGGESTION_END_MARKER,
+    ].join("\n");
+    expect(parseSquashSuggestionBlock(body)).toBeUndefined();
+  });
+
+  test("returns undefined when fenced-intent block has legacy-looking prose inside an unterminated fence", () => {
+    // Regression: a malformed fenced block whose contents happen to
+    // contain `**Title:**` / `**Body:**` strings must not be rescued
+    // by the legacy-format fallback.  The new-format `**Title**`
+    // label signals fenced intent, so the block must strictly fail
+    // rather than silently parse the prose as a legacy block.
+    const body = [
+      SQUASH_SUGGESTION_START_MARKER,
+      "## Suggested squash commit",
+      "",
+      "**Title**",
+      "",
+      "```text",
+      "Broken suggestion",
+      "",
+      "**Title:** this is just prose inside the broken fence",
+      "",
+      "**Body:**",
+      "still just prose inside the same broken fence",
+      SQUASH_SUGGESTION_END_MARKER,
+    ].join("\n");
+    expect(parseSquashSuggestionBlock(body)).toBeUndefined();
+  });
+
+  // ---- legacy format (deprecated, one release cycle) ------------------------
+
+  test("parses the deprecated legacy `**Title:**` / `**Body:**` format", () => {
     const body = `noise\n${SQUASH_SUGGESTION_START_MARKER}\n## Suggested squash commit\n\n**Title:** Fix widget rendering\n\n**Body:**\nFirst line.\n\nCloses #42\n${SQUASH_SUGGESTION_END_MARKER}\nmore noise`;
     expect(parseSquashSuggestionBlock(body)).toEqual({
       title: "Fix widget rendering",
       body: "First line.\n\nCloses #42",
     });
+  });
+
+  test("legacy format parses when body contains a standalone `**Title**` line", () => {
+    // Regression: a valid legacy block whose body happens to include a
+    // standalone `**Title**` line (the new-format label) must still
+    // parse as legacy.  The format selector must key off the actual
+    // top-level fenced shape (label + opening fence), not the mere
+    // presence of `**Title**` anywhere inside the block.
+    const body = [
+      SQUASH_SUGGESTION_START_MARKER,
+      "## Suggested squash commit",
+      "",
+      "**Title:** Fix widget rendering",
+      "",
+      "**Body:**",
+      "Intro paragraph.",
+      "",
+      "**Title**",
+      "",
+      "Closes #42",
+      SQUASH_SUGGESTION_END_MARKER,
+    ].join("\n");
+    expect(parseSquashSuggestionBlock(body)).toEqual({
+      title: "Fix widget rendering",
+      body: "Intro paragraph.\n\n**Title**\n\nCloses #42",
+    });
+  });
+
+  test("legacy format parses when body contains `**Title**` immediately followed by a fenced block", () => {
+    // Regression: a valid legacy block whose body includes a
+    // standalone `**Title**` line directly followed by a fenced code
+    // sample must still parse as legacy.  The format selector must key
+    // off whichever top-level title label appears *first* in the
+    // block; the legacy `**Title:**` at the top wins over any later
+    // `**Title**` + fence shape found inside the legacy body.
+    const body = [
+      SQUASH_SUGGESTION_START_MARKER,
+      "## Suggested squash commit",
+      "",
+      "**Title:** Fix widget rendering",
+      "",
+      "**Body:**",
+      "Intro paragraph.",
+      "",
+      "**Title**",
+      "",
+      "```text",
+      "example",
+      "```",
+      "",
+      "Closes #42",
+      SQUASH_SUGGESTION_END_MARKER,
+    ].join("\n");
+    expect(parseSquashSuggestionBlock(body)).toEqual({
+      title: "Fix widget rendering",
+      body: "Intro paragraph.\n\n**Title**\n\n```text\nexample\n```\n\nCloses #42",
+    });
+  });
+
+  test("legacy format returns undefined when the `**Body:**` label is missing", () => {
+    // Regression: the legacy parser must require both labels on their
+    // own top-level lines.  A block with `**Title:** ...` but no
+    // `**Body:**` label is syntactically malformed and must fail so
+    // the Stage 8 strict gate blocks instead of silently accepting.
+    const body = [
+      SQUASH_SUGGESTION_START_MARKER,
+      "## Suggested squash commit",
+      "",
+      "**Title:** Fix widget rendering",
+      "",
+      "This forgot the body label entirely.",
+      SQUASH_SUGGESTION_END_MARKER,
+    ].join("\n");
+    expect(parseSquashSuggestionBlock(body)).toBeUndefined();
+  });
+
+  test("legacy format returns undefined when labels appear only inside prose", () => {
+    // Regression: stray `**Title:**` / `**Body:**` strings that appear
+    // mid-line inside prose must not be mistaken for real top-level
+    // legacy labels.  Both labels must be line-anchored.
+    const body = [
+      SQUASH_SUGGESTION_START_MARKER,
+      "## Suggested squash commit",
+      "",
+      "This paragraph mentions **Title:** inline and **Body:** inline too.",
+      SQUASH_SUGGESTION_END_MARKER,
+    ].join("\n");
+    expect(parseSquashSuggestionBlock(body)).toBeUndefined();
+  });
+
+  // ---- malformed / missing --------------------------------------------------
+
+  test("returns undefined when the block is neither fenced nor legacy", () => {
+    const body = [
+      SQUASH_SUGGESTION_START_MARKER,
+      "## Suggested squash commit",
+      "",
+      "Just some prose without labels or fences.",
+      SQUASH_SUGGESTION_END_MARKER,
+    ].join("\n");
+    expect(parseSquashSuggestionBlock(body)).toBeUndefined();
   });
 
   test("returns undefined when markers are missing", () => {
