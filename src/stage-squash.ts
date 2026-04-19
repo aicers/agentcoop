@@ -319,21 +319,13 @@ export function buildAgentSquashFollowupPrompt(): string {
  * in `prBody`.  Returns `undefined` when the markers are missing or
  * the block does not contain a parseable title.
  *
- * Accepts two formats:
- *
- * 1. **Fenced** (current, written by the agent) — `**Title**` and
- *    `**Body**` labels each followed by a CommonMark-style fenced code
- *    block.  The fence length is chosen dynamically by the agent so
- *    the block can survive commit bodies that themselves contain
- *    triple-backtick samples; the parser mirrors that rule by
- *    matching any opening fence of three or more backticks and
- *    scanning for a closing line with a run of the same character
- *    that is at least as long.
- * 2. **Legacy** (deprecated) — `**Title:** <title>` / `**Body:**`
- *    plain-text format.  Kept for one release cycle so that PRs
- *    written by older versions still render in the stage 9 inline
- *    preview after upgrade.  Remove once the deprecation window
- *    expires.
+ * The block uses `**Title**` and `**Body**` labels each followed by a
+ * CommonMark-style fenced code block.  The fence length is chosen
+ * dynamically by the agent so the block can survive commit bodies
+ * that themselves contain triple-backtick samples; the parser
+ * mirrors that rule by matching any opening fence of three or more
+ * backticks and scanning for a closing line with a run of the same
+ * character that is at least as long.
  */
 export function parseSquashSuggestionBlock(
   prBody: string | undefined,
@@ -348,45 +340,7 @@ export function parseSquashSuggestionBlock(
     endIdx,
   );
 
-  // Decide format by whichever top-level title label appears *first*
-  // in the block, not merely by whether a fenced-intent shape exists
-  // anywhere.  A legacy body may legitimately contain a standalone
-  // `**Title**` line followed by a fenced code sample as part of its
-  // own prose, so scanning the whole block for a fenced shape would
-  // misroute valid legacy blocks.  The first recognized top-level
-  // label wins: `**Title:** <content>` → legacy, `**Title**` + fence
-  // → fenced.  Once classified as fenced, a malformed fenced block
-  // must fail to `undefined` rather than silently fall through to
-  // legacy parsing (which would otherwise pick up `**Title:**` /
-  // `**Body:**` strings that appeared as prose inside an unterminated
-  // fence).
-  const format = detectFormat(inner);
-  if (format === "fenced") return parseFencedSuggestion(inner);
-  if (format === "legacy") return parseLegacySuggestion(inner);
-  return undefined;
-}
-
-/**
- * Classify the block by the first top-level title label it contains.
- * Returns `"legacy"` if a `**Title:** <content>` line appears before
- * any fenced-intent shape, `"fenced"` if a `**Title**` label line
- * followed (after optional blank lines) by an opening code fence
- * appears first, or `undefined` when neither shape is present.
- */
-function detectFormat(inner: string): "fenced" | "legacy" | undefined {
-  const lines = inner.split("\n");
-  const legacyTitleRe = /^\s*\*\*Title:\*\*\s+\S/;
-  const fencedTitleRe = labelLineRe("Title");
-  const openFenceRe = /^\s*`{3,}[^`]*$/;
-  for (let i = 0; i < lines.length; i++) {
-    if (legacyTitleRe.test(lines[i])) return "legacy";
-    if (fencedTitleRe.test(lines[i])) {
-      let j = i + 1;
-      while (j < lines.length && lines[j].trim() === "") j++;
-      if (j < lines.length && openFenceRe.test(lines[j])) return "fenced";
-    }
-  }
-  return undefined;
+  return parseFencedSuggestion(inner);
 }
 
 /** Label-line regex for the fenced format (`**Title**` / `**Body**`). */
@@ -473,65 +427,18 @@ function readFencedBlock(
 }
 
 /**
- * Parse the deprecated legacy format (`**Title:** <title>` /
- * `**Body:**` plain text).  Maintained for one release cycle after
- * the switch to fenced blocks so PRs written by older agent runs
- * still render correctly in the stage 9 inline preview.
- *
- * Both labels must appear on their own top-level lines in order —
- * `**Title:** <content>` with content on the same line, then a
- * later line that is exactly `**Body:**`.  A whole-block
- * `match()` / `indexOf()` approach would happily pick up stray
- * `**Title:**` / `**Body:**` strings that appeared mid-prose and
- * accept malformed blocks (e.g. missing the body label), weakening
- * the Stage 8 strict gate in `hasValidSuggestionBlock`.
- */
-function parseLegacySuggestion(inner: string): SquashSuggestion | undefined {
-  const lines = inner.split("\n");
-  const titleLineRe = /^\s*\*\*Title:\*\*\s+(.+?)\s*$/;
-  const bodyLabelRe = /^\s*\*\*Body:\*\*\s*$/;
-
-  let titleIdx = -1;
-  let title = "";
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(titleLineRe);
-    if (m) {
-      titleIdx = i;
-      title = m[1].trim();
-      break;
-    }
-  }
-  if (titleIdx === -1) return undefined;
-
-  let bodyIdx = -1;
-  for (let i = titleIdx + 1; i < lines.length; i++) {
-    if (bodyLabelRe.test(lines[i])) {
-      bodyIdx = i;
-      break;
-    }
-  }
-  if (bodyIdx === -1) return undefined;
-
-  const body = lines
-    .slice(bodyIdx + 1)
-    .join("\n")
-    .trim();
-
-  return { title, body };
-}
-
-/**
  * True when `prBody` contains a fully parseable squash suggestion
- * block (start + end markers AND a `**Title:**` line that
- * `parseSquashSuggestionBlock` can extract).
+ * block (start + end markers AND a `**Title**` label followed by a
+ * well-formed fenced block that `parseSquashSuggestionBlock` can
+ * extract).
  *
  * Stage 8 must use this strict check rather than a marker-presence
  * check because Stage 9 reads the same block via
  * `parseSquashSuggestionBlock` to render the inline preview.  If
  * Stage 8 accepted a malformed block (e.g. only the start marker, or
- * a block missing `**Title:**`/the end marker), the SUGGESTED_SINGLE
- * path could complete with `applied_in_pr_body` while leaving Stage 9
- * with nothing to show.
+ * a block missing the `**Title**` label / the end marker), the
+ * SUGGESTED_SINGLE path could complete with `applied_in_pr_body`
+ * while leaving Stage 9 with nothing to show.
  */
 function hasValidSuggestionBlock(prBody: string | undefined): boolean {
   return parseSquashSuggestionBlock(prBody) !== undefined;
@@ -840,7 +747,7 @@ export function createSquashStageHandler(
       // effect, so detect it first.  Only then check the suggestion
       // block, because an earlier run may have left a stale block in
       // the PR body that would otherwise be misclassified.  The block
-      // must be fully parseable (markers + `**Title:**`) — a malformed
+      // must be fully parseable (markers + `**Title**` label) — a malformed
       // block is treated as missing because Stage 9 cannot render a
       // preview from it.
       if (verdict === undefined) {
@@ -880,7 +787,7 @@ export function createSquashStageHandler(
       if (verdict === "SUGGESTED_SINGLE") {
         // Verify the PR body holds a fully parseable suggestion block
         // before asking the user.  A bare start marker or a block
-        // missing `**Title:**`/the end marker would let the stage
+        // missing the `**Title**` label / the end marker would let the stage
         // complete with `applied_in_pr_body` but leave Stage 9 unable
         // to render the inline preview, so fail closed instead.
         const prBody = getPrBody(ctx.owner, ctx.repo, ctx.branch);

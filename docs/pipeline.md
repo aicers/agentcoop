@@ -1315,10 +1315,11 @@ because the three-way distinction is squash-specific.
 - `SUGGESTED_SINGLE` → verify a fully parseable suggestion block is
   present in the PR body before asking the user.  "Parseable" means
   both markers are present **and** `parseSquashSuggestionBlock`
-  succeeds (the block contains a `**Title:**` line).  A bare start
-  marker or a block missing `**Title:**`/the end marker fails
-  closed with `blocked` rather than completing as if the suggestion
-  were valid — Stage 9 reads the same block via
+  succeeds (the block contains a `**Title**` label followed by a
+  well-formed fenced block).  A bare start marker or a block missing
+  the `**Title**` label / the end marker fails closed with `blocked`
+  rather than completing as if the suggestion were valid — Stage 9
+  reads the same block via
   `parseSquashSuggestionBlock` to render the inline preview, so a
   malformed block would leave the merge-confirm screen blank.  Once
   validated, ask the user via `chooseSquashApplyMode`:
