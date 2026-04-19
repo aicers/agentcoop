@@ -1177,18 +1177,21 @@ export function createDoneStageHandler(
       const hint = options.getSquashMergeHint?.();
       const sections: string[] = [summary];
       if (hint) {
-        const tipLines: string[] = [m["pipeline.mergeConfirmSquashTip"]];
+        const tipSections: string[] = [m["pipeline.mergeConfirmSquashTip"]];
         if (hint.title) {
-          tipLines.push(m["pipeline.suggestedSquashTitle"](hint.title));
+          tipSections.push(
+            `${m["pipeline.suggestedSquashTitle"]}\n${hint.title}`,
+          );
         }
         if (hint.body) {
-          tipLines.push(m["pipeline.suggestedSquashBody"]);
-          tipLines.push(hint.body);
+          tipSections.push(
+            `${m["pipeline.suggestedSquashBody"]}\n${hint.body}`,
+          );
         }
         if (hint.prUrl) {
-          tipLines.push(m["pipeline.prUrl"](hint.prUrl));
+          tipSections.push(m["pipeline.prUrl"](hint.prUrl));
         }
-        sections.push(tipLines.join("\n"));
+        sections.push(tipSections.join("\n\n"));
       }
       sections.push(m["pipeline.mergeConfirm"]);
       const choice = await options.prompt.confirmMerge(sections.join("\n\n"));

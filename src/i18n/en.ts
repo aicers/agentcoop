@@ -145,7 +145,7 @@ export const en: Messages = {
   "pipeline.mergeConfirmSquashTip":
     "If this repo allows 'Squash and merge', the suggested commit " +
     "message is in the PR body.",
-  "pipeline.suggestedSquashTitle": (title) => `Suggested title: ${title}`,
+  "pipeline.suggestedSquashTitle": "Suggested title:",
   "pipeline.suggestedSquashBody": "Suggested body:",
   "pipeline.prUrl": (url) => `PR: ${url}`,
   "pipeline.worktreeCleanedUp": "Worktree cleaned up.",
