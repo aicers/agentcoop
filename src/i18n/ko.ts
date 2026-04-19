@@ -179,7 +179,7 @@ export const ko: Messages = {
     "PR이 병합되었습니까? 확인하면 워크트리를 정리합니다.",
   "pipeline.mergeConfirmSquashTip":
     "이 저장소가 'Squash and merge'를 허용한다면, 제안된 커밋 메시지가 PR 본문에 있습니다.",
-  "pipeline.suggestedSquashTitle": (title) => `제안 제목: ${title}`,
+  "pipeline.suggestedSquashTitle": "제안 제목:",
   "pipeline.suggestedSquashBody": "제안 본문:",
   "pipeline.prUrl": (url) => `PR: ${url}`,
   "pipeline.worktreeCleanedUp": "워크트리가 정리되었습니다.",

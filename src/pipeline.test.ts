@@ -1143,6 +1143,15 @@ describe("createDoneStageHandler", () => {
     expect(message).toContain("Fix widget rendering");
     expect(message).toContain("Closes #5");
     expect(message).toContain("https://github.com/org/repo/pull/123");
+    // Title and body sit on their own lines with no inline prefix so that
+    // triple-click selects exactly the value.
+    expect(message).toContain("Suggested title:\nFix widget rendering\n");
+    expect(message).toContain("Suggested body:\nBody line\n\nCloses #5");
+    expect(message).not.toMatch(/Suggested title: Fix widget rendering/);
+    // Blank lines separate each labelled section from surrounding content.
+    expect(message).toContain("\n\nSuggested title:");
+    expect(message).toContain("\n\nSuggested body:");
+    expect(message).toMatch(/Closes #5\n\nPR: https:\/\//);
   });
 
   test("MERGEABLE: omits hint when getSquashMergeHint returns undefined", async () => {

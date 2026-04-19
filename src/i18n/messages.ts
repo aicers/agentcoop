@@ -139,7 +139,7 @@ export interface Messages {
   ) => string;
   "pipeline.mergeConfirm": string;
   "pipeline.mergeConfirmSquashTip": string;
-  "pipeline.suggestedSquashTitle": (title: string) => string;
+  "pipeline.suggestedSquashTitle": string;
   "pipeline.suggestedSquashBody": string;
   "pipeline.prUrl": (url: string) => string;
   "pipeline.worktreeCleanedUp": string;
