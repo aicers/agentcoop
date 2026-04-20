@@ -5,7 +5,9 @@ vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
 }));
 
-const { fetchPrComments } = await import("./pr-comments.js");
+const { fetchPrComments, findLatestCommentWithMarker } = await import(
+  "./pr-comments.js"
+);
 
 const mockExecFileSync = vi.mocked(execFileSync);
 
@@ -53,5 +55,43 @@ describe("fetchPrComments", () => {
 
     const result = fetchPrComments("org", "repo", 1);
     expect(result).toEqual([]);
+  });
+});
+
+describe("findLatestCommentWithMarker", () => {
+  const MARKER = "<!-- agentcoop:squash-suggestion:start -->";
+
+  test("returns undefined when no comment matches", () => {
+    const page = [
+      { body: "Random comment", user: { login: "a" } },
+      { body: "Another comment", user: { login: "b" } },
+    ];
+    mockExecFileSync.mockReturnValue(JSON.stringify([page]));
+    expect(
+      findLatestCommentWithMarker("org", "repo", 1, MARKER),
+    ).toBeUndefined();
+  });
+
+  test("returns the body of the latest matching comment", () => {
+    // Older matching comment followed by a newer matching comment —
+    // the newer one wins.
+    const page = [
+      { body: `older ${MARKER} v1`, user: { login: "a" } },
+      { body: "noise", user: { login: "b" } },
+      { body: `newer ${MARKER} v2`, user: { login: "a" } },
+    ];
+    mockExecFileSync.mockReturnValue(JSON.stringify([page]));
+    expect(findLatestCommentWithMarker("org", "repo", 1, MARKER)).toBe(
+      `newer ${MARKER} v2`,
+    );
+  });
+
+  test("returns undefined when the gh call throws", () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error("boom");
+    });
+    expect(
+      findLatestCommentWithMarker("org", "repo", 1, MARKER),
+    ).toBeUndefined();
   });
 });

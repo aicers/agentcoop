@@ -289,11 +289,28 @@ describe("squashSubStep persistence", () => {
   test("round-trips squashSubStep", () => {
     const state = makeRunState({
       currentStage: 8,
-      squashSubStep: "applied_in_pr_body",
+      squashSubStep: "applied_via_github",
     });
     saveRunState(state);
     const loaded = loadRunState("org", "repo", 42);
-    expect(loaded?.squashSubStep).toBe("applied_in_pr_body");
+    expect(loaded?.squashSubStep).toBe("applied_via_github");
+  });
+
+  test("migrates v3 'applied_in_pr_body' to 'applied_via_github'", () => {
+    const { squashSubStep: _, ...rest } = makeRunState({ currentStage: 8 });
+    const raw = {
+      ...rest,
+      version: 3,
+      squashSubStep: "applied_in_pr_body",
+    };
+    const path = runStatePath("org", "repo", 42);
+    mkdirSync(join(tmpHome, ".agentcoop", "runs", "org", "repo"), {
+      recursive: true,
+    });
+    writeFileSync(path, JSON.stringify(raw));
+    const loaded = loadRunState("org", "repo", 42);
+    expect(loaded?.squashSubStep).toBe("applied_via_github");
+    expect(loaded?.version).toBe(RUN_STATE_VERSION);
   });
 
   test("defaults to undefined for old state files without squashSubStep", () => {

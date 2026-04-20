@@ -8,6 +8,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Stage 8 (Squash) now posts the single-commit suggestion as a PR
+  comment instead of editing the PR body. The agent looks up any
+  prior squash-suggestion comment by its start marker and PATCHes it
+  in place so the timeline stays near the "Squash and merge" dropdown
+  rather than accumulating duplicates.
+- Startup now asks once per run whether a SUGGESTED_SINGLE squash
+  verdict should be applied automatically by the agent or interrupt
+  the pipeline with the per-run chooser. Asked on both the fresh
+  start and resume branches; not persisted to config or RunState.
+  Default is "let the agent handle it".
 - Stage 1 (Bootstrap) is now surfaced retrospectively in the TUI. At first
   render, the status bar shows `Stage 1: Bootstrap → Stage N: <name>` briefly
   (where `N` is 2 on a fresh run or `startFromStage` on resume) before
@@ -27,15 +37,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `Stage:`) once the pull-request number is known, also wrapped with an
   OSC 8 hyperlink pointing at the PR page.
 - Stage 8 (Squash) now offers a single-commit suggestion path: when the agent
-  judges that one commit is appropriate, it writes the suggested title and
-  body into a marker-delimited block in the PR body instead of force-pushing.
-  The user can then either let the agent perform the squash (which reruns CI)
+  judges that one commit is appropriate, it posts the suggested title and
+  body inside a marker-delimited PR comment instead of force-pushing. The
+  user can then either let the agent perform the squash (which reruns CI)
   or apply the suggestion via GitHub's "Squash and merge" at merge time
   (which avoids the extra CI cycle).
 - Stage 9 (Done) merge-confirm screen now prints the suggested squash title,
   body, and PR URL inline when the squash stage finished via the
-  PR-body suggestion path, so the user can copy-paste without opening the
-  browser.
+  squash-suggestion comment path, so the user can copy-paste without opening
+  the browser.
 - Stage 9 (Done) merge-confirm screen now renders `[t] copy` / `[b] copy`
   hotkey hints next to the suggested squash title and body when the terminal
   can write to the system clipboard.  Pressing `t` copies the title and `b`
@@ -53,27 +63,27 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
-- Stage 8's squash suggestion block in the PR body now emits the title and
-  body inside separate fenced code blocks (info string `text`) instead of
-  bold-labeled plain Markdown (`**Title:** …` / `**Body:** …`).  GitHub
-  renders a one-click copy icon on fenced blocks and does not reinterpret
-  Markdown characters inside, so the user can paste the suggestion verbatim
-  into the "Squash and merge" dialog.  The agent chooses each fence length
+- Stage 8's squash suggestion comment now emits the title and body inside
+  separate fenced code blocks (info string `text`) instead of bold-labeled
+  plain Markdown (`**Title:** …` / `**Body:** …`).  GitHub renders a
+  one-click copy icon on fenced blocks and does not reinterpret Markdown
+  characters inside, so the user can paste the suggestion verbatim into the
+  "Squash and merge" dialog.  The agent chooses each fence length
   dynamically per the CommonMark rule
   (`max(longest backtick run in content, 2) + 1`, minimum 3) so commit
   bodies containing their own triple-backtick samples survive unchanged.
 - Stage 8 verdict keywords are now `SQUASHED_MULTI` / `SUGGESTED_SINGLE` /
   `BLOCKED` (previously `COMPLETED` / `BLOCKED`).  When the verdict is
   ambiguous after a clarification retry, the handler runs a deterministic
-  fallback chain — commit-count decrease, then PR-body marker presence,
-  then BLOCKED.
+  fallback chain — commit-count decrease, then suggestion-comment marker
+  presence, then BLOCKED.
 - `RunState` now persists a `squashSubStep` field tracking progress through
   the squash stage's substates so resume can re-enter at the correct point.
   `RUN_STATE_VERSION` bumped from 2 to 3 (the new field defaults to
   `undefined` for older state files; no destructive migration).
 - Stage 9 merge-confirm screen now includes a conditional one-line tip
-  (`pipeline.mergeConfirmSquashTip`) when a squash suggestion is live in
-  the PR body.
+  (`pipeline.mergeConfirmSquashTip`) when a squash suggestion comment is
+  live on the PR.
 
 ### Fixed
 
@@ -104,9 +114,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   derived verdict.  Previously the event was only emitted when the
   agent response parsed into a concrete keyword, so the fallback
   branch silently skipped telemetry.
-- Stage 8 now validates the squash suggestion block strictly before
-  accepting `SUGGESTED_SINGLE` / `applied_in_pr_body`.  A bare start
-  marker or a block missing the `**Title**` label / the end marker
+- Stage 8 now validates the squash suggestion comment strictly before
+  accepting `SUGGESTED_SINGLE` / `applied_via_github`.  A bare start
+  marker or a comment missing the `**Title**` label / the end marker
   is treated as malformed and fails closed (or re-runs planning on
   resume) instead of completing with `squash.messageAppended` and
   leaving Stage 9 unable to render the inline preview.
@@ -117,7 +127,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   earlier.  Without this, a resume where the user picks "agent
   squashes now" could re-send the follow-up on the older planning
   session rather than the exact conversation that drafted the
-  PR-body suggestion.
+  squash-suggestion comment.
 
 ## [0.1.0] - 2026-04-18
 

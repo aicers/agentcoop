@@ -64,6 +64,9 @@ export const ko: Messages = {
     "\uC774 \uC774\uC288\uB85C \uC9C4\uD589\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?",
   "startup.issueNotConfirmed":
     "\uC774\uC288\uAC00 \uD655\uC778\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4. \uC911\uB2E8\uD569\uB2C8\uB2E4.",
+  "startup.squashApplyPolicyPrompt":
+    "단일 커밋 스쿼시가 제안될 때, 에이전트가 자동으로 적용할까요? " +
+    "(아니오 = 매번 묻기)",
 
   // ---- custom model entry --------------------------------------------------
 
@@ -178,7 +181,7 @@ export const ko: Messages = {
   "pipeline.mergeConfirm":
     "PR이 병합되었습니까? 확인하면 워크트리를 정리합니다.",
   "pipeline.mergeConfirmSquashTip":
-    "이 저장소가 'Squash and merge'를 허용한다면, 제안된 커밋 메시지가 PR 본문에 있습니다.",
+    "이 저장소가 'Squash and merge'를 허용한다면, 제안된 커밋 메시지가 PR 코멘트에 있습니다.",
   "pipeline.suggestedSquashTitle": "제안 제목:",
   "pipeline.suggestedSquashBody": "제안 본문:",
   "pipeline.prUrl": (url) => `PR: ${url}`,
@@ -306,7 +309,7 @@ export const ko: Messages = {
   "squash.completed": "커밋이 스쿼시되고 CI를 통과했습니다.",
   "squash.singleCommitSkip": "커밋이 하나뿐이므로 스쿼시를 건너뜁니다.",
   "squash.messageAppended":
-    "제안된 스쿼시 커밋 메시지가 PR 본문에 기록되었습니다. " +
+    "제안된 스쿼시 커밋 메시지가 PR 코멘트로 게시되었습니다. " +
     "병합 시 GitHub의 'Squash and merge'로 적용하세요.",
   "squash.singleChoicePrompt":
     "단일 스쿼시 커밋이 적합해 보입니다. 제안 메시지를 어떻게 적용할까요?",

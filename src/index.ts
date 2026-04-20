@@ -41,9 +41,10 @@ import type {
 } from "./pipeline.js";
 import { createDoneStageHandler } from "./pipeline.js";
 import { PipelineEventEmitter } from "./pipeline-events.js";
-import { checkMergeable, findPrNumber, getPrBody, queryPrState } from "./pr.js";
+import { checkMergeable, findPrNumber, queryPrState } from "./pr.js";
 import {
   fetchPrComments,
+  findLatestCommentWithMarker,
   type PrComment,
   parsePrReviewState,
   reconcileWithPr,
@@ -65,10 +66,16 @@ import { createSelfCheckStageHandler } from "./stage-selfcheck.js";
 import {
   createSquashStageHandler,
   parseSquashSuggestionBlock,
+  SQUASH_SUGGESTION_START_MARKER,
 } from "./stage-squash.js";
 import { createTestPlanStageHandler } from "./stage-testplan.js";
 import type { AgentConfig } from "./startup.js";
-import { modelDisplayName, runStartup, selectTarget } from "./startup.js";
+import {
+  modelDisplayName,
+  promptSquashApplyPolicy,
+  runStartup,
+  selectTarget,
+} from "./startup.js";
 import { renderApp } from "./ui/render-app.js";
 import {
   bootstrapRepo,
@@ -93,6 +100,14 @@ interface RunParams {
   resuming: boolean;
   /** True when user chose "Start fresh" — worktree should be cleaned. */
   startFresh: boolean;
+  /**
+   * Per-run policy controlling how a SUGGESTED_SINGLE squash verdict
+   * is applied.  `"auto"` proceeds silently with the agent path;
+   * `"ask"` presents the mid-pipeline chooser.  Collected fresh on
+   * every run (fresh startup AND resume) so the right default can
+   * change from run to run.
+   */
+  squashApplyPolicy: "auto" | "ask";
 }
 
 // ---- helpers -------------------------------------------------------------
@@ -371,6 +386,8 @@ try {
         startFromStage: savedState.currentStage,
         resuming: true,
         startFresh: false,
+        // Provisional — overwritten below at the shared join point.
+        squashApplyPolicy: "auto",
       };
     } else {
       // Start fresh: warn about uncommitted changes.
@@ -414,8 +431,17 @@ try {
       startFromStage: undefined,
       resuming: false,
       startFresh: userChoseFresh,
+      // Provisional — overwritten below at the shared join point.
+      squashApplyPolicy: "auto",
     };
   })();
+
+  // Ask the squash-apply policy once per run, at the shared join
+  // point so both the fresh-start and resume branches go through
+  // the same prompt.  Routed through `promptSquashApplyPolicy` so
+  // the call site is a single named target — see the helper for the
+  // semantics of "not persisted" and the default-true rationale.
+  params.squashApplyPolicy = await promptSquashApplyPolicy();
 
   const {
     agentAConfig,
@@ -428,6 +454,7 @@ try {
     startFromStage: rawStartFromStage,
     resuming,
     startFresh,
+    squashApplyPolicy,
   } = params;
 
   const m = t();
@@ -582,6 +609,7 @@ try {
         agent: agentA,
         ...issueCtx,
         defaultBranch,
+        squashApplyPolicy,
         chooseSquashApplyMode: async (msg) => {
           if (tuiPrompt) return tuiPrompt.chooseSquashApplyMode(msg);
           return "agent";
@@ -750,10 +778,18 @@ try {
     },
     hasRunningServices: () => hasDockerComposeRunning(wt.path),
     getSquashMergeHint: () => {
-      if (runState.squashSubStep !== "applied_in_pr_body") return undefined;
-      const body = getPrBody(owner, repo, wt.branch);
-      const suggestion = parseSquashSuggestionBlock(body);
+      if (runState.squashSubStep !== "applied_via_github") return undefined;
       const prNum = runState.prNumber ?? findPrNumber(owner, repo, wt.branch);
+      const commentBody =
+        prNum !== undefined
+          ? findLatestCommentWithMarker(
+              owner,
+              repo,
+              prNum,
+              SQUASH_SUGGESTION_START_MARKER,
+            )
+          : undefined;
+      const suggestion = parseSquashSuggestionBlock(commentBody);
       const prUrl =
         prNum !== undefined
           ? `https://github.com/${owner}/${repo}/pull/${prNum}`

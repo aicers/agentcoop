@@ -50,9 +50,8 @@ vi.mock("./models.js", () => ({
   setCustomModels: (...args: unknown[]) => mockSetCustomModels(...args),
 }));
 
-const { runStartup, selectTarget, modelDisplayName } = await import(
-  "./startup.js"
-);
+const { runStartup, selectTarget, modelDisplayName, promptSquashApplyPolicy } =
+  await import("./startup.js");
 
 // ---------------------------------------------------------------------------
 // Model mock setup
@@ -2802,5 +2801,31 @@ describe("runStartup — manage custom models", () => {
       (c: { value: string }) => c.value,
     );
     expect(values).not.toContain("__manage_custom__");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// promptSquashApplyPolicy
+// ---------------------------------------------------------------------------
+//
+// Lives in `startup.ts` and is invoked by `src/index.ts` at the
+// shared join point so the question fires once per run regardless of
+// whether `RunParams` came from `runStartup()` (fresh) or from saved
+// state (resume).  The structural test in `index.test.ts` enforces
+// that the join-point call site exists; these tests cover the
+// prompt's own behaviour.
+describe("promptSquashApplyPolicy", () => {
+  test("default Enter (true) → 'auto'", async () => {
+    mockConfirm.mockResolvedValueOnce(true);
+    const policy = await promptSquashApplyPolicy();
+    expect(policy).toBe("auto");
+    // Default is Yes so a bare Enter picks the low-friction path.
+    expect(mockConfirm.mock.calls[0][0]).toHaveProperty("default", true);
+  });
+
+  test("explicit no → 'ask'", async () => {
+    mockConfirm.mockResolvedValueOnce(false);
+    const policy = await promptSquashApplyPolicy();
+    expect(policy).toBe("ask");
   });
 });

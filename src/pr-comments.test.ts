@@ -32,6 +32,7 @@ function makeRunState(overrides: Partial<RunState> = {}): RunState {
     selfCheckCount: 0,
     reviewCount: 0,
     reviewSubStep: undefined,
+    squashSubStep: undefined,
     lastVerdict: undefined,
     executionMode: "auto",
     agentA: {

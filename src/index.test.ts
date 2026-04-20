@@ -262,6 +262,55 @@ describe("module exports", () => {
 });
 
 // ---------------------------------------------------------------------------
+// squash-apply policy join point (issue #274)
+// ---------------------------------------------------------------------------
+//
+// The squash-apply policy must be asked once per run on BOTH the
+// fresh-startup and resume branches (issue #274 §2).  The orchestration
+// in `src/index.ts` is top-level script code that cannot easily be
+// invoked from a unit test, so guard the invariant structurally: the
+// `promptSquashApplyPolicy` helper must be called exactly once and
+// must sit AFTER both the resume branch's params construction and the
+// fresh branch's `params ??= ...` block.  Without this guard a future
+// refactor could silently drop the prompt on one branch and only the
+// stage-level tests in `stage-squash.test.ts` would fail to catch it.
+describe("squash-apply policy join point", () => {
+  const indexSource = readFileSync(resolve(root, "src/index.ts"), "utf-8");
+
+  test("imports promptSquashApplyPolicy from startup", () => {
+    expect(indexSource).toMatch(
+      /import\s*\{[^}]*\bpromptSquashApplyPolicy\b[^}]*\}\s*from\s*"\.\/startup\.js"/s,
+    );
+  });
+
+  test("invokes promptSquashApplyPolicy exactly once", () => {
+    const matches = indexSource.match(/promptSquashApplyPolicy\s*\(/g) ?? [];
+    expect(matches.length).toBe(1);
+  });
+
+  test("invocation sits after both the resume branch and the fresh `params ??=` block", () => {
+    // Resume branch sets `resuming: true`; fresh branch is the
+    // `params ??= await (async () => {` IIFE that wraps `runStartup`.
+    const resumeIdx = indexSource.indexOf("resuming: true,");
+    const freshBranchIdx = indexSource.indexOf("params ??= await");
+    const policyCallIdx = indexSource.indexOf("promptSquashApplyPolicy(");
+
+    expect(resumeIdx).toBeGreaterThan(-1);
+    expect(freshBranchIdx).toBeGreaterThan(-1);
+    expect(policyCallIdx).toBeGreaterThan(-1);
+    // Both branches must precede the join-point call.
+    expect(policyCallIdx).toBeGreaterThan(resumeIdx);
+    expect(policyCallIdx).toBeGreaterThan(freshBranchIdx);
+  });
+
+  test("the call assigns to params.squashApplyPolicy", () => {
+    expect(indexSource).toMatch(
+      /params\.squashApplyPolicy\s*=\s*await\s+promptSquashApplyPolicy\s*\(\s*\)/,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // CLI E2E smoke test
 // ---------------------------------------------------------------------------
 describe("CLI E2E", () => {
