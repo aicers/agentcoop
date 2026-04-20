@@ -51,6 +51,7 @@ export interface Messages {
   "startup.issueLabels": (labels: string) => string;
   "startup.proceedWithIssue": string;
   "startup.issueNotConfirmed": string;
+  "startup.squashApplyPolicyPrompt": string;
 
   // ---- custom model entry (startup.ts) -------------------------------------
 

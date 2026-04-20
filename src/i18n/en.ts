@@ -48,6 +48,9 @@ export const en: Messages = {
   "startup.issueLabels": (labels) => `  Labels: ${labels}`,
   "startup.proceedWithIssue": "Proceed with this issue?",
   "startup.issueNotConfirmed": "Issue not confirmed. Aborting.",
+  "startup.squashApplyPolicyPrompt":
+    "When a single-commit squash is suggested, apply it automatically " +
+    "via the agent? (No = ask each time)",
 
   // ---- custom model entry --------------------------------------------------
 
@@ -144,7 +147,7 @@ export const en: Messages = {
     "Has the PR been merged? Confirm to clean up the worktree.",
   "pipeline.mergeConfirmSquashTip":
     "If this repo allows 'Squash and merge', the suggested commit " +
-    "message is in the PR body.",
+    "message is in a PR comment.",
   "pipeline.suggestedSquashTitle": "Suggested title:",
   "pipeline.suggestedSquashBody": "Suggested body:",
   "pipeline.prUrl": (url) => `PR: ${url}`,
@@ -264,7 +267,7 @@ export const en: Messages = {
   "squash.completed": "Commits squashed and CI passed.",
   "squash.singleCommitSkip": "Single commit — skipping squash.",
   "squash.messageAppended":
-    "Suggested squash commit message written to PR body. " +
+    "Suggested squash commit message posted as a PR comment. " +
     "Apply it via GitHub's 'Squash and merge' at merge time.",
   "squash.singleChoicePrompt":
     "A single squash commit looks appropriate. " +

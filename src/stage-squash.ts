@@ -2,8 +2,8 @@
  * Stage 8 — Squash commits.
  *
  * Three-way verdict: the agent decides whether the branch is best
- * consolidated into one commit (write the suggested message into the
- * PR body and let GitHub's "Squash and merge" apply it at merge
+ * consolidated into one commit (post the suggested message as a PR
+ * comment and let GitHub's "Squash and merge" apply it at merge
  * time, avoiding an extra CI cycle) or several meaningful commits
  * (rewrite history and force-push as before).
  *
@@ -33,10 +33,11 @@ import { t } from "./i18n/index.js";
 import { buildPrSyncInstructions } from "./issue-sync.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
-  getPrBody as defaultGetPrBody,
+  findPrNumber as defaultFindPrNumber,
   queryPrState as defaultQueryPrState,
   type PrLifecycleState,
 } from "./pr.js";
+import { findLatestCommentWithMarker as defaultFindLatestCommentWithMarker } from "./pr-comments.js";
 import type { SquashSubStep } from "./run-state.js";
 import {
   invokeOrResume,
@@ -52,7 +53,11 @@ import { countBranchCommits as defaultCountBranchCommits } from "./worktree.js";
 
 // ---- public types ------------------------------------------------------------
 
-/** Marker block delimiters used in the PR body for the SUGGESTED_SINGLE path. */
+/**
+ * Marker block delimiters used inside the squash-suggestion PR
+ * comment.  The start marker also doubles as the lookup key for
+ * finding the previous comment to update idempotently.
+ */
 export const SQUASH_SUGGESTION_START_MARKER =
   "<!-- agentcoop:squash-suggestion:start -->";
 export const SQUASH_SUGGESTION_END_MARKER =
@@ -85,12 +90,27 @@ export interface SquashStageOptions {
   delay?: (ms: number) => Promise<void>;
   /** Injected for testability. Defaults to `worktree.countBranchCommits`. */
   countBranchCommits?: (cwd: string, baseBranch: string) => number;
-  /** Injected for testability. Defaults to `pr.getPrBody`. */
-  getPrBody?: (
+  /**
+   * Look up the squash-suggestion PR comment body containing `marker`.
+   * Injected for testability.  Defaults to
+   * `pr-comments.findLatestCommentWithMarker`, which shells out to
+   * `gh api` to list PR comments.
+   */
+  findSuggestionCommentBody?: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+    marker: string,
+  ) => string | undefined;
+  /**
+   * Resolve the PR number for the current branch.  Injected for
+   * testability.  Defaults to `pr.findPrNumber`.
+   */
+  findPrNumber?: (
     owner: string,
     repo: string,
     branch: string,
-  ) => string | undefined;
+  ) => number | undefined;
   /**
    * Query the PR's lifecycle state (OPEN / CLOSED / MERGED).  Used by
    * {@link guardIfPrMerged} to short-circuit Stage 8 when the user
@@ -108,6 +128,16 @@ export interface SquashStageOptions {
    * conservatively defaults to "agent".
    */
   chooseSquashApplyMode?: (message: string) => Promise<"agent" | "github">;
+  /**
+   * Per-run policy for how a SUGGESTED_SINGLE verdict should be
+   * applied.  When `"auto"` the handler skips
+   * {@link chooseSquashApplyMode} and proceeds as if the user picked
+   * `"agent"`; when `"ask"` the user is prompted every time.
+   * Collected by the startup flow (see `src/startup.ts`) and
+   * threaded in via the pipeline boot code.  Defaults to `"ask"` so
+   * missing wiring falls back to today's behaviour.
+   */
+  squashApplyPolicy?: "auto" | "ask";
   /**
    * Persist the current squash sub-step so resume can re-enter at
    * the correct point.  Optional — when omitted, sub-step transitions
@@ -177,14 +207,9 @@ export function buildSquashPrompt(
     `     PR is squash-merged.  The title must not include issue or PR`,
     `     numbers; reference the issue in the body using \`Closes #N\``,
     `     or \`Part of #N\`.`,
-    `   - Update the PR body to include a marker-delimited block`,
-    `     containing the suggestion.  The block must be idempotent —`,
-    `     replace any existing block between the same markers, do not`,
-    `     stack duplicates.  Inside the block, wrap the title and body`,
-    `     each in their own fenced code block (info string \`text\`) so`,
-    `     GitHub renders a one-click copy icon and does not`,
-    `     re-interpret Markdown characters inside the commit message.`,
-    `     Use exactly these markers and this structure:`,
+    `   - Post the suggestion as a **PR comment** (not in the PR body).`,
+    `     The comment body must contain a marker-delimited block with`,
+    `     this exact structure:`,
     ``,
     `     \`\`\`\`text`,
     `     ${SQUASH_SUGGESTION_START_MARKER}`,
@@ -229,10 +254,31 @@ export function buildSquashPrompt(
     `     first line of content, or between the last line of content`,
     `     and the closing fence.  Do not indent the fences.`,
     ``,
-    `     Read the current body with`,
-    `     \`gh pr view --json body --jq .body\`, replace any prior`,
-    `     suggestion block, and write the result back via`,
-    `     \`gh pr edit --body "..."\`.`,
+    `     **Update idempotently.**  This prompt may run more than once`,
+    `     on the same PR.  Before posting, list existing PR comments`,
+    `     and look for a previous squash-suggestion comment — one`,
+    `     whose body contains \`${SQUASH_SUGGESTION_START_MARKER}\`.`,
+    `     If found, edit that comment via`,
+    `     \`gh api --method PATCH /repos/{owner}/{repo}/issues/comments/{id} --field body="..."\``,
+    `     so its body becomes the new suggestion.  If no prior comment`,
+    `     exists, create a fresh one with`,
+    `     \`gh pr comment <pr> --repo <owner>/<repo> --body "..."\`.`,
+    `     Locate any prior comment with:`,
+    ``,
+    `     \`\`\`text`,
+    `     gh api repos/{owner}/{repo}/issues/{pr}/comments --paginate --slurp \\`,
+    `       --jq '[.[] | .[] | select(.body | contains("${SQUASH_SUGGESTION_START_MARKER}"))] | last'`,
+    `     \`\`\``,
+    ``,
+    `     \`--paginate --slurp\` is required: \`--paginate\` alone applies`,
+    `     the \`--jq\` filter page-by-page, so on a long PR timeline`,
+    `     \`| last\` would return the last match within each page rather`,
+    `     than the latest match overall.  \`--slurp\` wraps all pages in`,
+    `     an outer array (\`[[page1...], [page2...]]\`); the \`.[] | .[]\``,
+    `     prefix flattens that before filtering.`,
+    ``,
+    `     Do not write the suggestion into the PR body.  Leave the`,
+    `     PR body untouched.`,
     ``,
     `   **If multiple commits are appropriate:**`,
     ...(ctx.baseSha
@@ -285,8 +331,8 @@ export function buildSquashCompletionCheckPrompt(): string {
     `- SQUASHED_MULTI — if you rewrote history into multiple meaningful`,
     `  commits and force-pushed`,
     `- SUGGESTED_SINGLE — if a single commit is appropriate and you`,
-    `  wrote the suggested title/body into the PR body marker block`,
-    `  (no force-push)`,
+    `  posted the suggested title/body as a PR comment containing`,
+    `  the marker block (no force-push)`,
     `- BLOCKED — if you could not complete either path and need user`,
     `  intervention`,
     ``,
@@ -297,27 +343,28 @@ export function buildSquashCompletionCheckPrompt(): string {
 /**
  * Follow-up prompt sent on the same session when the user picks
  * "agent squashes now" after a SUGGESTED_SINGLE verdict.  The agent
- * already drafted the message in the PR body, so this just asks it
+ * already drafted the message in a PR comment, so this just asks it
  * to perform the squash with the same message.
  */
 export function buildAgentSquashFollowupPrompt(): string {
   return [
     `The user chose to have you perform the squash now using the title`,
-    `and body you wrote into the PR body marker block.`,
+    `and body you posted in the squash-suggestion PR comment.`,
     ``,
     `Squash the branch into a single commit using that exact title and`,
     `body, then force-push (\`git push --force-with-lease\`).  You may`,
-    `leave the marker block in the PR body — it does not interfere with`,
-    `merging.`,
+    `leave the squash-suggestion comment on the PR — it does not`,
+    `interfere with merging.`,
   ].join("\n");
 }
 
 // ---- marker block parsing ----------------------------------------------------
 
 /**
- * Extract the title and body from the squash suggestion marker block
- * in `prBody`.  Returns `undefined` when the markers are missing or
- * the block does not contain a parseable title.
+ * Extract the title and body from the squash-suggestion marker block
+ * in `source` (a PR comment body).  Returns `undefined` when the
+ * markers are missing or the block does not contain a parseable
+ * title.
  *
  * The block uses `**Title**` and `**Body**` labels each followed by a
  * CommonMark-style fenced code block.  The fence length is chosen
@@ -328,14 +375,14 @@ export function buildAgentSquashFollowupPrompt(): string {
  * character that is at least as long.
  */
 export function parseSquashSuggestionBlock(
-  prBody: string | undefined,
+  source: string | undefined,
 ): SquashSuggestion | undefined {
-  if (!prBody) return undefined;
-  const startIdx = prBody.indexOf(SQUASH_SUGGESTION_START_MARKER);
-  const endIdx = prBody.indexOf(SQUASH_SUGGESTION_END_MARKER);
+  if (!source) return undefined;
+  const startIdx = source.indexOf(SQUASH_SUGGESTION_START_MARKER);
+  const endIdx = source.indexOf(SQUASH_SUGGESTION_END_MARKER);
   if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) return undefined;
 
-  const inner = prBody.slice(
+  const inner = source.slice(
     startIdx + SQUASH_SUGGESTION_START_MARKER.length,
     endIdx,
   );
@@ -427,21 +474,21 @@ function readFencedBlock(
 }
 
 /**
- * True when `prBody` contains a fully parseable squash suggestion
- * block (start + end markers AND a `**Title**` label followed by a
- * well-formed fenced block that `parseSquashSuggestionBlock` can
- * extract).
+ * True when `source` (a PR comment body) contains a fully parseable
+ * squash suggestion block (start + end markers AND a `**Title**`
+ * label followed by a well-formed fenced block that
+ * `parseSquashSuggestionBlock` can extract).
  *
  * Stage 8 must use this strict check rather than a marker-presence
  * check because Stage 9 reads the same block via
  * `parseSquashSuggestionBlock` to render the inline preview.  If
  * Stage 8 accepted a malformed block (e.g. only the start marker, or
  * a block missing the `**Title**` label / the end marker), the
- * SUGGESTED_SINGLE path could complete with `applied_in_pr_body`
+ * SUGGESTED_SINGLE path could complete with `applied_via_github`
  * while leaving Stage 9 with nothing to show.
  */
-function hasValidSuggestionBlock(prBody: string | undefined): boolean {
-  return parseSquashSuggestionBlock(prBody) !== undefined;
+function hasValidSuggestionBlock(source: string | undefined): boolean {
+  return parseSquashSuggestionBlock(source) !== undefined;
 }
 
 // ---- handler -----------------------------------------------------------------
@@ -571,7 +618,25 @@ export function createSquashStageHandler(
     requiresArtifact: true,
     handler: async (ctx: StageContext): Promise<StageResult> => {
       const countCommits = opts.countBranchCommits ?? defaultCountBranchCommits;
-      const getPrBody = opts.getPrBody ?? defaultGetPrBody;
+      const findSuggestionCommentBody =
+        opts.findSuggestionCommentBody ?? defaultFindLatestCommentWithMarker;
+      const findPrNumber = opts.findPrNumber ?? defaultFindPrNumber;
+
+      /**
+       * Resolve and fetch the squash-suggestion comment body for the
+       * current branch's PR.  Returns `undefined` when the PR cannot
+       * be resolved or when no matching comment exists.
+       */
+      const readSuggestionCommentBody = (): string | undefined => {
+        const prNumber = findPrNumber(ctx.owner, ctx.repo, ctx.branch);
+        if (prNumber === undefined) return undefined;
+        return findSuggestionCommentBody(
+          ctx.owner,
+          ctx.repo,
+          prNumber,
+          SQUASH_SUGGESTION_START_MARKER,
+        );
+      };
 
       // Read the persisted agent-A session id (live) with a fallback
       // to the one-shot pipeline value, so in-process retries can
@@ -594,7 +659,7 @@ export function createSquashStageHandler(
           ? opts.savedSquashSubStep()
           : opts.savedSquashSubStep;
 
-      if (saved === "applied_in_pr_body") {
+      if (saved === "applied_via_github") {
         // Stage already finished via the SUGGESTED_SINGLE / github path.
         return {
           outcome: "completed",
@@ -663,13 +728,19 @@ export function createSquashStageHandler(
       }
 
       if (saved === "awaiting_user_choice") {
-        const prBody = getPrBody(ctx.owner, ctx.repo, ctx.branch);
-        if (hasValidSuggestionBlock(prBody)) {
-          const merged = guardIfPrMerged(ctx, opts);
-          if (merged) return merged;
+        // Check the PR lifecycle BEFORE reading the suggestion
+        // comment: `findPrNumber` uses `gh pr list` which only
+        // returns open PRs, so once the user merges on GitHub the
+        // comment lookup fails and we would otherwise fall through
+        // to a fresh planning run instead of short-circuiting to
+        // `squash.alreadyMerged`.
+        const merged = guardIfPrMerged(ctx, opts);
+        if (merged) return merged;
+        const commentBody = readSuggestionCommentBody();
+        if (hasValidSuggestionBlock(commentBody)) {
           return askUserAndApply(ctx, opts, undefined);
         }
-        // Suggestion block missing or malformed — fall back to a
+        // Suggestion comment missing or malformed — fall back to a
         // fresh planning run rather than re-presenting a choice that
         // the user could not act on.
       }
@@ -737,7 +808,7 @@ export function createSquashStageHandler(
       // `squashResult.sessionId`.  Without this, a resume from
       // `awaiting_user_choice` that routes the user's "agent" choice
       // back to the older planning session would not continue the
-      // exact conversation that drafted the PR-body suggestion.
+      // exact conversation that drafted the squash-suggestion comment.
       if (verdictSessionId) {
         ctx.onSessionId?.("a", verdictSessionId);
       }
@@ -745,8 +816,8 @@ export function createSquashStageHandler(
       // ---- post-clarification deterministic fallback chain -----------------
       // Order matters: a completed force-push is the hard-to-undo side
       // effect, so detect it first.  Only then check the suggestion
-      // block, because an earlier run may have left a stale block in
-      // the PR body that would otherwise be misclassified.  The block
+      // comment, because an earlier run may have left a stale comment
+      // on the PR that would otherwise be misclassified.  The block
       // must be fully parseable (markers + `**Title**` label) — a malformed
       // block is treated as missing because Stage 9 cannot render a
       // preview from it.
@@ -755,8 +826,16 @@ export function createSquashStageHandler(
         if (postCount < initialCount) {
           verdict = "SQUASHED_MULTI";
         } else {
-          const prBody = getPrBody(ctx.owner, ctx.repo, ctx.branch);
-          if (hasValidSuggestionBlock(prBody)) {
+          // Check the PR lifecycle BEFORE the comment lookup:
+          // `findPrNumber` uses `gh pr list` (open PRs only), so a
+          // concurrent merge between the clarification turn and this
+          // fallback would make the lookup return `undefined` and flip
+          // the verdict to `BLOCKED` instead of taking the existing
+          // merged short-circuit.
+          const merged = guardIfPrMerged(ctx, opts);
+          if (merged) return merged;
+          const commentBody = readSuggestionCommentBody();
+          if (hasValidSuggestionBlock(commentBody)) {
             verdict = "SUGGESTED_SINGLE";
           } else {
             verdict = "BLOCKED";
@@ -785,21 +864,28 @@ export function createSquashStageHandler(
       }
 
       if (verdict === "SUGGESTED_SINGLE") {
-        // Verify the PR body holds a fully parseable suggestion block
-        // before asking the user.  A bare start marker or a block
-        // missing the `**Title**` label / the end marker would let the stage
-        // complete with `applied_in_pr_body` but leave Stage 9 unable
-        // to render the inline preview, so fail closed instead.
-        const prBody = getPrBody(ctx.owner, ctx.repo, ctx.branch);
-        if (!hasValidSuggestionBlock(prBody)) {
+        // Check the PR lifecycle BEFORE reading the suggestion
+        // comment: a concurrent merge on GitHub would make the
+        // `findPrNumber` lookup (which uses `gh pr list`, open PRs
+        // only) return `undefined`, and the verdict would flip to
+        // `BLOCKED` instead of taking the existing merged
+        // short-circuit.
+        const merged = guardIfPrMerged(ctx, opts);
+        if (merged) return merged;
+        // Verify the PR comment holds a fully parseable suggestion
+        // block before asking the user.  A bare start marker or a
+        // block missing the `**Title**` label / the end marker would
+        // let the stage complete with `applied_via_github` but leave
+        // Stage 9 unable to render the inline preview, so fail closed
+        // instead.
+        const commentBody = readSuggestionCommentBody();
+        if (!hasValidSuggestionBlock(commentBody)) {
           opts.onSquashSubStep?.(undefined);
           return {
             outcome: "blocked",
             message: `${squashResult.responseText}\n\n---\n\n${verdictResponseText}`,
           };
         }
-        const merged = guardIfPrMerged(ctx, opts);
-        if (merged) return merged;
         return askUserAndApply(ctx, opts, verdictSessionId);
       }
 
@@ -822,12 +908,19 @@ async function askUserAndApply(
 ): Promise<StageResult> {
   opts.onSquashSubStep?.("awaiting_user_choice");
 
-  const choice = opts.chooseSquashApplyMode
-    ? await opts.chooseSquashApplyMode(t()["squash.singleChoicePrompt"])
-    : "agent";
+  // The startup policy decides whether to interrupt the pipeline
+  // with a per-run prompt or proceed silently with "agent".  Default
+  // policy is "ask" so missing wiring keeps today's behaviour.
+  const policy = opts.squashApplyPolicy ?? "ask";
+  const choice: "agent" | "github" =
+    policy === "auto"
+      ? "agent"
+      : opts.chooseSquashApplyMode
+        ? await opts.chooseSquashApplyMode(t()["squash.singleChoicePrompt"])
+        : "agent";
 
   if (choice === "github") {
-    opts.onSquashSubStep?.("applied_in_pr_body");
+    opts.onSquashSubStep?.("applied_via_github");
     return {
       outcome: "completed",
       message: t()["squash.messageAppended"],

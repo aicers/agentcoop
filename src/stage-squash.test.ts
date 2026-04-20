@@ -95,7 +95,8 @@ function makeOpts(
     pollTimeoutMs: 1000,
     emptyRunsGracePeriodMs: 0,
     countBranchCommits: vi.fn().mockReturnValue(2),
-    getPrBody: vi.fn().mockReturnValue(""),
+    findSuggestionCommentBody: vi.fn().mockReturnValue(undefined),
+    findPrNumber: vi.fn().mockReturnValue(42),
     queryPrState: vi.fn().mockReturnValue("OPEN"),
     chooseSquashApplyMode: vi.fn().mockResolvedValue("agent"),
     ...overrides,
@@ -744,12 +745,12 @@ describe("createSquashStageHandler", () => {
       resume: vi.fn().mockImplementation(() => resumeResults[resumeCall++]),
     };
     const chooseSquashApplyMode = vi.fn().mockResolvedValue("agent");
-    const getPrBody = vi.fn().mockReturnValue(prBodyWithMarker);
+    const findSuggestionCommentBody = vi.fn().mockReturnValue(prBodyWithMarker);
     const onSquashSubStep = vi.fn();
     const opts = makeOpts({
       agent,
       chooseSquashApplyMode,
-      getPrBody,
+      findSuggestionCommentBody,
       onSquashSubStep,
     });
     const stage = createSquashStageHandler(opts);
@@ -769,7 +770,7 @@ describe("createSquashStageHandler", () => {
 
   // -- SUGGESTED_SINGLE: user picks "github" ---------------------------------
 
-  test("SUGGESTED_SINGLE + user picks github → no CI poll, applied_in_pr_body", async () => {
+  test("SUGGESTED_SINGLE + user picks github → no CI poll, applied_via_github", async () => {
     const prBodyWithMarker = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nT\n\`\`\`\n\n**Body**\n\n\`\`\`text\nB\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
     const agent: AgentAdapter = {
       invoke: vi
@@ -786,13 +787,13 @@ describe("createSquashStageHandler", () => {
         ),
     };
     const chooseSquashApplyMode = vi.fn().mockResolvedValue("github");
-    const getPrBody = vi.fn().mockReturnValue(prBodyWithMarker);
+    const findSuggestionCommentBody = vi.fn().mockReturnValue(prBodyWithMarker);
     const onSquashSubStep = vi.fn();
     const getCiStatus = vi.fn();
     const opts = makeOpts({
       agent,
       chooseSquashApplyMode,
-      getPrBody,
+      findSuggestionCommentBody,
       onSquashSubStep,
       getCiStatus,
     });
@@ -803,7 +804,7 @@ describe("createSquashStageHandler", () => {
     expect(result.message).toContain("Squash and merge");
     expect(getCiStatus).not.toHaveBeenCalled();
     const states = onSquashSubStep.mock.calls.map((c) => c[0]);
-    expect(states[states.length - 1]).toBe("applied_in_pr_body");
+    expect(states[states.length - 1]).toBe("applied_via_github");
   });
 
   // -- SUGGESTED_SINGLE missing marker → BLOCKED -----------------------------
@@ -825,7 +826,9 @@ describe("createSquashStageHandler", () => {
     };
     const opts = makeOpts({
       agent,
-      getPrBody: vi.fn().mockReturnValue("body without any marker"),
+      findSuggestionCommentBody: vi
+        .fn()
+        .mockReturnValue("body without any marker"),
     });
     const stage = createSquashStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
@@ -852,14 +855,14 @@ describe("createSquashStageHandler", () => {
         ),
     };
     const chooseSquashApplyMode = vi.fn().mockResolvedValue("agent");
-    const getPrBody = vi.fn().mockReturnValue(prBodyWithMarker);
+    const findSuggestionCommentBody = vi.fn().mockReturnValue(prBodyWithMarker);
     const queryPrState = vi.fn().mockReturnValue("MERGED");
     const onSquashSubStep = vi.fn();
     const getCiStatus = vi.fn();
     const opts = makeOpts({
       agent,
       chooseSquashApplyMode,
-      getPrBody,
+      findSuggestionCommentBody,
       queryPrState,
       onSquashSubStep,
       getCiStatus,
@@ -873,6 +876,55 @@ describe("createSquashStageHandler", () => {
     expect(getCiStatus).not.toHaveBeenCalled();
     expect(queryPrState).toHaveBeenCalledWith("org", "repo", "issue-42");
     // Sub-step must be cleared so a resume does not re-enter the dead choice.
+    expect(onSquashSubStep).toHaveBeenLastCalledWith(undefined);
+  });
+
+  // Regression for issue #274 reviewer round 1: on the immediate
+  // SUGGESTED_SINGLE branch, the PR-merged guard must also run
+  // BEFORE the suggestion-comment lookup.  `findPrNumber` uses
+  // `gh pr list` (open PRs only), so a concurrent merge would make
+  // the comment lookup return `undefined` and the stage would flip
+  // to `BLOCKED` instead of short-circuiting to `alreadyMerged`.
+  test("SUGGESTED_SINGLE + concurrent merge hides the PR from findPrNumber → alreadyMerged, not blocked", async () => {
+    const agent: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(
+            makeResult({ sessionId: "sess-squash", responseText: "Plan." }),
+          ),
+        ),
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "SUGGESTED_SINGLE" })),
+        ),
+    };
+    // `findPrNumber` returns `undefined` once the PR is merged
+    // because `gh pr list` filters to open PRs by default.
+    const findPrNumber = vi.fn().mockReturnValue(undefined);
+    const findSuggestionCommentBody = vi.fn();
+    const chooseSquashApplyMode = vi.fn();
+    const queryPrState = vi.fn().mockReturnValue("MERGED");
+    const onSquashSubStep = vi.fn();
+    const opts = makeOpts({
+      agent,
+      findPrNumber,
+      findSuggestionCommentBody,
+      chooseSquashApplyMode,
+      queryPrState,
+      onSquashSubStep,
+    });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(result.message).toContain("already merged");
+    // Guard runs before the comment lookup.
+    expect(findPrNumber).not.toHaveBeenCalled();
+    expect(findSuggestionCommentBody).not.toHaveBeenCalled();
+    expect(chooseSquashApplyMode).not.toHaveBeenCalled();
+    expect(queryPrState).toHaveBeenCalledWith("org", "repo", "issue-42");
     expect(onSquashSubStep).toHaveBeenLastCalledWith(undefined);
   });
 
@@ -900,13 +952,13 @@ describe("createSquashStageHandler", () => {
       .mockReturnValueOnce("OPEN")
       .mockReturnValueOnce("MERGED");
     const chooseSquashApplyMode = vi.fn().mockResolvedValue("agent");
-    const getPrBody = vi.fn().mockReturnValue(prBodyWithMarker);
+    const findSuggestionCommentBody = vi.fn().mockReturnValue(prBodyWithMarker);
     const onSquashSubStep = vi.fn();
     const getCiStatus = vi.fn();
     const opts = makeOpts({
       agent,
       chooseSquashApplyMode,
-      getPrBody,
+      findSuggestionCommentBody,
       queryPrState,
       onSquashSubStep,
       getCiStatus,
@@ -961,7 +1013,7 @@ describe("createSquashStageHandler", () => {
           .fn()
           .mockReturnValueOnce(3)
           .mockReturnValueOnce(1),
-        getPrBody: vi.fn().mockReturnValue(prBody),
+        findSuggestionCommentBody: vi.fn().mockReturnValue(prBody),
       });
       const stage = createSquashStageHandler(opts);
       const result = await stage.handler(BASE_CTX);
@@ -975,7 +1027,7 @@ describe("createSquashStageHandler", () => {
       const opts = makeOpts({
         agent: makeAmbiguousAgent(),
         countBranchCommits: vi.fn().mockReturnValue(2),
-        getPrBody: vi.fn().mockReturnValue(prBody),
+        findSuggestionCommentBody: vi.fn().mockReturnValue(prBody),
         chooseSquashApplyMode,
       });
       const stage = createSquashStageHandler(opts);
@@ -988,19 +1040,55 @@ describe("createSquashStageHandler", () => {
       const opts = makeOpts({
         agent: makeAmbiguousAgent(),
         countBranchCommits: vi.fn().mockReturnValue(2),
-        getPrBody: vi.fn().mockReturnValue(""),
+        findSuggestionCommentBody: vi.fn().mockReturnValue(undefined),
+        findPrNumber: vi.fn().mockReturnValue(42),
       });
       const stage = createSquashStageHandler(opts);
       const result = await stage.handler(BASE_CTX);
       expect(result.outcome).toBe("blocked");
+    });
+
+    // Regression for issue #274 reviewer round 2: when the agent
+    // never returns a parseable verdict and the deterministic
+    // fallback runs, the PR-merged guard must run BEFORE the
+    // suggestion-comment lookup.  `findPrNumber` uses `gh pr list`
+    // (open PRs only), so a concurrent merge between the
+    // clarification turn and this fallback would make the lookup
+    // return `undefined` and the verdict would flip to BLOCKED
+    // instead of taking the existing merged short-circuit.
+    test("ambiguous verdict + PR merged before fallback → alreadyMerged, not BLOCKED", async () => {
+      const queryPrState = vi.fn().mockReturnValue("MERGED");
+      const findPrNumber = vi.fn().mockReturnValue(undefined);
+      const findSuggestionCommentBody = vi.fn();
+      const onSquashSubStep = vi.fn();
+      const opts = makeOpts({
+        agent: makeAmbiguousAgent(),
+        // Commit count unchanged → would otherwise fall into the
+        // comment-lookup branch.
+        countBranchCommits: vi.fn().mockReturnValue(2),
+        queryPrState,
+        findPrNumber,
+        findSuggestionCommentBody,
+        onSquashSubStep,
+      });
+      const stage = createSquashStageHandler(opts);
+      const result = await stage.handler(BASE_CTX);
+
+      expect(result.outcome).toBe("completed");
+      expect(result.message).toContain("already merged");
+      // The lifecycle guard runs before the comment lookup.
+      expect(queryPrState).toHaveBeenCalledWith("org", "repo", "issue-42");
+      expect(findPrNumber).not.toHaveBeenCalled();
+      expect(findSuggestionCommentBody).not.toHaveBeenCalled();
+      expect(onSquashSubStep).toHaveBeenLastCalledWith(undefined);
     });
   });
 
   // -- resume on each substate -----------------------------------------------
 
   describe("resume on saved substate", () => {
-    test("applied_in_pr_body → returns completed without invoking agent", async () => {
-      const opts = makeOpts({ savedSquashSubStep: "applied_in_pr_body" });
+    test("applied_via_github → returns completed without invoking agent", async () => {
+      const opts = makeOpts({ savedSquashSubStep: "applied_via_github" });
       const stage = createSquashStageHandler(opts);
       const result = await stage.handler(BASE_CTX);
       expect(result.outcome).toBe("completed");
@@ -1022,7 +1110,7 @@ describe("createSquashStageHandler", () => {
       const chooseSquashApplyMode = vi.fn().mockResolvedValue("github");
       const opts = makeOpts({
         savedSquashSubStep: "awaiting_user_choice",
-        getPrBody: vi.fn().mockReturnValue(prBody),
+        findSuggestionCommentBody: vi.fn().mockReturnValue(prBody),
         chooseSquashApplyMode,
       });
       const stage = createSquashStageHandler(opts);
@@ -1042,7 +1130,7 @@ describe("createSquashStageHandler", () => {
       const getCiStatus = vi.fn();
       const opts = makeOpts({
         savedSquashSubStep: "awaiting_user_choice",
-        getPrBody: vi.fn().mockReturnValue(prBody),
+        findSuggestionCommentBody: vi.fn().mockReturnValue(prBody),
         chooseSquashApplyMode,
         onSquashSubStep,
         getCiStatus,
@@ -1058,18 +1146,56 @@ describe("createSquashStageHandler", () => {
       expect(opts.agent.resume).not.toHaveBeenCalled();
       expect(getCiStatus).not.toHaveBeenCalled();
       const states = onSquashSubStep.mock.calls.map((c) => c[0]);
-      expect(states).not.toContain("applied_in_pr_body");
+      expect(states).not.toContain("applied_via_github");
       expect(states).not.toContain("ci_poll");
     });
 
     test("awaiting_user_choice with marker missing → falls back to fresh planning run", async () => {
       const opts = makeOpts({
         savedSquashSubStep: "awaiting_user_choice",
-        getPrBody: vi.fn().mockReturnValue(""),
+        findSuggestionCommentBody: vi.fn().mockReturnValue(undefined),
+        findPrNumber: vi.fn().mockReturnValue(42),
       });
       const stage = createSquashStageHandler(opts);
       await stage.handler(BASE_CTX);
       expect(opts.agent.invoke).toHaveBeenCalled();
+    });
+
+    // Regression for issue #274 reviewer round 1: resuming from
+    // `awaiting_user_choice` must check the PR lifecycle BEFORE
+    // reading the suggestion comment.  `findPrNumber` uses
+    // `gh pr list` (open PRs only), so a PR merged between the
+    // interruption and the resume would make the comment lookup
+    // return `undefined` and fall through to a fresh planning run
+    // — completely bypassing the `squash.alreadyMerged` short-circuit.
+    test("awaiting_user_choice with PR already merged → alreadyMerged, no fresh planning, no user choice", async () => {
+      const queryPrState = vi.fn().mockReturnValue("MERGED");
+      const chooseSquashApplyMode = vi.fn();
+      const findPrNumber = vi.fn().mockReturnValue(undefined);
+      const findSuggestionCommentBody = vi.fn();
+      const onSquashSubStep = vi.fn();
+      const opts = makeOpts({
+        savedSquashSubStep: "awaiting_user_choice",
+        queryPrState,
+        chooseSquashApplyMode,
+        findPrNumber,
+        findSuggestionCommentBody,
+        onSquashSubStep,
+      });
+      const stage = createSquashStageHandler(opts);
+      const result = await stage.handler(BASE_CTX);
+
+      expect(result.outcome).toBe("completed");
+      expect(result.message).toContain("already merged");
+      expect(queryPrState).toHaveBeenCalledWith("org", "repo", "issue-42");
+      // The lifecycle guard must run BEFORE the comment lookup, so
+      // neither `findPrNumber` nor `findSuggestionCommentBody`
+      // should be consulted once the PR is known to be merged.
+      expect(findPrNumber).not.toHaveBeenCalled();
+      expect(findSuggestionCommentBody).not.toHaveBeenCalled();
+      expect(chooseSquashApplyMode).not.toHaveBeenCalled();
+      expect(opts.agent.invoke).not.toHaveBeenCalled();
+      expect(onSquashSubStep).toHaveBeenLastCalledWith(undefined);
     });
 
     // Regression for issue #252 review feedback: resuming from
@@ -1286,7 +1412,7 @@ describe("createSquashStageHandler", () => {
   // Stage 8 must persist the latest verdict session id via
   // `ctx.onSessionId` BEFORE entering `awaiting_user_choice`, so that a
   // resume + user "agent" choice continues the exact conversation that
-  // drafted the PR-body suggestion — not the older planning session.
+  // drafted the squash-suggestion comment — not the older planning session.
   describe("verdict session id persistence", () => {
     test("SUGGESTED_SINGLE persists verdict session (distinct from planning) before awaiting choice", async () => {
       const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nT\n\`\`\`\n\n**Body**\n\n\`\`\`text\nB\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
@@ -1324,7 +1450,7 @@ describe("createSquashStageHandler", () => {
       const chooseSquashApplyMode = vi.fn().mockResolvedValue("agent");
       const opts = makeOpts({
         agent,
-        getPrBody: vi.fn().mockReturnValue(prBody),
+        findSuggestionCommentBody: vi.fn().mockReturnValue(prBody),
         chooseSquashApplyMode,
       });
       const stage = createSquashStageHandler(opts);
@@ -1363,7 +1489,7 @@ describe("createSquashStageHandler", () => {
       const opts = makeOpts({
         agent,
         savedSquashSubStep: "awaiting_user_choice",
-        getPrBody: vi.fn().mockReturnValue(prBody),
+        findSuggestionCommentBody: vi.fn().mockReturnValue(prBody),
         chooseSquashApplyMode,
         // The persisted session id is the VERDICT session, not the
         // planning session — proving the Round 5 fix wires the
@@ -1384,9 +1510,10 @@ describe("createSquashStageHandler", () => {
 
   // -- pipeline:verdict telemetry on fallback chain (issue #252 review round 3)
   // The deterministic fallback chain derives the verdict from commit
-  // count and PR body when both agent responses are ambiguous.  That
-  // derived keyword must still be surfaced as a pipeline:verdict event
-  // so telemetry consumers see every verdict, not just the parsed ones.
+  // count and the squash-suggestion PR comment when both agent
+  // responses are ambiguous.  That derived keyword must still be
+  // surfaced as a pipeline:verdict event so telemetry consumers see
+  // every verdict, not just the parsed ones.
   describe("pipeline:verdict emission from deterministic fallback", () => {
     function makeAmbiguousAgent(): AgentAdapter {
       let resumeCall = 0;
@@ -1422,7 +1549,8 @@ describe("createSquashStageHandler", () => {
           .fn()
           .mockReturnValueOnce(3)
           .mockReturnValueOnce(1),
-        getPrBody: vi.fn().mockReturnValue(""),
+        findSuggestionCommentBody: vi.fn().mockReturnValue(undefined),
+        findPrNumber: vi.fn().mockReturnValue(42),
       });
       const stage = createSquashStageHandler(opts);
       await stage.handler({ ...BASE_CTX, events });
@@ -1439,7 +1567,7 @@ describe("createSquashStageHandler", () => {
       const opts = makeOpts({
         agent: makeAmbiguousAgent(),
         countBranchCommits: vi.fn().mockReturnValue(2),
-        getPrBody: vi.fn().mockReturnValue(prBody),
+        findSuggestionCommentBody: vi.fn().mockReturnValue(prBody),
         chooseSquashApplyMode: vi.fn().mockResolvedValue("github"),
       });
       const stage = createSquashStageHandler(opts);
@@ -1456,7 +1584,8 @@ describe("createSquashStageHandler", () => {
       const opts = makeOpts({
         agent: makeAmbiguousAgent(),
         countBranchCommits: vi.fn().mockReturnValue(2),
-        getPrBody: vi.fn().mockReturnValue(""),
+        findSuggestionCommentBody: vi.fn().mockReturnValue(undefined),
+        findPrNumber: vi.fn().mockReturnValue(42),
       });
       const stage = createSquashStageHandler(opts);
       await stage.handler({ ...BASE_CTX, events });
@@ -1472,7 +1601,7 @@ describe("createSquashStageHandler", () => {
   // the inline preview, so Stage 8 must reject any block the parser
   // cannot handle (start marker only, missing end marker, missing
   // `**Title**` label).  Otherwise the SUGGESTED_SINGLE path completes
-  // with `applied_in_pr_body` and Stage 9 has nothing to show.
+  // with `applied_via_github` and Stage 9 has nothing to show.
   describe("malformed suggestion block", () => {
     function makeMalformedBodies(): Array<{ name: string; body: string }> {
       return [
@@ -1511,7 +1640,7 @@ describe("createSquashStageHandler", () => {
       const onSquashSubStep = vi.fn();
       const opts = makeOpts({
         agent,
-        getPrBody: vi.fn().mockReturnValue(body),
+        findSuggestionCommentBody: vi.fn().mockReturnValue(body),
         chooseSquashApplyMode,
         onSquashSubStep,
       });
@@ -1521,7 +1650,7 @@ describe("createSquashStageHandler", () => {
       expect(result.outcome).toBe("blocked");
       expect(chooseSquashApplyMode).not.toHaveBeenCalled();
       const states = onSquashSubStep.mock.calls.map((c) => c[0]);
-      expect(states).not.toContain("applied_in_pr_body");
+      expect(states).not.toContain("applied_via_github");
       expect(states).not.toContain("awaiting_user_choice");
     });
 
@@ -1557,7 +1686,7 @@ describe("createSquashStageHandler", () => {
       const opts = makeOpts({
         agent,
         countBranchCommits: vi.fn().mockReturnValue(2),
-        getPrBody: vi.fn().mockReturnValue(body),
+        findSuggestionCommentBody: vi.fn().mockReturnValue(body),
       });
       const stage = createSquashStageHandler(opts);
       const result = await stage.handler({ ...BASE_CTX, events });
@@ -1576,7 +1705,7 @@ describe("createSquashStageHandler", () => {
       const chooseSquashApplyMode = vi.fn().mockResolvedValue("github");
       const opts = makeOpts({
         savedSquashSubStep: "awaiting_user_choice",
-        getPrBody: vi.fn().mockReturnValue(body),
+        findSuggestionCommentBody: vi.fn().mockReturnValue(body),
         chooseSquashApplyMode,
       });
       const stage = createSquashStageHandler(opts);
@@ -1584,6 +1713,129 @@ describe("createSquashStageHandler", () => {
 
       expect(chooseSquashApplyMode).not.toHaveBeenCalled();
       expect(opts.agent.invoke).toHaveBeenCalled();
+    });
+  });
+
+  // -- squashApplyPolicy: auto vs ask --------------------------------------
+
+  describe("squashApplyPolicy", () => {
+    function makePrCommentBody(): string {
+      return `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nT\n\`\`\`\n\n**Body**\n\n\`\`\`text\nB\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
+    }
+
+    test("policy=auto skips chooseSquashApplyMode and proceeds as agent", async () => {
+      const prBody = makePrCommentBody();
+      const resumeResults = [
+        makeStream(makeResult({ responseText: "SUGGESTED_SINGLE" })),
+        makeStream(
+          makeResult({
+            sessionId: "sess-followup",
+            responseText: "Squashed and pushed.",
+          }),
+        ),
+      ];
+      let resumeCall = 0;
+      const agent: AgentAdapter = {
+        invoke: vi
+          .fn()
+          .mockReturnValue(
+            makeStream(
+              makeResult({ sessionId: "sess-squash", responseText: "Plan." }),
+            ),
+          ),
+        resume: vi.fn().mockImplementation(() => resumeResults[resumeCall++]),
+      };
+      const chooseSquashApplyMode = vi.fn();
+      const onSquashSubStep = vi.fn();
+      const opts = makeOpts({
+        agent,
+        chooseSquashApplyMode,
+        findSuggestionCommentBody: vi.fn().mockReturnValue(prBody),
+        onSquashSubStep,
+        squashApplyPolicy: "auto",
+      });
+      const stage = createSquashStageHandler(opts);
+      const result = await stage.handler(BASE_CTX);
+
+      expect(result.outcome).toBe("completed");
+      expect(result.message).toContain("CI passed");
+      // Policy prompt never fired.
+      expect(chooseSquashApplyMode).not.toHaveBeenCalled();
+      // Followed the "agent" branch: verdict resume + follow-up resume.
+      expect(agent.resume).toHaveBeenCalledTimes(2);
+      expect(opts.getCiStatus).toHaveBeenCalled();
+      const states = onSquashSubStep.mock.calls.map((c) => c[0]);
+      expect(states).toContain("squashing");
+      expect(states).toContain("ci_poll");
+      expect(states).not.toContain("applied_via_github");
+    });
+
+    test("policy=ask still calls chooseSquashApplyMode and honors the user choice", async () => {
+      const prBody = makePrCommentBody();
+      const agent: AgentAdapter = {
+        invoke: vi
+          .fn()
+          .mockReturnValue(
+            makeStream(
+              makeResult({ sessionId: "sess-squash", responseText: "Plan." }),
+            ),
+          ),
+        resume: vi
+          .fn()
+          .mockReturnValue(
+            makeStream(makeResult({ responseText: "SUGGESTED_SINGLE" })),
+          ),
+      };
+      const chooseSquashApplyMode = vi.fn().mockResolvedValue("github");
+      const onSquashSubStep = vi.fn();
+      const getCiStatus = vi.fn();
+      const opts = makeOpts({
+        agent,
+        chooseSquashApplyMode,
+        findSuggestionCommentBody: vi.fn().mockReturnValue(prBody),
+        onSquashSubStep,
+        getCiStatus,
+        squashApplyPolicy: "ask",
+      });
+      const stage = createSquashStageHandler(opts);
+      const result = await stage.handler(BASE_CTX);
+
+      expect(result.outcome).toBe("completed");
+      expect(chooseSquashApplyMode).toHaveBeenCalledTimes(1);
+      expect(getCiStatus).not.toHaveBeenCalled();
+      const states = onSquashSubStep.mock.calls.map((c) => c[0]);
+      expect(states[states.length - 1]).toBe("applied_via_github");
+    });
+
+    test("policy=auto applies on resume from awaiting_user_choice as well", async () => {
+      const prBody = makePrCommentBody();
+      const resume = vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-followup",
+            responseText: "Squashed and pushed.",
+          }),
+        ),
+      );
+      const agent: AgentAdapter = { invoke: vi.fn(), resume };
+      const chooseSquashApplyMode = vi.fn();
+      const opts = makeOpts({
+        agent,
+        savedSquashSubStep: "awaiting_user_choice",
+        findSuggestionCommentBody: vi.fn().mockReturnValue(prBody),
+        chooseSquashApplyMode,
+        getSavedAgentSessionId: () => "sess-verdict",
+        squashApplyPolicy: "auto",
+      });
+      const stage = createSquashStageHandler(opts);
+      const result = await stage.handler(BASE_CTX);
+
+      expect(result.outcome).toBe("completed");
+      // Auto policy on resume still skips the prompt.
+      expect(chooseSquashApplyMode).not.toHaveBeenCalled();
+      // Agent follow-up was sent via the saved verdict session.
+      expect(resume).toHaveBeenCalledTimes(1);
+      expect(resume.mock.calls[0][0]).toBe("sess-verdict");
     });
   });
 });
@@ -1776,7 +2028,7 @@ describe("parseSquashSuggestionBlock", () => {
 
   // The deprecated `**Title:** …` / `**Body:** …` plain-text format was
   // supported for one release cycle for backward compatibility with PRs
-  // already in `applied_in_pr_body` state.  Parsing it is now a hard
+  // already in `applied_via_github` state.  Parsing it is now a hard
   // rejection — this test pins the new contract directly so the legacy
   // branch cannot silently reappear.
   test("returns undefined for a legacy `**Title:** … / **Body:** …` block", () => {

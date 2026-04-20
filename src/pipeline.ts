@@ -248,7 +248,7 @@ export interface UserPrompt {
 
   /**
    * Ask the user how to apply a single-commit squash suggestion that
-   * the agent has written to the PR body.  Returns `"agent"` to ask
+   * the agent has posted as a PR comment.  Returns `"agent"` to ask
    * the agent to perform the squash now (force-push, runs CI again),
    * or `"github"` to leave it for GitHub's "Squash and merge" at
    * merge time (no CI rerun).
@@ -935,9 +935,9 @@ export interface DoneStageOptions {
    */
   getSquashMergeHint?: () =>
     | {
-        /** Suggested squash commit title parsed from the PR body. */
+        /** Suggested squash commit title parsed from the PR comment. */
         title?: string;
-        /** Suggested squash commit body parsed from the PR body. */
+        /** Suggested squash commit body parsed from the PR comment. */
         body?: string;
         /** Hyperlink-friendly PR URL. */
         prUrl?: string;

@@ -126,6 +126,26 @@ function agentConfigEqual(a: AgentConfig | undefined, b: AgentConfig): boolean {
 }
 
 /**
+ * Ask the squash-apply policy once per run.  Lives in this module
+ * (rather than inline at the join point in `src/index.ts`) so that
+ * the prompt can be unit-tested independently and so the call is a
+ * single named target — a future refactor cannot silently drop the
+ * question on either the fresh-startup or the resume path.
+ *
+ * Not persisted to config or `RunState`: the right answer depends on
+ * the state of the current branch / PR.  Default is "let the agent
+ * handle it" so a bare Enter keypress picks the low-friction path.
+ */
+export async function promptSquashApplyPolicy(): Promise<"auto" | "ask"> {
+  const m = t();
+  const autoApply = await confirm({
+    message: m["startup.squashApplyPolicyPrompt"],
+    default: true,
+  });
+  return autoApply ? "auto" : "ask";
+}
+
+/**
  * First phase of startup: select owner, repo, and issue number.
  * Returns early so the caller can check for a resumable run state
  * before collecting the remaining options.

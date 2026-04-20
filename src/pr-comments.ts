@@ -110,6 +110,37 @@ export function postPrComment(
   );
 }
 
+// ---- marker-lookup helper ------------------------------------------------
+
+/**
+ * Find the most recent PR comment whose body contains `marker`.
+ *
+ * Returns the body of the latest matching comment (the last one in
+ * chronological order returned by `gh`), or `undefined` when no
+ * comment matches, the PR cannot be resolved, or the API call fails.
+ *
+ * Callers that need the suggestion text parsed should wrap the
+ * returned body with a parser (e.g. `parseSquashSuggestionBlock`).
+ */
+export function findLatestCommentWithMarker(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  marker: string,
+): string | undefined {
+  let comments: PrComment[];
+  try {
+    comments = fetchPrComments(owner, repo, prNumber);
+  } catch {
+    return undefined;
+  }
+  let latest: string | undefined;
+  for (const c of comments) {
+    if (c.body.includes(marker)) latest = c.body;
+  }
+  return latest;
+}
+
 // ---- parsing -------------------------------------------------------------
 
 /**

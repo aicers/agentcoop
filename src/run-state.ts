@@ -44,7 +44,7 @@ export type SquashSubStep =
   | "awaiting_user_choice"
   | "squashing"
   | "ci_poll"
-  | "applied_in_pr_body";
+  | "applied_via_github";
 
 export interface AgentState {
   cli: string;
@@ -63,8 +63,11 @@ export interface AgentState {
  *  1 — original order (stages 7=squash, 8=review)
  *  2 — swapped stages 7↔8 (7=review, 8=squash)
  *  3 — added `squashSubStep` for stage 8 single-commit suggestion flow
+ *  4 — renamed `squashSubStep === "applied_in_pr_body"` to
+ *      `"applied_via_github"` now that the suggestion is posted as a
+ *      PR comment rather than the PR body.
  */
-export const RUN_STATE_VERSION = 3;
+export const RUN_STATE_VERSION = 4;
 
 export interface RunState {
   version: number;
@@ -192,6 +195,11 @@ function isValidRunState(
  *  v2 → v3:                added `squashSubStep`.  No remap required
  *                          (`loadRunState` already backfills
  *                          `undefined`), just bump the version tag.
+ *  v3 → v4:                renamed `squashSubStep === "applied_in_pr_body"`
+ *                          to `"applied_via_github"` when the squash
+ *                          suggestion moved from the PR body to a PR
+ *                          comment.  Remap in place so in-flight runs
+ *                          resume into the same short-circuit branch.
  */
 function migrateRunState(state: RunState): RunState {
   if (state.version >= RUN_STATE_VERSION) return state;
@@ -206,6 +214,15 @@ function migrateRunState(state: RunState): RunState {
       migrated.currentStage = 8;
     } else if (migrated.currentStage === 8) {
       migrated.currentStage = 7;
+    }
+  }
+
+  // v3 → v4: rename the legacy squashSubStep literal.
+  if (migrated.version < 4) {
+    if (
+      (migrated.squashSubStep as string | undefined) === "applied_in_pr_body"
+    ) {
+      migrated.squashSubStep = "applied_via_github";
     }
   }
 

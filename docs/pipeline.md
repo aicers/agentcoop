@@ -142,15 +142,16 @@ The standard PR sync instructions appear in stages 5 through 8:
 
 The squash stage extends this contract with a marker-delimited
 **squash suggestion block**.  When a single commit is the right
-shape for the branch, the agent writes the proposed title and body
-into the PR description between the markers
-`<!-- agentcoop:squash-suggestion:start -->` and
+shape for the branch, the agent posts the proposed title and body
+as a PR comment whose body contains the marker block
+`<!-- agentcoop:squash-suggestion:start -->` …
 `<!-- agentcoop:squash-suggestion:end -->` instead of force-pushing.
-The block is idempotent — re-runs replace any prior block between
-the same markers rather than stacking duplicates.  The Stage 9
-merge-confirm screen reads this block back so the user can apply
-the message via GitHub's "Squash and merge" without opening the
-browser.
+The comment is updated idempotently — re-runs PATCH any prior
+squash-suggestion comment rather than appending a new one so the
+timeline stays close to the "Squash and merge" dropdown.  The
+Stage 9 merge-confirm screen reads this block back so the user can
+apply the message via GitHub's "Squash and merge" without opening
+the browser.
 
 ### Issue-implementation reconciliation
 
@@ -1258,8 +1259,8 @@ avoiding re-execution of already-completed work within a round.
 
 **Agent:** A\
 **Purpose:** Decide whether the branch is best presented as a
-single squash commit (in which case the agent writes the suggested
-message into the PR body and lets GitHub's "Squash and merge"
+single squash commit (in which case the agent posts the suggested
+message as a PR comment and lets GitHub's "Squash and merge"
 apply it at merge time) or several meaningful commits (rewrite
 history and force-push).  Skipped automatically if the branch has
 only one commit.
@@ -1276,11 +1277,15 @@ The work prompt asks the agent to:
 2. Decide whether the work belongs in **one** commit or **several**.
 3. Branch on that decision:
    - **Single commit appropriate:** do not rewrite history.  Draft
-     the squash title and body, then write them into the PR body
-     between the markers
-     `<!-- agentcoop:squash-suggestion:start -->` and
-     `<!-- agentcoop:squash-suggestion:end -->` (replacing any prior
-     block between the same markers).  Do not force-push.
+     the squash title and body, then post them as a PR comment whose
+     body contains the marker block
+     `<!-- agentcoop:squash-suggestion:start -->` …
+     `<!-- agentcoop:squash-suggestion:end -->`.  Post idempotently:
+     if a prior comment with the same start marker exists, edit it
+     via `gh api --method PATCH
+     /repos/{owner}/{repo}/issues/comments/{id}` so the timeline
+     does not accumulate duplicates.  The PR body is left untouched.
+     Do not force-push.
    - **Multiple commits appropriate:** consolidate the branch
      commits — using `git reset --soft {baseSha}` + `git commit` or
      interactive rebase — write clear messages, and force-push
@@ -1295,8 +1300,8 @@ of the following keywords:
 - SQUASHED_MULTI — if you rewrote history into multiple meaningful
   commits and force-pushed
 - SUGGESTED_SINGLE — if a single commit is appropriate and you
-  wrote the suggested title/body into the PR body marker block
-  (no force-push)
+  posted the suggested title/body as a PR comment containing the
+  marker block (no force-push)
 - BLOCKED — if you could not complete either path and need user
   intervention
 
@@ -1313,23 +1318,25 @@ because the three-way distinction is squash-specific.
   behaviour, up to 3 internal fix attempts) and finish with
   `squash.completed` when CI passes.
 - `SUGGESTED_SINGLE` → verify a fully parseable suggestion block is
-  present in the PR body before asking the user.  "Parseable" means
-  both markers are present **and** `parseSquashSuggestionBlock`
-  succeeds (the block contains a `**Title**` label followed by a
-  well-formed fenced block).  A bare start marker or a block missing
-  the `**Title**` label / the end marker fails closed with `blocked`
-  rather than completing as if the suggestion were valid — Stage 9
-  reads the same block via
+  present in the squash-suggestion PR comment before asking the
+  user.  "Parseable" means both markers are present **and**
+  `parseSquashSuggestionBlock` succeeds (the block contains a
+  `**Title**` label followed by a well-formed fenced block).  A
+  bare start marker or a block missing the `**Title**` label / the
+  end marker fails closed with `blocked` rather than completing as
+  if the suggestion were valid — Stage 9 reads the same block via
   `parseSquashSuggestionBlock` to render the inline preview, so a
   malformed block would leave the merge-confirm screen blank.  Once
-  validated, ask the user via `chooseSquashApplyMode`:
+  validated, ask the user via `chooseSquashApplyMode` (skipped when
+  the startup `squashApplyPolicy` is `"auto"`, in which case the
+  handler proceeds as if the user picked `"agent"`):
   - **"Agent squashes now"** → send a follow-up prompt on the
     same session telling the agent to perform the squash using
     the message it already drafted, then run the post-squash CI
     poll loop.
   - **"Apply via GitHub"** → finish the stage with
     `squash.messageAppended` and persist
-    `squashSubStep === "applied_in_pr_body"` so Stage 9 surfaces
+    `squashSubStep === "applied_via_github"` so Stage 9 surfaces
     the suggestion in the merge-confirm screen.  No CI rerun.
 - `BLOCKED` → existing blocked flow.
 
@@ -1341,8 +1348,8 @@ fails, the handler runs a **deterministic fallback chain**:
    snapshot taken at stage entry, treat as `SQUASHED_MULTI` (the
    force-push has already happened — that hard-to-undo side
    effect must be detected first).
-2. Else, fetch the PR body and check for a fully parseable
-   suggestion block (markers present **and**
+2. Else, fetch the squash-suggestion PR comment and check for a
+   fully parseable suggestion block (markers present **and**
    `parseSquashSuggestionBlock` returns a value).  If present,
    treat as `SUGGESTED_SINGLE`; a malformed block (e.g. only the
    start marker) is treated as missing.
@@ -1350,7 +1357,7 @@ fails, the handler runs a **deterministic fallback chain**:
 
 The order matters: checking the commit count first prevents a
 completed squash from being misclassified as a SINGLE suggestion
-when an earlier run left a stale marker block in the PR body.
+when an earlier run left a stale marker comment on the PR.
 
 The derived verdict is emitted as a `pipeline:verdict` event just
 like a parsed-keyword verdict, so telemetry consumers see every
@@ -1364,19 +1371,20 @@ planning → verdict
         ├── (SQUASHED_MULTI)   → ci_poll → done
         ├── (SUGGESTED_SINGLE) → awaiting_user_choice
         │       ├── (agent)  → squashing → ci_poll → done
-        │       └── (github) → applied_in_pr_body (stage done)
+        │       └── (github) → applied_via_github (stage done)
         └── (BLOCKED)         → user chooses
 ```
 
 `RunState.squashSubStep` persists the current substate so resume
 re-enters at the correct point:
 
-- `applied_in_pr_body` → stage already done; advance to Stage 9.
+- `applied_via_github` → stage already done; advance to Stage 9.
 - `awaiting_user_choice` → re-verify a parseable suggestion block is
-  still in the PR body (same strict check as the verdict path); if
-  present, re-present the user choice without re-invoking the agent.
-  If absent or malformed, fall back to `planning` rather than
-  re-presenting a choice the user could not act on.  If
+  still in the squash-suggestion PR comment (same strict check as
+  the verdict path); if present, re-present the user choice without
+  re-invoking the agent.  If absent or malformed, fall back to
+  `planning` rather than re-presenting a choice the user could not
+  act on.  If
   the user then picks "agent squashes now" but no agent session is
   available (neither the saved run state nor the current verdict
   produced a session ID), the stage fails closed with `blocked`
@@ -1415,8 +1423,8 @@ a follow-up turn, so the verdict session is not guaranteed to
 equal the planning session.  Persisting it ensures that a resume
 from `awaiting_user_choice` — where the user picks "agent
 squashes now" — re-sends the follow-up on the exact conversation
-that drafted the PR-body suggestion, rather than the earlier
-planning session.
+that drafted the squash-suggestion comment, rather than the
+earlier planning session.
 
 **Outcome handling:** `requiresArtifact: true` — if `BLOCKED`,
 only **Instruct** and **Halt** are offered.
@@ -1525,7 +1533,7 @@ Cleanup
      delete the worktree, delete the remote branch, and close
      the PR. Each action is individually selectable.
 
-   When a squash suggestion is live in the PR body, the
+   When a squash suggestion is live in a PR comment, the
    merge-confirm screen also renders `[t] copy` / `[b] copy`
    hotkey hints next to the suggested title and body.  Pressing
    `t` or `b` writes the corresponding value to the system
