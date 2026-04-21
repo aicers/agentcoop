@@ -14,7 +14,8 @@ vi.mock("node:os", () => ({
   homedir: () => tmpHome,
 }));
 
-const { configPath, loadConfig, saveConfig } = await import("./config.js");
+const { configPath, loadConfig, patchVersionCheckState, saveConfig } =
+  await import("./config.js");
 
 describe("configPath", () => {
   test("returns path under ~/.agentcoop/", () => {
@@ -135,6 +136,41 @@ describe("loadConfig", () => {
     writeFileSync(configPath(), JSON.stringify({ owners: "not-an-array" }));
     const config = loadConfig();
     expect(config.owners).toEqual([]);
+  });
+
+  test("reads version-check fields when present", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: ["aicers"],
+        lastKnownVersions: { claude: "1.2.3", codex: "0.46.0" },
+        skipVersionCheck: true,
+        lastVersionCheckAt: 1_700_000_000_000,
+      }),
+    );
+    const config = loadConfig();
+    expect(config.lastKnownVersions).toEqual({
+      claude: "1.2.3",
+      codex: "0.46.0",
+    });
+    expect(config.skipVersionCheck).toBe(true);
+    expect(config.lastVersionCheckAt).toBe(1_700_000_000_000);
+  });
+
+  test("ignores malformed version-check fields", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: ["aicers"],
+        lastKnownVersions: "not-an-object",
+        skipVersionCheck: "yes",
+        lastVersionCheckAt: "not-a-number",
+      }),
+    );
+    const config = loadConfig();
+    expect(config.lastKnownVersions).toBeUndefined();
+    expect(config.skipVersionCheck).toBeUndefined();
+    expect(config.lastVersionCheckAt).toBeUndefined();
   });
 
   test("filters out non-string elements from owners array", () => {
@@ -762,5 +798,105 @@ describe("saveConfig", () => {
     saveConfig(original);
     const loaded = loadConfig();
     expect(loaded).toEqual(original);
+  });
+});
+
+describe("patchVersionCheckState", () => {
+  beforeEach(() => {
+    mkdirSync(join(tmpHome, ".agentcoop"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  test("preserves unknown top-level keys when patching fields", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: ["aicers"],
+        cloneBaseDir: "~/code",
+        language: "en",
+        futureUnknownField: { nested: "value" },
+        anotherUnknown: 42,
+      }),
+    );
+    patchVersionCheckState({
+      lastKnownVersions: { claude: "1.3.0" },
+      lastVersionCheckAt: 1_700_000_000_000,
+    });
+    const raw = JSON.parse(readFileSync(configPath(), "utf-8"));
+    expect(raw.futureUnknownField).toEqual({ nested: "value" });
+    expect(raw.anotherUnknown).toBe(42);
+    expect(raw.lastKnownVersions).toEqual({ claude: "1.3.0" });
+    expect(raw.lastVersionCheckAt).toBe(1_700_000_000_000);
+    // Existing recognized fields are left untouched as well.
+    expect(raw.owners).toEqual(["aicers"]);
+    expect(raw.cloneBaseDir).toBe("~/code");
+    expect(raw.language).toBe("en");
+  });
+
+  test("writes only the supplied fields (merges rather than replaces)", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        lastKnownVersions: { claude: "1.0.0", codex: "0.1.0" },
+        lastVersionCheckAt: 100,
+      }),
+    );
+    // Only updating `lastKnownVersions` — timestamp should stay.
+    patchVersionCheckState({
+      lastKnownVersions: { claude: "1.1.0", codex: "0.1.0" },
+    });
+    const raw = JSON.parse(readFileSync(configPath(), "utf-8"));
+    expect(raw.lastKnownVersions).toEqual({ claude: "1.1.0", codex: "0.1.0" });
+    expect(raw.lastVersionCheckAt).toBe(100);
+  });
+
+  test("creates the file when it does not exist", () => {
+    rmSync(configPath(), { force: true });
+    patchVersionCheckState({
+      lastKnownVersions: { claude: "1.3.0" },
+    });
+    const raw = JSON.parse(readFileSync(configPath(), "utf-8"));
+    expect(raw.lastKnownVersions).toEqual({ claude: "1.3.0" });
+  });
+
+  test("written file ends with newline", () => {
+    patchVersionCheckState({
+      lastKnownVersions: { claude: "1.3.0" },
+    });
+    expect(readFileSync(configPath(), "utf-8").endsWith("\n")).toBe(true);
+  });
+
+  test("preserves unknown nested CLI entries inside lastKnownVersions", () => {
+    // `loadLastKnownVersions` filters the runtime view down to
+    // `{ claude?, codex? }`, so an `updates.lastKnownVersions` built
+    // from that view does not know about other CLI entries.  The
+    // patcher must merge against the existing nested object — not
+    // replace it — so a forward-compatible field (e.g. `gemini` from
+    // a newer AgentCoop version) or a hand-added entry survives a
+    // claude/codex-only check.
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        lastKnownVersions: {
+          claude: "1.0.0",
+          codex: "0.46.0",
+          gemini: "0.5.0",
+        },
+      }),
+    );
+    patchVersionCheckState({
+      lastKnownVersions: { claude: "1.3.0", codex: "0.46.0" },
+    });
+    const raw = JSON.parse(readFileSync(configPath(), "utf-8"));
+    expect(raw.lastKnownVersions).toEqual({
+      claude: "1.3.0",
+      codex: "0.46.0",
+      gemini: "0.5.0",
+    });
   });
 });

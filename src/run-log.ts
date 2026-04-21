@@ -23,6 +23,8 @@ export interface RunLogAgentMeta {
   model: string;
   contextWindow?: string;
   effortLevel?: string;
+  /** CLI version string captured at pipeline start (e.g. "1.2.3"). */
+  cliVersion?: string;
 }
 
 export interface RunLogMetadata {
@@ -174,10 +176,12 @@ export function createRunLog(
   if (meta.agentA.contextWindow)
     write(`  context  : ${meta.agentA.contextWindow}`);
   if (meta.agentA.effortLevel) write(`  effort   : ${meta.agentA.effortLevel}`);
+  if (meta.agentA.cliVersion) write(`  version  : ${meta.agentA.cliVersion}`);
   write(`Agent B    : ${meta.agentB.cli} / ${meta.agentB.model}`);
   if (meta.agentB.contextWindow)
     write(`  context  : ${meta.agentB.contextWindow}`);
   if (meta.agentB.effortLevel) write(`  effort   : ${meta.agentB.effortLevel}`);
+  if (meta.agentB.cliVersion) write(`  version  : ${meta.agentB.cliVersion}`);
   write(
     `Auto-budget: self-check=${meta.selfCheckAutoIterations}, review=${meta.reviewAutoRounds}, ci-check=${meta.ciCheckAutoIterations}`,
   );

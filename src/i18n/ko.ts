@@ -390,6 +390,31 @@ export const ko: Messages = {
 
   "notification.title": "agentcoop",
 
+  // ---- version check -----------------------------------------------------
+
+  "versionCheck.checking": "CLI 버전 확인 중...",
+  "versionCheck.inconclusive": (cli, reason) =>
+    `  ${cli}: 업데이트 검사 건너뜀 (${reason})`,
+  "versionCheck.fetchFailed": (cli, reason) =>
+    `  ${cli}: 최신 버전을 가져올 수 없습니다 (${reason})`,
+  "versionCheck.upToDate": (cli, version) =>
+    `  ${cli} v${version} 최신 버전입니다.`,
+  "versionCheck.updatePrompt": (cli, from, to) =>
+    `${cli}의 새 버전이 있습니다 (v${from} → v${to}). 지금 업데이트하시겠습니까?`,
+  "versionCheck.updateWaiting": (cli) =>
+    `${cli}를 업데이트한 후 Enter 키를 눌러 계속 진행하세요.`,
+  "versionCheck.versionUnchanged": (version) =>
+    `버전이 여전히 v${version}입니다.`,
+  "versionCheck.retrySkipAbortPrompt": "어떻게 진행하시겠습니까?",
+  "versionCheck.proceedingWith": (cli, version) =>
+    `  ${cli}가 v${version}로 업데이트되었습니다. 계속 진행합니다.`,
+  "versionCheck.abortedByUser": "사용자에 의해 업데이트 검사가 중단되었습니다.",
+  "versionCheck.versionUnknown": (cli) =>
+    `  ${cli} 버전을 확인할 수 없어 업데이트 검사를 건너뜁니다.`,
+  "versionCheck.retry": "재시도",
+  "versionCheck.skip": "건너뛰기 (현재 버전 사용)",
+  "versionCheck.abort": "중단",
+
   // ---- worktree errors ---------------------------------------------------
 
   "worktree.alreadyExists": (path) =>

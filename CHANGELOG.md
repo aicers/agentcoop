@@ -8,6 +8,73 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Agent pane headers now include the CLI name and installed CLI
+  version next to the model label (e.g.
+  `Agent A (author) — Claude Opus 4.6 v1.2.3`). The CLI name
+  disambiguates panes when model names are shared or user-configured.
+  The version is detected once at pipeline start so it does not flicker
+  mid-run, and is threaded through `renderApp` so no adapter changes are
+  required.
+- Startup now compares the installed `claude` / `codex` CLI against the
+  channel-appropriate "latest" version and prompts the user to update
+  when a newer release is available. The check runs after the CLIs
+  actually used this run are known (fresh and resume branches joined,
+  `params` finalized) so it never prompts for a CLI that is not in use.
+  Claude's latest is fetched from the npm registry. Codex's latest is
+  resolved by matching the installed binary's realpath against known
+  layouts (npm global prefix anchored on
+  `lib/node_modules/@openai/codex/` so a project-local install at
+  `<repo>/node_modules/@openai/codex/...` — reachable via
+  `node_modules/.bin/codex` — is treated as inconclusive rather than
+  pointed at the npm registry, Homebrew formula `Cellar/codex/`,
+  Homebrew cask `Caskroom/codex/`, or a standalone install rooted at
+  `~/.codex/` — specifically `~/.codex/bin/`,
+  `~/.codex/versions/<ver>/`, or the current
+  `~/.codex/packages/standalone/releases/` layout). Homebrew matches
+  are anchored on the `codex` package segment and root-anchored on the
+  Homebrew prefixes (`/opt/homebrew/`, `/usr/local/`,
+  `/home/linuxbrew/.linuxbrew/`),
+  so a custom wrapper formula/cask (e.g. `Cellar/my-codex-wrapper/...`,
+  `Caskroom/custom-codex/...`) and a copied tree under a non-Homebrew
+  root (e.g. `/tmp/opt/homebrew/Cellar/codex/...`,
+  `/Users/me/sandbox/usr/local/Caskroom/codex/...`) are not
+  misclassified as the official `codex` package. Only the known
+  subpaths under the running user's home directory are accepted as a
+  standalone install; any other
+  layout — including an unrecognized subpath inside `~/.codex/` (e.g.
+  `~/.codex/tools/codex`) or a raw `Applications/` path that did not
+  resolve through `realpath` into a Caskroom directory — is treated as
+  inconclusive and the check is skipped for that CLI rather than
+  guessed. When an update is
+  chosen, AgentCoop pauses for the user to run their package manager
+  and re-runs `--version` on return; if the
+  version is unchanged it offers retry / skip (proceed with the current
+  version) / abort. The check can be disabled with
+  `skipVersionCheck: true` in `~/.agentcoop/config.json` and is
+  throttled to once per 24h via `lastVersionCheckAt`. The throttle
+  timestamp only advances after at least one CLI reached a real
+  installed-vs-latest comparison, so a run where every channel was
+  inconclusive or the registry fetch failed still re-checks on the
+  next start rather than being silently throttled for 24h. Network
+  failures are logged but never fatal. The persistence writes
+  `lastKnownVersions` / `lastVersionCheckAt` as a narrow patch into
+  the raw JSON rather than round-tripping through the normalized
+  `Config` shape, so unknown top-level keys in
+  `~/.agentcoop/config.json` (user-added fields, fields from a newer
+  AgentCoop version, etc.) are preserved across the update. The patch
+  also merges `lastKnownVersions` against the existing nested object
+  rather than replacing it, so unknown nested CLI entries (e.g. a
+  forward-compatible `gemini` field added by a newer AgentCoop
+  version) survive a claude/codex-only check.
+- Per-run CLI versions are now recorded into `RunState`
+  (`agentA.cliVersion` / `agentB.cliVersion`) and into the run-log
+  header under a `version` line for each agent, so postmortem
+  reproduction can identify the exact CLI build that produced a run.
+  The values survive across resume and are refreshed at resume time so
+  a CLI upgrade between runs is captured, not silently discarded. A
+  failed re-probe on resume (e.g. `--version` crashed or its output
+  could not be parsed) intentionally keeps the previously recorded
+  version rather than blanking it, preserving the postmortem record.
 - Stage 8 (Squash) now posts the single-commit suggestion as a PR
   comment instead of editing the PR body. The agent looks up any
   prior squash-suggestion comment by its start marker and PATCHes it

@@ -315,4 +315,25 @@ export interface Messages {
 
   "worktree.alreadyExists": (path: string) => string;
   "worktree.haltConflict": string;
+
+  // ---- version check -----------------------------------------------------
+
+  "versionCheck.checking": string;
+  "versionCheck.inconclusive": (cli: string, reason: string) => string;
+  "versionCheck.fetchFailed": (cli: string, reason: string) => string;
+  "versionCheck.upToDate": (cli: string, version: string) => string;
+  "versionCheck.updatePrompt": (
+    cli: string,
+    from: string,
+    to: string,
+  ) => string;
+  "versionCheck.updateWaiting": (cli: string) => string;
+  "versionCheck.versionUnchanged": (version: string) => string;
+  "versionCheck.retrySkipAbortPrompt": string;
+  "versionCheck.proceedingWith": (cli: string, version: string) => string;
+  "versionCheck.abortedByUser": string;
+  "versionCheck.versionUnknown": (cli: string) => string;
+  "versionCheck.retry": string;
+  "versionCheck.skip": string;
+  "versionCheck.abort": string;
 }

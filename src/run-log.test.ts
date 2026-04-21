@@ -115,6 +115,43 @@ describe("createRunLog", () => {
     expect(content).toContain("auto");
   });
 
+  test("records cliVersion in header when provided", async () => {
+    // The run-log header is a postmortem surface — when version
+    // detection succeeded for this run we want the CLI build to land
+    // on disk next to the agent/model lines.
+    const emitter = new PipelineEventEmitter();
+    const log = createRunLog(
+      emitter,
+      meta({
+        agentA: {
+          cli: "claude",
+          model: "opus",
+          contextWindow: "200k",
+          effortLevel: "high",
+          cliVersion: "1.2.3",
+        },
+        agentB: { cli: "codex", model: "sonnet", cliVersion: "0.46.0" },
+      }),
+    );
+    await log.close();
+
+    const content = readLog(log.path);
+    expect(content).toContain("version  : 1.2.3");
+    expect(content).toContain("version  : 0.46.0");
+  });
+
+  test("omits version line when cliVersion is undefined", async () => {
+    // On a fresh run where `--version` failed we have no value to
+    // record — the header must omit the line rather than print a
+    // stray `version  : undefined`.
+    const emitter = new PipelineEventEmitter();
+    const log = createRunLog(emitter, meta());
+    await log.close();
+
+    const content = readLog(log.path);
+    expect(content).not.toContain("version  :");
+  });
+
   test("logs agent:chunk events", async () => {
     const emitter = new PipelineEventEmitter();
     const log = createRunLog(emitter, meta());
