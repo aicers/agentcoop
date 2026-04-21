@@ -52,6 +52,13 @@ export interface AgentState {
   contextWindow: string | undefined;
   effortLevel: string | undefined;
   sessionId: string | undefined;
+  /**
+   * Version of the CLI that was executed for this run (e.g. "1.2.3").
+   * Captured at pipeline start so it survives into the saved run state
+   * for post-mortem reproduction.  Optional for backward compatibility
+   * with state files written before version tracking existed.
+   */
+  cliVersion?: string;
 }
 
 /**
@@ -138,7 +145,8 @@ function isValidAgentState(v: unknown): v is AgentState {
     typeof r.model === "string" &&
     isOptionalString(r.contextWindow) &&
     isOptionalString(r.effortLevel) &&
-    isOptionalString(r.sessionId)
+    isOptionalString(r.sessionId) &&
+    isOptionalString(r.cliVersion)
   );
 }
 
@@ -268,12 +276,14 @@ export function loadRunState(
       contextWindow: raw.agentA.contextWindow ?? undefined,
       effortLevel: raw.agentA.effortLevel ?? undefined,
       sessionId: raw.agentA.sessionId ?? undefined,
+      cliVersion: raw.agentA.cliVersion ?? undefined,
     },
     agentB: {
       ...raw.agentB,
       contextWindow: raw.agentB.contextWindow ?? undefined,
       effortLevel: raw.agentB.effortLevel ?? undefined,
       sessionId: raw.agentB.sessionId ?? undefined,
+      cliVersion: raw.agentB.cliVersion ?? undefined,
     },
   };
 

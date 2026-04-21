@@ -16,6 +16,7 @@ import {
 } from "../pipeline-events.js";
 import {
   AgentPane,
+  formatPaneHeader,
   renderDiagnosticRow,
   renderPromptRows,
   splitIntoRows,
@@ -36,6 +37,82 @@ import {
 
 afterEach(() => {
   cleanup();
+});
+
+// ---- formatPaneHeader --------------------------------------------------------
+
+describe("formatPaneHeader", () => {
+  test("label only when no model / version", () => {
+    expect(formatPaneHeader("Agent A (author)")).toBe("Agent A (author)");
+  });
+
+  test("appends model name", () => {
+    expect(formatPaneHeader("Agent A (author)", "Claude Opus 4.6")).toBe(
+      "Agent A (author) — Claude Opus 4.6",
+    );
+  });
+
+  test("appends model and version", () => {
+    expect(
+      formatPaneHeader("Agent A (author)", "Claude Opus 4.6", "1.2.3"),
+    ).toBe("Agent A (author) — Claude Opus 4.6 v1.2.3");
+  });
+
+  test("strips a leading v from the input version", () => {
+    expect(formatPaneHeader("Agent A", "Opus", "v1.2.3")).toBe(
+      "Agent A — Opus v1.2.3",
+    );
+  });
+
+  test("version without model still appears after dash", () => {
+    expect(formatPaneHeader("Agent A", undefined, "1.2.3")).toBe(
+      "Agent A — v1.2.3",
+    );
+  });
+
+  test("prefixes the model name with the CLI name when provided", () => {
+    // The CLI name (e.g. "Claude", "Codex") disambiguates panes when
+    // model names are ambiguous or user-configured.  Issue #276 asked
+    // for the CLI name beside the version in the header.
+    expect(
+      formatPaneHeader("Agent B (reviewer)", "GPT-5.4", "0.46.0", "Codex"),
+    ).toBe("Agent B (reviewer) — Codex GPT-5.4 v0.46.0");
+  });
+
+  test("does not duplicate CLI name when model already starts with it", () => {
+    // models.json entries like "Claude Opus 4.7" already embed the CLI
+    // name, so prepending cliName="Claude" would render "Claude Claude
+    // Opus 4.7".  formatPaneHeader must collapse that duplication.
+    expect(
+      formatPaneHeader(
+        "Agent A (author)",
+        "Claude Opus 4.7",
+        "1.2.3",
+        "Claude",
+      ),
+    ).toBe("Agent A (author) — Claude Opus 4.7 v1.2.3");
+    // Case-insensitive match still collapses.
+    expect(
+      formatPaneHeader("Agent A", "claude opus 4.7", undefined, "Claude"),
+    ).toBe("Agent A — claude opus 4.7");
+    // Prefix must end at a word boundary — a model literally named
+    // "Claudette" should still get the "Claude" prefix prepended.
+    expect(
+      formatPaneHeader("Agent A", "Claudette Turbo", undefined, "Claude"),
+    ).toBe("Agent A — Claude Claudette Turbo");
+  });
+
+  test("falls back to CLI name + version when model is absent", () => {
+    expect(
+      formatPaneHeader("Agent A (author)", undefined, "1.2.3", "Claude"),
+    ).toBe("Agent A (author) — Claude v1.2.3");
+  });
+
+  test("renders CLI name alone when model and version are absent", () => {
+    expect(formatPaneHeader("Agent A", undefined, undefined, "Claude")).toBe(
+      "Agent A — Claude",
+    );
+  });
 });
 
 // ---- AgentPane ---------------------------------------------------------------
@@ -95,6 +172,26 @@ describe("AgentPane", () => {
 
     const frame = lastFrame();
     expect(frame).toContain("Agent A (author) \u2014 opus");
+  });
+
+  test("renders CLI name alongside model and version in header", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <AgentPane
+        label="Agent B (reviewer)"
+        modelName="GPT-5.4"
+        cliVersion="0.46.0"
+        cliName="Codex"
+        agent="b"
+        emitter={emitter}
+        color="green"
+      />,
+    );
+
+    const frame = lastFrame();
+    // The CLI name is what answers "which CLI build is driving this
+    // pane?" when model names are shared or ambiguous.
+    expect(frame).toContain("Agent B (reviewer) — Codex GPT-5.4 v0.46.0");
   });
 
   test("renders streamed lines after agent:chunk events", async () => {

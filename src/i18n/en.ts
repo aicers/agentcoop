@@ -348,6 +348,30 @@ export const en: Messages = {
   "worktree.alreadyExists": (path) =>
     `Worktree already exists at ${path}. ` +
     "Provide a conflictChoice (reuse | clean | halt).",
+
+  // ---- version check -----------------------------------------------------
+
+  "versionCheck.checking": "Checking CLI versions...",
+  "versionCheck.inconclusive": (cli, reason) =>
+    `  ${cli}: update check skipped (${reason})`,
+  "versionCheck.fetchFailed": (cli, reason) =>
+    `  ${cli}: could not fetch latest version (${reason})`,
+  "versionCheck.upToDate": (cli, version) =>
+    `  ${cli} v${version} is up to date.`,
+  "versionCheck.updatePrompt": (cli, from, to) =>
+    `A newer version of ${cli} is available (v${from} → v${to}). Update now?`,
+  "versionCheck.updateWaiting": (cli) =>
+    `Please update ${cli}, then press Enter to continue.`,
+  "versionCheck.versionUnchanged": (version) => `Version is still v${version}.`,
+  "versionCheck.retrySkipAbortPrompt": "How would you like to proceed?",
+  "versionCheck.proceedingWith": (cli, version) =>
+    `  ${cli} updated to v${version}. Continuing.`,
+  "versionCheck.abortedByUser": "Update check aborted by user.",
+  "versionCheck.versionUnknown": (cli) =>
+    `  Could not determine ${cli} version — skipping update check.`,
+  "versionCheck.retry": "Retry",
+  "versionCheck.skip": "Skip (use current version)",
+  "versionCheck.abort": "Abort",
   "worktree.haltConflict":
     "User chose to halt \u2014 worktree conflict unresolved.",
 };

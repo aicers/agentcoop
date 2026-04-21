@@ -27,7 +27,7 @@ minimal human involvement.
 ## Terminal UI
 
 ```text
-┌─ Agent A (author) — Claude Opus 4.6 ● [*] ─┬─ Agent B (reviewer) — GPT-5.4 ─┐
+┌─ Agent A (author) — Claude Opus 4.6 v1.2.3 ● [*] ─┬─ Agent B (reviewer) — Codex GPT-5.4 v0.46.0 ─┐
 │                                            │                                │
 │  (streamed output)                         │  (streamed output)             │
 │                                            │                                │
@@ -43,7 +43,9 @@ minimal human involvement.
 ```
 
 - **Agent panes** — Streamed output from each agent in real time.
-  The active agent is marked with `●`, the focused pane (for
+  The pane header shows the agent role, the CLI name (Claude / Codex),
+  the model name, and the installed CLI version (detected at pipeline
+  start). The active agent is marked with `●`, the focused pane (for
   scrolling) with `[*]`.
 - **TokenBar** — Per-agent token usage (input/output, with cached
   token counts when available).
@@ -243,6 +245,50 @@ to reuse it, clean up and recreate, or halt.
 - Any external services the agents use (e.g., Figma Desktop MCP)
   must be running and authenticated
 
+### CLI update check
+
+At startup (after the agents for this run are known) AgentCoop runs
+`claude --version` / `codex --version` and compares the installed
+version against the latest release from the channel-appropriate
+source. Claude always uses the npm registry
+(`@anthropic-ai/claude-code`). Codex's channel is resolved from the
+installed binary's realpath: npm global prefix, Homebrew formula
+(`Cellar/codex/`), Homebrew cask (`Caskroom/codex/`), or a standalone
+install rooted at `~/.codex/` — specifically `~/.codex/bin/`,
+`~/.codex/versions/<ver>/`, or the current
+`~/.codex/packages/standalone/releases/` layout. Homebrew matches are
+anchored on the `codex` package segment and root-anchored on the
+Homebrew prefixes (`/opt/homebrew/`, `/usr/local/`,
+`/home/linuxbrew/.linuxbrew/`), so
+a custom wrapper formula or cask (e.g. `Cellar/my-codex-wrapper/…`,
+`Caskroom/custom-codex/…`) and a copied tree under a non-Homebrew
+root (e.g. `/tmp/opt/homebrew/Cellar/codex/…`,
+`/Users/me/sandbox/usr/local/Caskroom/codex/…`) are not misclassified
+as the official `codex` package. Only the known
+subpaths under the running user's home directory are accepted as a
+standalone install; an unrecognized subpath inside `~/.codex/` (e.g.
+`~/.codex/tools/codex`) or any `.codex` directory outside `$HOME`
+(e.g. `/tmp/.codex/…`) is treated as inconclusive and the check is
+skipped rather than guessed.
+Likewise, a raw `Applications/` path that did not resolve through
+`realpath` into a Caskroom directory is treated as inconclusive rather
+than guessed as a cask, so a hand-placed `~/Applications/Codex.app/…`
+or `/tmp/Applications/codex` never produces a bogus update prompt.
+
+If the installed version is older, AgentCoop prompts to update and
+pauses until you press Enter so you can run your package manager in
+another tab. On return it re-runs `--version` and either proceeds, or
+— if the version is unchanged — offers retry / skip / abort.
+
+Skip the check in CI or offline environments by setting
+`skipVersionCheck: true` in `~/.agentcoop/config.json`. The check is
+also throttled to once per 24h via the `lastVersionCheckAt`
+timestamp. That timestamp only advances after at least one CLI
+reached a real installed-vs-latest comparison — a run where every
+channel was inconclusive, or where the registry fetch failed, will
+re-check on the next start rather than being silently throttled
+for 24h. Network failures are logged but never fatal.
+
 ## Installation & quick start
 
 ```bash
@@ -283,6 +329,10 @@ Settings are stored in `~/.agentcoop/config.json`:
 | `notifications.desktop` | Desktop notification | `false` |
 | `customModels.claude` | Extra Claude model entries | _(none)_ |
 | `customModels.codex` | Extra Codex/GPT model entries | _(none)_ |
+| `lastKnownVersions.claude` | Most recent `claude --version` output | _(first run)_ |
+| `lastKnownVersions.codex` | Most recent `codex --version` output | _(first run)_ |
+| `skipVersionCheck` | Skip the startup update check | `false` |
+| `lastVersionCheckAt` | Epoch ms of the last check (throttle) | _(first run)_ |
 
 Agent presets (CLI, model, context window, effort level) are also
 saved per agent slot.

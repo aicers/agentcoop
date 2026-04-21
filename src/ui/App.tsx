@@ -15,10 +15,10 @@ import type {
   PipelineEventEmitter,
   PrResolvedEvent,
 } from "../pipeline-events.js";
-import { AgentPane, splitIntoRows } from "./AgentPane.js";
+import { AgentPane, formatPaneHeader, splitIntoRows } from "./AgentPane.js";
 import { InputArea, type InputRequest } from "./InputArea.js";
 import { StatusBar } from "./StatusBar.js";
-import { TokenBar } from "./TokenBar.js";
+import { cliDisplayName, TokenBar } from "./TokenBar.js";
 import { createTuiUserPrompt } from "./TuiUserPrompt.js";
 
 // ---- Terminal helpers --------------------------------------------------------
@@ -252,6 +252,10 @@ export interface AppProps {
   cliTypeA?: string;
   /** CLI identifier for Agent B (e.g. "claude" or "codex"). */
   cliTypeB?: string;
+  /** Installed CLI version for Agent A, detected at pipeline start. */
+  cliVersionA?: string;
+  /** Installed CLI version for Agent B, detected at pipeline start. */
+  cliVersionB?: string;
   /** Notification settings (bell / desktop). */
   notifications?: NotificationSettings;
   /**
@@ -290,6 +294,8 @@ export function App({
   modelNameB,
   cliTypeA,
   cliTypeB,
+  cliVersionA,
+  cliVersionB,
   notifications,
   onCancel,
   startedAt,
@@ -347,12 +353,23 @@ export function App({
   const inputHeight = inputAreaHeight(inputRequest);
   const labelA = messages["agent.labelARole"];
   const labelB = messages["agent.labelBRole"];
+  const cliNameA = cliTypeA ? cliDisplayName(cliTypeA) : undefined;
+  const cliNameB = cliTypeB ? cliDisplayName(cliTypeB) : undefined;
   const paneHeaderTexts = useMemo(
     () => [
-      `${modelNameA ? `${labelA} \u2014 ${modelNameA}` : labelA} \u25CF [*]`,
-      `${modelNameB ? `${labelB} \u2014 ${modelNameB}` : labelB} \u25CF [*]`,
+      `${formatPaneHeader(labelA, modelNameA, cliVersionA, cliNameA)} \u25CF [*]`,
+      `${formatPaneHeader(labelB, modelNameB, cliVersionB, cliNameB)} \u25CF [*]`,
     ],
-    [labelA, labelB, modelNameA, modelNameB],
+    [
+      labelA,
+      labelB,
+      modelNameA,
+      modelNameB,
+      cliVersionA,
+      cliVersionB,
+      cliNameA,
+      cliNameB,
+    ],
   );
   const flags = useMemo<VisibilityFlags>(() => {
     if (terminalHeight === undefined) {
@@ -495,6 +512,8 @@ export function App({
         <AgentPane
           label={labelA}
           modelName={modelNameA}
+          cliVersion={cliVersionA}
+          cliName={cliNameA}
           agent="a"
           emitter={emitter}
           color="blue"
@@ -508,6 +527,8 @@ export function App({
         <AgentPane
           label={labelB}
           modelName={modelNameB}
+          cliVersion={cliVersionB}
+          cliName={cliNameB}
           agent="b"
           emitter={emitter}
           color="green"

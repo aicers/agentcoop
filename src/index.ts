@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { confirm, select } from "@inquirer/prompts";
+import { confirm, input, select } from "@inquirer/prompts";
 
 import type { AgentAdapter, AgentStream } from "./agent.js";
 import { type BootstrapLog, createBootstrapLog } from "./bootstrap-log.js";
@@ -24,6 +24,7 @@ import {
   assembleReviewStage,
   assembleSquashStage,
   loadConfig,
+  patchVersionCheckState,
 } from "./config.js";
 import { createDonePromptOptions } from "./done-prompt-options.js";
 import { getGitHubUsername, getIssue } from "./github.js";
@@ -77,6 +78,12 @@ import {
   selectTarget,
 } from "./startup.js";
 import { renderApp } from "./ui/render-app.js";
+import {
+  type CliName,
+  refreshAgentCliVersion,
+  runStartupVersionCheck,
+  VersionCheckAbortError,
+} from "./version-check.js";
 import {
   bootstrapRepo,
   createWorktree,
@@ -443,6 +450,64 @@ try {
   // semantics of "not persisted" and the default-true rationale.
   params.squashApplyPolicy = await promptSquashApplyPolicy();
 
+  // Check CLI versions against the appropriate distribution channel
+  // and prompt the user to update when a newer version is available.
+  // Runs after the CLIs actually used this run are known (fresh /
+  // resume branches joined, `params` finalized) so we do not prompt
+  // for a CLI that is not used this run.
+  const versionCheckConfig = loadConfig();
+  const uniqueClis: CliName[] = [];
+  for (const c of [params.agentAConfig.cli, params.agentBConfig.cli]) {
+    if (!uniqueClis.includes(c)) uniqueClis.push(c);
+  }
+  let cliVersionMap = new Map<CliName, string | undefined>();
+  try {
+    const versionMessages = t();
+    cliVersionMap = await runStartupVersionCheck({
+      clis: uniqueClis,
+      config: versionCheckConfig,
+      persistVersionCheckState: patchVersionCheckState,
+      prompts: {
+        confirmUpdate: async (message) => confirm({ message, default: true }),
+        waitForEnter: async (message) => {
+          await input({ message, default: "" });
+        },
+        chooseRetrySkipAbort: async (message) =>
+          select({
+            message,
+            choices: [
+              { name: versionMessages["versionCheck.retry"], value: "retry" },
+              { name: versionMessages["versionCheck.skip"], value: "skip" },
+              { name: versionMessages["versionCheck.abort"], value: "abort" },
+            ],
+          }),
+        log: (msg) => console.log(msg),
+        warn: (msg) => console.warn(msg),
+      },
+      translations: {
+        checking: versionMessages["versionCheck.checking"],
+        inconclusive: versionMessages["versionCheck.inconclusive"],
+        fetchFailed: versionMessages["versionCheck.fetchFailed"],
+        upToDate: versionMessages["versionCheck.upToDate"],
+        updatePrompt: versionMessages["versionCheck.updatePrompt"],
+        updateWaiting: versionMessages["versionCheck.updateWaiting"],
+        versionUnchanged: versionMessages["versionCheck.versionUnchanged"],
+        retrySkipAbortPrompt:
+          versionMessages["versionCheck.retrySkipAbortPrompt"],
+        proceedingWith: versionMessages["versionCheck.proceedingWith"],
+        abortedByUser: versionMessages["versionCheck.abortedByUser"],
+        versionUnknown: versionMessages["versionCheck.versionUnknown"],
+      },
+    });
+  } catch (err) {
+    if (err instanceof VersionCheckAbortError) {
+      process.exit(1);
+    }
+    throw err;
+  }
+  const agentAVersion = cliVersionMap.get(params.agentAConfig.cli);
+  const agentBVersion = cliVersionMap.get(params.agentBConfig.cli);
+
   const {
     agentAConfig,
     agentBConfig,
@@ -690,6 +755,7 @@ try {
       contextWindow: agentAConfig.contextWindow,
       effortLevel: agentAConfig.effortLevel,
       sessionId: undefined,
+      cliVersion: agentAVersion,
     },
     agentB: {
       cli: agentBConfig.cli,
@@ -697,10 +763,20 @@ try {
       contextWindow: agentBConfig.contextWindow,
       effortLevel: agentBConfig.effortLevel,
       sessionId: undefined,
+      cliVersion: agentBVersion,
     },
     issueSyncStatus: "skipped",
     issueChanges: [],
   };
+
+  // Refresh the per-run CLI version on resume so the saved state
+  // reflects the CLI build this run is actually driving (a CLI
+  // upgrade between runs must not be silently discarded).  The helper
+  // intentionally leaves the saved value alone when the probe
+  // returned `undefined`, so a failed re-probe does not erase the
+  // postmortem record from the previous successful run.
+  refreshAgentCliVersion(runState.agentA, agentAVersion);
+  refreshAgentCliVersion(runState.agentB, agentBVersion);
 
   // Save initial state.
   saveRunState(runState);
@@ -741,12 +817,19 @@ try {
       model: agentAConfig.model,
       contextWindow: agentAConfig.contextWindow,
       effortLevel: agentAConfig.effortLevel,
+      // Read through `runState` so a failed re-probe on resume keeps
+      // the previously recorded version in the run-log header instead
+      // of blanking it — preserving the postmortem record matches the
+      // behavior already implemented for `RunState` via
+      // `refreshAgentCliVersion`.
+      cliVersion: runState.agentA.cliVersion,
     },
     agentB: {
       cli: agentBConfig.cli,
       model: agentBConfig.model,
       contextWindow: agentBConfig.contextWindow,
       effortLevel: agentBConfig.effortLevel,
+      cliVersion: runState.agentB.cliVersion,
     },
     selfCheckAutoIterations: pipelineSettings.selfCheckAutoIterations,
     reviewAutoRounds: pipelineSettings.reviewAutoRounds,
@@ -952,6 +1035,8 @@ try {
       modelNameB: modelDisplayName(agentBConfig),
       cliTypeA: agentAConfig.cli,
       cliTypeB: agentBConfig.cli,
+      cliVersionA: agentAVersion,
+      cliVersionB: agentBVersion,
       notifications,
       initialSelfCheckCount: runState.selfCheckCount,
       initialReviewCount: runState.reviewCount,

@@ -103,6 +103,52 @@ export function renderDiagnosticRow(block: DiagnosticBlock): string {
   return `[${block.timestamp}] Pipeline: ${block.message}${suffix}`;
 }
 
+/**
+ * Compose the pane-header text from label, CLI name, model name, and
+ * CLI version.
+ *
+ * Shape (CLI name included when provided, so panes are unambiguous
+ * even when model names are shared or user-configured):
+ *   - Nothing extra:            "Agent A (author)"
+ *   - Model only:               "Agent A (author) — Opus 4.6"
+ *   - CLI + model:              "Agent A (author) — Claude Opus 4.6"
+ *   - CLI + model + version:    "Agent A (author) — Claude Opus 4.6 v1.2.3"
+ *   - CLI + version (no model): "Agent A (author) — Claude v1.2.3"
+ *   - Version only:             "Agent A (author) — v1.2.3"
+ *
+ * The version is rendered with a leading `v` so "1.2.3" and "v1.2.3"
+ * display uniformly.  Leading `v`s already present in the input are
+ * stripped to avoid "vv1.2.3".
+ *
+ * When `modelName` already begins with `cliName` (e.g. models.json's
+ * "Claude Opus 4.7" paired with cliName "Claude"), the CLI prefix is
+ * dropped to avoid rendering the CLI name twice.
+ */
+export function formatPaneHeader(
+  label: string,
+  modelName?: string,
+  cliVersion?: string,
+  cliName?: string,
+): string {
+  const versionSuffix = cliVersion ? ` v${cliVersion.replace(/^v/, "")}` : "";
+  if (!modelName && !cliVersion && !cliName) return label;
+  const effectiveCliName =
+    cliName && modelName && modelStartsWithCli(modelName, cliName)
+      ? undefined
+      : cliName;
+  const modelPart = [effectiveCliName, modelName].filter(Boolean).join(" ");
+  if (!modelPart) return `${label} —${versionSuffix}`;
+  return `${label} — ${modelPart}${versionSuffix}`;
+}
+
+function modelStartsWithCli(modelName: string, cliName: string): boolean {
+  const lowerModel = modelName.toLowerCase();
+  const lowerCli = cliName.toLowerCase();
+  if (!lowerModel.startsWith(lowerCli)) return false;
+  const next = lowerModel.charAt(lowerCli.length);
+  return next === "" || next === " ";
+}
+
 /** A single terminal row tagged with display metadata. */
 interface RowEntry {
   text: string;
@@ -115,6 +161,18 @@ interface RowEntry {
 interface AgentPaneProps {
   label: string;
   modelName?: string;
+  /**
+   * Installed CLI version detected at pipeline start (e.g. "1.2.3").
+   * Rendered in the pane header next to `modelName` so the user can
+   * see which CLI build is driving this pane without leaving the TUI.
+   */
+  cliVersion?: string;
+  /**
+   * CLI display name (e.g. "Claude" or "Codex").  Rendered in the pane
+   * header ahead of `modelName` so users can see which CLI is driving
+   * this pane even when model names are shared or ambiguous.
+   */
+  cliName?: string;
   agent: "a" | "b";
   emitter: PipelineEventEmitter;
   color: string;
@@ -143,6 +201,8 @@ interface AgentPaneProps {
 export function AgentPane({
   label,
   modelName,
+  cliVersion,
+  cliName,
   agent,
   emitter,
   color,
@@ -389,7 +449,7 @@ export function AgentPane({
     >
       <Box flexShrink={0}>
         <Text bold color={borderCol}>
-          {modelName ? `${label} \u2014 ${modelName}` : label}
+          {formatPaneHeader(label, modelName, cliVersion, cliName)}
           {isActive ? " \u25CF" : ""}
           {isFocused ? " [*]" : ""}
         </Text>
