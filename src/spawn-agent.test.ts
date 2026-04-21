@@ -1185,7 +1185,7 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
     expect(result.status).toBe("success");
   });
 
-  test("invoke does not include -a flag", () => {
+  test("invoke uses approval_policy=never instead of a legacy approval flag", () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child);
 
@@ -1194,7 +1194,7 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
 
     const spawnArgs = mockSpawn.mock.calls[0]?.[1] as string[];
     expect(spawnArgs).not.toContain("-a");
-    expect(spawnArgs).not.toContain("never");
+    expect(spawnArgs).toContain("approval_policy=never");
   });
 
   test("defaults reasoning effort to high when not specified", () => {
@@ -1231,16 +1231,30 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
     expect(spawnArgs).toContain("model_reasoning_effort=medium");
   });
 
-  test("resume passes prompt via stdin with '-' in args", async () => {
+  test("resume prefers JSON mode, streams agent text, and forwards usage", async () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child);
     const stdinData: string[] = [];
+    const streamedChunks: string[] = [];
+    const usages: {
+      inputTokens: number;
+      outputTokens: number;
+      cachedInputTokens: number;
+    }[] = [];
     (child.stdin as PassThrough).on("data", (chunk: Buffer) => {
       stdinData.push(chunk.toString());
     });
 
     const adapter = createCodexAdapter({ model: "gpt-5.3-codex" });
-    const stream = adapter.resume("sess-prev", "keep going");
+    const stream = adapter.resume("sess-prev", "keep going", {
+      onUsage: (usage) => usages.push(usage),
+    });
+
+    const iteratorDone = (async () => {
+      for await (const chunk of stream) {
+        streamedChunks.push(chunk);
+      }
+    })();
 
     const spawnArgs = mockSpawn.mock.calls[0]?.[1] as string[];
     expect(spawnArgs).toContain("resume");
@@ -1252,29 +1266,139 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(stdinData.join("")).toBe("keep going");
     expect(spawnArgs).toContain("-c");
+    expect(spawnArgs).toContain("approval_policy=never");
     expect(spawnArgs).toContain("sandbox_mode=danger-full-access");
     expect(spawnArgs).toContain('model="gpt-5.3-codex"');
     expect(spawnArgs).toContain("model_reasoning_effort=high");
-    expect(spawnArgs).not.toContain("--json");
+    expect(spawnArgs).toContain("--json");
     expect(spawnArgs).not.toContain("-m");
 
     const resumeOutput = [
-      "OpenAI Codex v0.46.0 (research preview)",
-      "--------",
-      "workdir: /tmp",
-      "model: gpt-5.4",
-      "session id: sess-prev",
-      "--------",
-      "user",
-      "keep going",
-      "codex",
-      "Continued work done.",
-      "tokens used",
-      "150",
+      JSON.stringify({
+        type: "thread.started",
+        thread_id: "sess-prev",
+      }),
+      JSON.stringify({
+        type: "item.completed",
+        item: {
+          id: "item_0",
+          type: "agent_message",
+          text: "Continued work done.",
+        },
+      }),
+      JSON.stringify({
+        type: "turn.completed",
+        usage: {
+          input_tokens: 120,
+          output_tokens: 30,
+          cached_input_tokens: 10,
+        },
+      }),
     ].join("\n");
 
     emitStdout(child, resumeOutput);
     child.emit("close", 0);
+
+    const result = await stream.result;
+    await iteratorDone;
+    expect(result.responseText).toBe("Continued work done.");
+    expect(result.status).toBe("success");
+    expect(result.sessionId).toBe("sess-prev");
+    expect(streamedChunks.join("")).toBe("Continued work done.\n");
+    expect(usages).toEqual([
+      { inputTokens: 120, outputTokens: 30, cachedInputTokens: 10 },
+    ]);
+    expect(result.usage).toEqual({
+      inputTokens: 120,
+      outputTokens: 30,
+      cachedInputTokens: 10,
+    });
+  });
+
+  test("resume falls back to plain-text mode when --json is explicitly unsupported", async () => {
+    const jsonChild = createMockChild();
+    const plainChild = createMockChild();
+    mockSpawn.mockReturnValueOnce(jsonChild).mockReturnValueOnce(plainChild);
+
+    const adapter = createCodexAdapter();
+    const stream = adapter.resume("sess-prev", "keep going");
+
+    emitStderr(jsonChild, "error: unexpected argument '--json' found");
+    jsonChild.emit("close", 2);
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+
+    const firstArgs = mockSpawn.mock.calls[0]?.[1] as string[];
+    const secondArgs = mockSpawn.mock.calls[1]?.[1] as string[];
+    expect(firstArgs).toContain("--json");
+    expect(secondArgs).not.toContain("--json");
+    expect(secondArgs).toContain("approval_policy=never");
+    expect(secondArgs).toContain("sandbox_mode=danger-full-access");
+
+    emitStdout(
+      plainChild,
+      [
+        "OpenAI Codex v0.46.0 (research preview)",
+        "--------",
+        "workdir: /tmp",
+        "model: gpt-5.4",
+        "session id: sess-prev",
+        "--------",
+        "user",
+        "keep going",
+        "codex",
+        "Continued work done.",
+        "tokens used",
+        "150",
+      ].join("\n"),
+    );
+    plainChild.emit("close", 0);
+
+    const result = await stream.result;
+    expect(result.responseText).toBe("Continued work done.");
+    expect(result.status).toBe("success");
+    expect(result.sessionId).toBe("sess-prev");
+    expect(result.usage).toBeUndefined();
+  });
+
+  test("resume falls back to plain-text mode for other explicit unsupported --json wording", async () => {
+    const jsonChild = createMockChild();
+    const plainChild = createMockChild();
+    mockSpawn.mockReturnValueOnce(jsonChild).mockReturnValueOnce(plainChild);
+
+    const adapter = createCodexAdapter();
+    const stream = adapter.resume("sess-prev", "keep going");
+
+    emitStderr(jsonChild, "error: unrecognized argument '--json'");
+    jsonChild.emit("close", 2);
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+
+    const firstArgs = mockSpawn.mock.calls[0]?.[1] as string[];
+    const secondArgs = mockSpawn.mock.calls[1]?.[1] as string[];
+    expect(firstArgs).toContain("--json");
+    expect(secondArgs).not.toContain("--json");
+
+    emitStdout(
+      plainChild,
+      [
+        "OpenAI Codex v0.46.0 (research preview)",
+        "--------",
+        "workdir: /tmp",
+        "model: gpt-5.4",
+        "session id: sess-prev",
+        "--------",
+        "user",
+        "keep going",
+        "codex",
+        "Continued work done.",
+        "tokens used",
+        "150",
+      ].join("\n"),
+    );
+    plainChild.emit("close", 0);
 
     const result = await stream.result;
     expect(result.responseText).toBe("Continued work done.");
@@ -1282,15 +1406,223 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
     expect(result.sessionId).toBe("sess-prev");
   });
 
-  test("resume falls back to input sessionId when output has no session id line", async () => {
+  test("resume falls back to plain-text mode when --json is rejected on stdout", async () => {
+    const jsonChild = createMockChild();
+    const plainChild = createMockChild();
+    mockSpawn.mockReturnValueOnce(jsonChild).mockReturnValueOnce(plainChild);
+
+    const adapter = createCodexAdapter();
+    const stream = adapter.resume("sess-prev", "keep going");
+
+    emitStdout(jsonChild, "error: unexpected argument '--json' found");
+    jsonChild.emit("close", 2);
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+
+    const firstArgs = mockSpawn.mock.calls[0]?.[1] as string[];
+    const secondArgs = mockSpawn.mock.calls[1]?.[1] as string[];
+    expect(firstArgs).toContain("--json");
+    expect(secondArgs).not.toContain("--json");
+
+    emitStdout(
+      plainChild,
+      [
+        "OpenAI Codex v0.46.0 (research preview)",
+        "--------",
+        "workdir: /tmp",
+        "model: gpt-5.4",
+        "session id: sess-prev",
+        "--------",
+        "user",
+        "keep going",
+        "codex",
+        "Continued work done.",
+        "tokens used",
+        "150",
+      ].join("\n"),
+    );
+    plainChild.emit("close", 0);
+
+    const result = await stream.result;
+    expect(result.responseText).toBe("Continued work done.");
+    expect(result.status).toBe("success");
+    expect(result.sessionId).toBe("sess-prev");
+  });
+
+  test("plain-text resume fallback uses the known prompt to avoid prompt-side codex markers", async () => {
+    const jsonChild = createMockChild();
+    const plainChild = createMockChild();
+    mockSpawn.mockReturnValueOnce(jsonChild).mockReturnValueOnce(plainChild);
+
+    const adapter = createCodexAdapter();
+    const prompt = ["keep going", "codex"].join("\n");
+    const stream = adapter.resume("sess-prev", prompt);
+
+    emitStderr(jsonChild, "error: unexpected argument '--json' found");
+    jsonChild.emit("close", 2);
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+
+    emitStdout(
+      plainChild,
+      [
+        "OpenAI Codex v0.46.0 (research preview)",
+        "--------",
+        "workdir: /tmp",
+        "model: gpt-5.4",
+        "session id: sess-prev",
+        "--------",
+        "user",
+        ...prompt.split("\n"),
+        "codex",
+        "Continued work done.",
+        "tokens used",
+        "150",
+      ].join("\n"),
+    );
+    plainChild.emit("close", 0);
+
+    const result = await stream.result;
+    expect(result.responseText).toBe("Continued work done.");
+    expect(result.status).toBe("success");
+    expect(result.sessionId).toBe("sess-prev");
+  });
+
+  test("resume does not fall back for unrelated JSON resume failures", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const adapter = createCodexAdapter();
+    const stream = adapter.resume("sess-fail", "keep going");
+
+    emitStdout(
+      child,
+      [
+        JSON.stringify({ type: "thread.started", thread_id: "sess-fail" }),
+        JSON.stringify({
+          type: "turn.failed",
+          error: { message: "max turns reached" },
+        }),
+      ].join("\n"),
+    );
+    child.emit("close", 1);
+
+    const result = await stream.result;
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("error");
+    expect(result.errorType).toBe("max_turns");
+    expect(result.sessionId).toBe("sess-fail");
+  });
+
+  test("resume does not fall back when structured JSON output mentions --json", async () => {
+    const jsonChild = createMockChild();
+    const plainChild = createMockChild();
+    mockSpawn.mockReturnValueOnce(jsonChild).mockReturnValueOnce(plainChild);
+
+    const adapter = createCodexAdapter();
+    const stream = adapter.resume("sess-fail", "keep going");
+
+    emitStdout(
+      jsonChild,
+      [
+        JSON.stringify({ type: "thread.started", thread_id: "sess-fail" }),
+        JSON.stringify({
+          type: "turn.failed",
+          error: { message: "tool failed: unknown option '--json'" },
+        }),
+      ].join("\n"),
+    );
+    jsonChild.emit("close", 1);
+
+    emitStdout(
+      plainChild,
+      [
+        "OpenAI Codex v0.46.0 (research preview)",
+        "--------",
+        "workdir: /tmp",
+        "model: gpt-5.4",
+        "session id: sess-fail",
+        "--------",
+        "user",
+        "keep going",
+        "codex",
+        "unexpected fallback",
+        "tokens used",
+        "150",
+      ].join("\n"),
+    );
+    plainChild.emit("close", 0);
+
+    const result = await stream.result;
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("error");
+    expect(result.responseText).toBe("tool failed: unknown option '--json'");
+    expect(result.sessionId).toBe("sess-fail");
+  });
+
+  test("resume does not fall back when --json and unknown option are on different lines", async () => {
+    const jsonChild = createMockChild();
+    const plainChild = createMockChild();
+    mockSpawn.mockReturnValueOnce(jsonChild).mockReturnValueOnce(plainChild);
+
+    const adapter = createCodexAdapter();
+    const stream = adapter.resume("sess-fail", "keep going");
+
+    emitStderr(
+      jsonChild,
+      [
+        "For JSON output, pass '--json' to the CLI.",
+        "tool failed: unknown option '--sandbox'",
+      ].join("\n"),
+    );
+    jsonChild.emit("close", 1);
+
+    emitStdout(
+      plainChild,
+      [
+        "OpenAI Codex v0.46.0 (research preview)",
+        "--------",
+        "workdir: /tmp",
+        "model: gpt-5.4",
+        "session id: sess-fail",
+        "--------",
+        "user",
+        "keep going",
+        "codex",
+        "unexpected fallback",
+        "tokens used",
+        "150",
+      ].join("\n"),
+    );
+    plainChild.emit("close", 0);
+
+    const result = await stream.result;
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("error");
+    expect(result.responseText).toContain("--json");
+    expect(result.stderrText).toContain("unknown option '--sandbox'");
+    expect(result.sessionId).toBe("sess-fail");
+  });
+
+  test("resume falls back to input sessionId when JSON output has no thread.started event", async () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child);
 
     const adapter = createCodexAdapter();
     const stream = adapter.resume("sess-input", "keep going");
 
-    // Output without a "session id:" banner line (e.g. older CLI version).
-    emitStdout(child, "codex\nDone.\ntokens used\n50");
+    emitStdout(
+      child,
+      [
+        JSON.stringify({
+          type: "item.completed",
+          item: { id: "item_0", type: "agent_message", text: "Done." },
+        }),
+        JSON.stringify({ type: "turn.completed" }),
+      ].join("\n"),
+    );
     child.emit("close", 0);
 
     const result = await stream.result;
@@ -1298,20 +1630,64 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
     expect(result.status).toBe("success");
   });
 
-  test("resume preserves sessionId on error exit", async () => {
+  test("resume preserves sessionId on JSON error exit", async () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child);
 
     const adapter = createCodexAdapter();
     const stream = adapter.resume("sess-err", "continue");
 
-    emitStdout(child, "Error: max turns reached");
+    emitStdout(
+      child,
+      JSON.stringify({
+        type: "turn.failed",
+        error: { message: "max turns reached" },
+      }),
+    );
     child.emit("close", 1);
 
     const result = await stream.result;
     expect(result.status).toBe("error");
     expect(result.errorType).toBe("max_turns");
     expect(result.sessionId).toBe("sess-err");
+  });
+
+  test("resume ignores a later top-level error after turn.completed", async () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const adapter = createCodexAdapter();
+    const stream = adapter.resume("sess-prev", "continue");
+
+    emitStdout(
+      child,
+      [
+        JSON.stringify({ type: "thread.started", thread_id: "sess-prev" }),
+        JSON.stringify({
+          type: "item.completed",
+          item: { id: "item_0", type: "agent_message", text: "Done." },
+        }),
+        JSON.stringify({
+          type: "turn.completed",
+          usage: { input_tokens: 25, output_tokens: 4 },
+        }),
+        JSON.stringify({
+          type: "error",
+          message: "stream error after completion",
+        }),
+      ].join("\n"),
+    );
+    child.emit("close", 0);
+
+    const result = await stream.result;
+    expect(result.status).toBe("success");
+    expect(result.responseText).toBe("Done.");
+    expect(result.sessionId).toBe("sess-prev");
+    expect(result.usage).toEqual({
+      inputTokens: 25,
+      outputTokens: 4,
+      cachedInputTokens: 0,
+    });
   });
 
   test("invoke with cwd passes working directory", () => {
@@ -1379,9 +1755,11 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
     child.emit("close", 1);
 
     const result = await stream.result;
-    // Invalid JSONL skipped; non-zero exit triggers error status.
+    // Invalid JSONL skipped; non-zero exit triggers error status and keeps
+    // the raw output for diagnostics.
     expect(result.status).toBe("error");
     expect(result.errorType).toBe("unknown");
+    expect(result.responseText).toBe("garbage output");
   });
 
   test("captures stderr in result for diagnostics", async () => {
@@ -1430,6 +1808,7 @@ describe("Codex adapter invoke/resume (E2E with mock spawn)", () => {
     child.emit("close", 1);
 
     const result = await stream.result;
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(result.status).toBe("error");
     expect(result.errorType).toBe("config_parsing");
     expect(result.stderrText).toContain("invalid value");
