@@ -154,6 +154,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- AgentCoop-managed Codex runs now pin `approval_policy=never`
+  explicitly instead of inheriting the user's local Codex approval
+  setting. Fresh `codex exec` runs keep using
+  `-s danger-full-access`, while `codex exec resume` now prefers
+  `--json` for structured parsing and streaming on newer CLIs and
+  falls back to the legacy plain-text parser only when the installed
+  CLI explicitly rejects JSON resume.
 - Resuming Stage 8 from the `squashing` substate no longer re-sends the
   full planning prompt.  The handler now checks whether the squash
   already landed (commit count collapsed to 1) and jumps straight to

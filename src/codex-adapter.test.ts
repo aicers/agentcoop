@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { AgentResult, AgentStream } from "./agent.js";
 import {
   buildCodexInvokeArgs,
+  buildCodexPlainTextResumeArgs,
   buildCodexResumeArgs,
   CodexStreamTransformer,
   detectCodexError,
@@ -194,7 +195,52 @@ describe("parseCodexJsonl", () => {
     expect(result.status).toBe("success");
   });
 
-  test("detects error events with retry messages", () => {
+  test("treats a terminal top-level error event as failure", () => {
+    const lines = [
+      JSON.stringify({ type: "thread.started", thread_id: "sess-error" }),
+      JSON.stringify({ type: "turn.started" }),
+      JSON.stringify({
+        type: "error",
+        message: "stream error: unexpected status 500",
+      }),
+    ].join("\n");
+
+    const result = parseCodexJsonl(lines);
+    expect(result.status).toBe("error");
+    expect(result.responseText).toBe("stream error: unexpected status 500");
+    expect(result.sessionId).toBe("sess-error");
+  });
+
+  test("ignores retry-style top-level error when a later success completes the turn", () => {
+    const lines = [
+      JSON.stringify({ type: "thread.started", thread_id: "sess-retry-ok" }),
+      JSON.stringify({ type: "turn.started" }),
+      JSON.stringify({
+        type: "error",
+        message: "stream error: unexpected status 400; retrying 1/5",
+      }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item_0", type: "agent_message", text: "recovered" },
+      }),
+      JSON.stringify({
+        type: "turn.completed",
+        usage: { input_tokens: 20, output_tokens: 5 },
+      }),
+    ].join("\n");
+
+    const result = parseCodexJsonl(lines);
+    expect(result.status).toBe("success");
+    expect(result.responseText).toBe("recovered");
+    expect(result.sessionId).toBe("sess-retry-ok");
+    expect(result.usage).toEqual({
+      inputTokens: 20,
+      outputTokens: 5,
+      cachedInputTokens: 0,
+    });
+  });
+
+  test("later turn.failed overrides an earlier top-level error event", () => {
     const lines = [
       JSON.stringify({ type: "thread.started", thread_id: "sess-retry" }),
       JSON.stringify({ type: "turn.started" }),
@@ -210,7 +256,36 @@ describe("parseCodexJsonl", () => {
 
     const result = parseCodexJsonl(lines);
     expect(result.status).toBe("error");
+    expect(result.responseText).toBe("unexpected status 400");
     expect(result.sessionId).toBe("sess-retry");
+  });
+
+  test("ignores a later top-level error once turn.completed has already ended the turn", () => {
+    const lines = [
+      JSON.stringify({ type: "thread.started", thread_id: "sess-done" }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item_0", type: "agent_message", text: "finished" },
+      }),
+      JSON.stringify({
+        type: "turn.completed",
+        usage: { input_tokens: 12, output_tokens: 3 },
+      }),
+      JSON.stringify({
+        type: "error",
+        message: "stream error after completion",
+      }),
+    ].join("\n");
+
+    const result = parseCodexJsonl(lines);
+    expect(result.status).toBe("success");
+    expect(result.responseText).toBe("finished");
+    expect(result.sessionId).toBe("sess-done");
+    expect(result.usage).toEqual({
+      inputTokens: 12,
+      outputTokens: 3,
+      cachedInputTokens: 0,
+    });
   });
 });
 
@@ -284,6 +359,79 @@ describe("extractCodexResumeResponse", () => {
     ].join("\n");
 
     expect(extractCodexResumeResponse(text)).toBe("");
+  });
+
+  test("does not treat standalone codex lines inside the response as a new marker", () => {
+    const text = [
+      BANNER,
+      "user",
+      "Show the raw transcript markers",
+      "codex",
+      "First line",
+      "codex",
+      "Still part of the response",
+      "tokens used",
+      "500",
+    ].join("\n");
+
+    expect(extractCodexResumeResponse(text)).toBe(
+      "First line\ncodex\nStill part of the response",
+    );
+  });
+
+  test("does not treat standalone tokens used lines inside the response as the footer", () => {
+    const text = [
+      BANNER,
+      "user",
+      "Show the raw transcript markers",
+      "codex",
+      "First line",
+      "tokens used",
+      "not the footer",
+      "Still part of the response",
+      "tokens used",
+      "500",
+    ].join("\n");
+
+    expect(extractCodexResumeResponse(text)).toBe(
+      "First line\ntokens used\nnot the footer\nStill part of the response",
+    );
+  });
+
+  test("does not strip a footer-like tail when the count is not a plain integer", () => {
+    const text = [
+      BANNER,
+      "user",
+      "Show the raw transcript markers",
+      "codex",
+      "First line",
+      "tokens used",
+      "123abc",
+    ].join("\n");
+
+    expect(extractCodexResumeResponse(text)).toBe(
+      "First line\ntokens used\n123abc",
+    );
+  });
+
+  test("parses bare fallback output that starts with codex", () => {
+    const text = ["codex", "Done.", "tokens used", "50"].join("\n");
+    expect(extractCodexResumeResponse(text)).toBe("Done.");
+  });
+
+  test("uses the known prompt to disambiguate prompt-side codex markers", () => {
+    const prompt = ["Show these markers verbatim:", "codex"].join("\n");
+    const text = [
+      BANNER,
+      "user",
+      ...prompt.split("\n"),
+      "codex",
+      "Actual answer",
+      "tokens used",
+      "120",
+    ].join("\n");
+
+    expect(extractCodexResumeResponse(text, prompt)).toBe("Actual answer");
   });
 });
 
@@ -703,7 +851,15 @@ describe("buildCodexInvokeArgs", () => {
   test("builds invoke args with '-' placeholder for stdin", () => {
     const args = buildCodexInvokeArgs({});
 
-    expect(args).toEqual(["exec", "-s", "danger-full-access", "--json", "-"]);
+    expect(args).toEqual([
+      "exec",
+      "-s",
+      "danger-full-access",
+      "--json",
+      "-c",
+      "approval_policy=never",
+      "-",
+    ]);
   });
 
   test("includes -m when model is specified", () => {
@@ -721,10 +877,10 @@ describe("buildCodexInvokeArgs", () => {
     expect(args).not.toContain("--model");
   });
 
-  test("does not include -a flag (not supported by CLI)", () => {
+  test("uses approval_policy=never instead of a legacy approval flag", () => {
     const args = buildCodexInvokeArgs({});
     expect(args).not.toContain("-a");
-    expect(args).not.toContain("never");
+    expect(args).toContain("approval_policy=never");
   });
 
   test("includes -c reasoning effort when specified", () => {
@@ -759,16 +915,21 @@ describe("buildCodexInvokeArgs", () => {
 // buildCodexResumeArgs
 // ---------------------------------------------------------------------------
 describe("buildCodexResumeArgs", () => {
+  test("prefers JSON resume mode", () => {
+    const args = buildCodexResumeArgs("sess-abc", {});
+    expect(args).toContain("--json");
+  });
+
+  test("always includes approval_policy=never", () => {
+    const args = buildCodexResumeArgs("sess-abc", {});
+    expect(args).toContain("approval_policy=never");
+  });
+
   test("always includes -c sandbox_mode=danger-full-access", () => {
     const args = buildCodexResumeArgs("sess-abc", {});
 
     expect(args).toContain("-c");
     expect(args).toContain("sandbox_mode=danger-full-access");
-  });
-
-  test("does not include --json (resume outputs plain text)", () => {
-    const args = buildCodexResumeArgs("sess-abc", {});
-    expect(args).not.toContain("--json");
   });
 
   test("includes -c model override when model is specified", () => {
@@ -833,6 +994,23 @@ describe("buildCodexResumeArgs", () => {
     });
 
     expect(args).toContain("model_reasoning_effort=xhigh");
+  });
+});
+
+describe("buildCodexPlainTextResumeArgs", () => {
+  test("keeps the legacy fallback path plain-text only", () => {
+    const args = buildCodexPlainTextResumeArgs("sess-abc", {});
+    expect(args).not.toContain("--json");
+  });
+
+  test("always includes approval_policy=never", () => {
+    const args = buildCodexPlainTextResumeArgs("sess-abc", {});
+    expect(args).toContain("approval_policy=never");
+  });
+
+  test("always includes sandbox_mode=danger-full-access", () => {
+    const args = buildCodexPlainTextResumeArgs("sess-abc", {});
+    expect(args).toContain("sandbox_mode=danger-full-access");
   });
 });
 
@@ -924,6 +1102,25 @@ describe("extractCodexPlainTextTokens", () => {
 
   test("returns undefined for zero count", () => {
     expect(extractCodexPlainTextTokens("\ntokens used\n0\n")).toBeUndefined();
+  });
+
+  test("returns undefined for malformed numeric footer lines", () => {
+    expect(
+      extractCodexPlainTextTokens("\ncodex\nresponse\ntokens used\n123abc\n"),
+    ).toBeUndefined();
+  });
+
+  test("only treats the trailing footer as structural", () => {
+    const text = [
+      "codex",
+      "response",
+      "tokens used",
+      "not the footer",
+      "tokens used",
+      "229",
+    ].join("\n");
+
+    expect(extractCodexPlainTextTokens(text)).toBe(229);
   });
 });
 
@@ -1136,5 +1333,17 @@ describe("withXhighFallback", () => {
 
     expect(wrapped.child).toBe(originalChild);
     expect(retryFn).not.toHaveBeenCalled();
+  });
+
+  test("throws when the wrapped stream is iterated twice", () => {
+    const wrapped = withXhighFallback(makeMockStream(SUCCESS_RESULT), () =>
+      makeMockStream(SUCCESS_RESULT),
+    );
+
+    wrapped[Symbol.asyncIterator]();
+
+    expect(() => wrapped[Symbol.asyncIterator]()).toThrow(
+      /AgentStream can only be iterated once/,
+    );
   });
 });

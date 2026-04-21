@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import EventEmitter from "node:events";
 import type { AgentResult, AgentStream, ChunkTransformer } from "./agent.js";
 
-export interface SpawnAgentOptions {
+export interface SpawnAgentOptions<TResult extends AgentResult = AgentResult> {
   command: string;
   args: string[];
   cwd?: string;
@@ -11,7 +11,7 @@ export interface SpawnAgentOptions {
     output: string,
     exitCode: number | null,
     stderrText: string,
-  ) => AgentResult;
+  ) => TResult;
   /**
    * When provided, the async iterator yields transformed (display-friendly)
    * text instead of raw stdout chunks.  Raw chunks are still collected for
@@ -31,7 +31,9 @@ export interface SpawnAgentOptions {
   stdin?: string;
 }
 
-export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
+export function spawnAgent<TResult extends AgentResult = AgentResult>(
+  opts: SpawnAgentOptions<TResult>,
+): AgentStream<TResult> {
   let child: ReturnType<typeof spawn>;
   try {
     child = spawn(opts.command, opts.args, {
@@ -63,7 +65,7 @@ export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
     stubChild.kill = () => false;
     return {
       async *[Symbol.asyncIterator]() {},
-      result: Promise.resolve(errorResult),
+      result: Promise.resolve(errorResult as TResult),
       child: stubChild,
     };
   }
@@ -138,7 +140,7 @@ export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
     stderrChunks.push(data.toString());
   });
 
-  const result = new Promise<AgentResult>((resolve) => {
+  const result = new Promise<TResult>((resolve) => {
     child.on("error", (err) => {
       if (inactivityTimer) clearTimeout(inactivityTimer);
       if ("code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
@@ -148,7 +150,7 @@ export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
           status: "error",
           errorType: "cli_not_found",
           stderrText: "",
-        });
+        } as TResult);
       } else {
         resolve({
           sessionId: undefined,
@@ -156,7 +158,7 @@ export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
           status: "error",
           errorType: "execution_error",
           stderrText: "",
-        });
+        } as TResult);
       }
     });
 
@@ -183,14 +185,14 @@ export function spawnAgent(opts: SpawnAgentOptions): AgentStream {
           signal,
           status: "error",
           errorType: "inactivity_timeout",
-        });
+        } as TResult);
       } else {
-        resolve({ ...parsed, exitCode: code, signal });
+        resolve({ ...parsed, exitCode: code, signal } as TResult);
       }
     });
   });
 
-  const stream: AgentStream = {
+  const stream: AgentStream<TResult> = {
     async *[Symbol.asyncIterator]() {
       while (true) {
         while (chunkQueue.length > 0) {

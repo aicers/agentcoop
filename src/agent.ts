@@ -31,7 +31,7 @@ export interface AgentResult {
   usage?: TokenUsage;
 }
 
-export interface AgentStream {
+export interface AgentStream<TResult extends AgentResult = AgentResult> {
   /** Async iterator that yields output chunks as they arrive. */
   [Symbol.asyncIterator](): AsyncIterator<string>;
 
@@ -39,7 +39,7 @@ export interface AgentStream {
    * Resolves when the process exits with the final structured result.
    * Consuming the iterator is optional; `result` always resolves.
    */
-  result: Promise<AgentResult>;
+  result: Promise<TResult>;
 
   /** The underlying child process, exposed for cancellation. */
   child: ChildProcess;

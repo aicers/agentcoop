@@ -65,6 +65,19 @@ export type CodexJsonEvent =
   | ErrorEvent
   | { type: string };
 
+type CodexTurnTerminalEvent =
+  | { type: "turn.completed" }
+  | { type: "turn.failed"; message: string };
+
+interface CodexBanner {
+  bannerText: string;
+  bodyStart: number;
+}
+
+interface CodexParsedResult extends AgentResult {
+  sawStructuredJson?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // JSONL parser (codex exec --json)
 // ---------------------------------------------------------------------------
@@ -77,11 +90,11 @@ export function parseCodexJsonl(jsonl: string): AgentResult {
 
   let sessionId: string | undefined;
   let responseText = "";
-  let failed = false;
-  let failMessage = "";
   let inputTokens = 0;
   let outputTokens = 0;
   let cachedInputTokens = 0;
+  let turnTerminalEvent: CodexTurnTerminalEvent | undefined;
+  let pendingErrorMessage: string | undefined;
 
   for (const line of lines) {
     let event: CodexJsonEvent;
@@ -112,12 +125,19 @@ export function parseCodexJsonl(jsonl: string): AgentResult {
         outputTokens += e.usage.output_tokens ?? 0;
         cachedInputTokens += e.usage.cached_input_tokens ?? 0;
       }
+      turnTerminalEvent = { type: "turn.completed" };
+      pendingErrorMessage = undefined;
     }
 
     if (event.type === "turn.failed") {
       const e = event as TurnFailedEvent;
-      failed = true;
-      failMessage = e.error.message;
+      turnTerminalEvent = { type: "turn.failed", message: e.error.message };
+      pendingErrorMessage = undefined;
+    }
+
+    if (event.type === "error" && turnTerminalEvent === undefined) {
+      const e = event as ErrorEvent;
+      pendingErrorMessage = e.message;
     }
   }
 
@@ -126,12 +146,23 @@ export function parseCodexJsonl(jsonl: string): AgentResult {
     ? { inputTokens, outputTokens, cachedInputTokens }
     : undefined;
 
-  if (failed) {
+  if (turnTerminalEvent?.type === "turn.failed") {
     return {
       sessionId,
-      responseText: failMessage,
+      responseText: turnTerminalEvent.message,
       status: "error",
-      errorType: detectCodexError(failMessage),
+      errorType: detectCodexError(turnTerminalEvent.message),
+      stderrText: "",
+      usage,
+    };
+  }
+
+  if (pendingErrorMessage !== undefined) {
+    return {
+      sessionId,
+      responseText: pendingErrorMessage,
+      status: "error",
+      errorType: detectCodexError(pendingErrorMessage),
       stderrText: "",
       usage,
     };
@@ -147,12 +178,127 @@ export function parseCodexJsonl(jsonl: string): AgentResult {
   };
 }
 
+function hasStructuredCodexJsonEvent(output: string): boolean {
+  for (const rawLine of output.split("\n")) {
+    const line = rawLine.trim();
+    if (line === "") continue;
+
+    try {
+      const event = JSON.parse(line) as { type?: unknown };
+      if (typeof event.type === "string") {
+        return true;
+      }
+    } catch {
+      // Ignore non-JSON lines; resume fallback detection only cares
+      // whether the CLI produced any structured JSON events at all.
+    }
+  }
+
+  return false;
+}
+
 // ---------------------------------------------------------------------------
-// Plain text parser (codex exec resume — does not support --json)
+// Plain text parser (codex exec resume fallback for older CLI versions)
 // ---------------------------------------------------------------------------
+
+function extractCodexBanner(text: string): CodexBanner | undefined {
+  const trimmed = text.trimStart();
+  const leadingWhitespaceLength = text.length - trimmed.length;
+  const bannerMatch =
+    /^OpenAI Codex[^\n]*\n--------\n[\s\S]*?\n--------(?:\n|$)/.exec(trimmed);
+
+  if (!bannerMatch) return undefined;
+
+  return {
+    bannerText: bannerMatch[0].trimEnd(),
+    bodyStart: leadingWhitespaceLength + bannerMatch[0].length,
+  };
+}
+
+function trimTrailingBlankLines(lines: string[]): string[] {
+  const trimmed = [...lines];
+  while (trimmed.length > 0 && trimmed[trimmed.length - 1]?.trim() === "") {
+    trimmed.pop();
+  }
+  return trimmed;
+}
+
+function parseTrailingIntegerLine(line: string): number | undefined {
+  const trimmed = line.trim();
+  if (!/^\d+$/.test(trimmed)) return undefined;
+
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function stripTrailingTokenFooter(lines: string[]): string[] {
+  const trimmed = trimTrailingBlankLines(lines);
+  if (trimmed.length < 2) return trimmed;
+
+  const tokenCount = parseTrailingIntegerLine(
+    trimmed[trimmed.length - 1] ?? "",
+  );
+  if (
+    trimmed[trimmed.length - 2] === "tokens used" &&
+    tokenCount !== undefined
+  ) {
+    return trimmed.slice(0, -2);
+  }
+
+  return trimmed;
+}
+
+function extractBannerStructuredResumeResponse(
+  text: string,
+): string | undefined {
+  const banner = extractCodexBanner(text);
+  if (!banner) return undefined;
+
+  const bodyLines = stripTrailingTokenFooter(
+    text.slice(banner.bodyStart).split("\n"),
+  );
+  if (bodyLines[0] !== "user") return undefined;
+
+  const assistantMarkerIndex = bodyLines.indexOf("codex", 1);
+  if (assistantMarkerIndex === -1) return undefined;
+
+  return bodyLines
+    .slice(assistantMarkerIndex + 1)
+    .join("\n")
+    .trim();
+}
+
+function extractBareResumeResponse(text: string): string | undefined {
+  const bodyLines = stripTrailingTokenFooter(text.split("\n"));
+  if (bodyLines[0] !== "codex") return undefined;
+  return bodyLines.slice(1).join("\n").trim();
+}
+
+function extractPromptAwareResumeResponse(
+  text: string,
+  expectedPrompt: string,
+): string | undefined {
+  const banner = extractCodexBanner(text);
+  if (!banner) return undefined;
+
+  const body = stripTrailingTokenFooter(
+    text.slice(banner.bodyStart).split("\n"),
+  );
+  const bodyText = body.join("\n");
+  const prefix = `user\n${expectedPrompt}\ncodex`;
+
+  if (!bodyText.startsWith(prefix)) return undefined;
+
+  const rest = bodyText.slice(prefix.length);
+  if (rest === "") return "";
+  if (!rest.startsWith("\n")) return undefined;
+  return rest.slice(1).trim();
+}
 
 /**
  * Extract the assistant response from `codex exec resume` plain text output.
+ * When `expectedPrompt` is provided, it is used to disambiguate prompt-side
+ * marker lines from the real assistant boundary.
  *
  * The output looks like:
  * ```
@@ -171,24 +317,27 @@ export function parseCodexJsonl(jsonl: string): AgentResult {
  * <count>
  * ```
  *
- * We extract the text between the last "codex\n" marker and the
- * trailing "tokens used\n" footer.
+ * We prefer the validated banner boundary and only treat a
+ * `tokens used` footer as structural when it is the real trailing
+ * footer. This avoids misparsing assistant responses that contain
+ * marker-like lines such as standalone `codex` or `tokens used`.
+ *
+ * When the original resume prompt is known, pass it as
+ * `expectedPrompt` so the parser can disambiguate prompt-side marker
+ * lines from the real assistant boundary.
  */
-export function extractCodexResumeResponse(text: string): string {
-  const codexMarker = "\ncodex\n";
-  const footerMarker = "\ntokens used\n";
-
-  const codexIdx = text.lastIndexOf(codexMarker);
-  if (codexIdx === -1) {
-    // Fallback: no recognizable structure, return trimmed text.
-    return text.trim();
-  }
-
-  const start = codexIdx + codexMarker.length;
-  const footerIdx = text.indexOf(footerMarker, start);
-  const end = footerIdx === -1 ? text.length : footerIdx;
-
-  return text.slice(start, end).trim();
+export function extractCodexResumeResponse(
+  text: string,
+  expectedPrompt?: string,
+): string {
+  return (
+    (expectedPrompt
+      ? extractPromptAwareResumeResponse(text, expectedPrompt)
+      : undefined) ??
+    extractBannerStructuredResumeResponse(text) ??
+    extractBareResumeResponse(text) ??
+    text.trim()
+  );
 }
 
 /**
@@ -209,19 +358,9 @@ export function extractCodexResumeResponse(text: string): string {
  * `session id:` line.
  */
 export function extractSessionId(text: string): string | undefined {
-  const sep = "--------";
-  const first = text.indexOf(sep);
-  if (first === -1) return undefined;
-
-  // The real Codex banner always starts the output.  Reject when the
-  // header is missing so that response body content is never mistaken
-  // for the banner.
-  if (!text.trimStart().startsWith("OpenAI Codex")) return undefined;
-
-  const second = text.indexOf(sep, first + sep.length);
-  if (second === -1) return undefined;
-  const banner = text.slice(first, second + sep.length);
-  const match = /^session id:\s*(\S+)/m.exec(banner);
+  const banner = extractCodexBanner(text);
+  if (!banner) return undefined;
+  const match = /^session id:\s*(\S+)/m.exec(banner.bannerText);
   return match?.[1];
 }
 
@@ -231,23 +370,25 @@ export function extractSessionId(text: string): string | undefined {
  * absent or the count is not a valid number.
  */
 export function extractCodexPlainTextTokens(text: string): number | undefined {
-  const marker = "\ntokens used\n";
-  const idx = text.lastIndexOf(marker);
-  if (idx === -1) return undefined;
-  const rest = text.slice(idx + marker.length).trim();
-  // The count may be on the first line only (ignore trailing content).
-  const firstLine = rest.split("\n")[0].trim();
-  const n = Number.parseInt(firstLine, 10);
-  return Number.isFinite(n) && n > 0 ? n : undefined;
+  const lines = trimTrailingBlankLines(text.split("\n"));
+  if (lines.length < 2 || lines[lines.length - 2] !== "tokens used") {
+    return undefined;
+  }
+
+  const n = parseTrailingIntegerLine(lines[lines.length - 1] ?? "");
+  return n !== undefined && n > 0 ? n : undefined;
 }
 
 export function parseCodexPlainText(
   text: string,
   exitCode: number | null,
   stderrText: string,
+  expectedPrompt?: string,
 ): AgentResult {
   const failed = exitCode !== 0;
-  const responseText = failed ? text.trim() : extractCodexResumeResponse(text);
+  const responseText = failed
+    ? text.trim()
+    : extractCodexResumeResponse(text, expectedPrompt);
   let errorType: AgentErrorType | undefined;
   if (failed) {
     errorType = detectCodexError(text + stderrText);
@@ -364,7 +505,14 @@ export function buildCodexInvokeArgs(opts: {
   model?: string;
   reasoningEffort?: CodexReasoningEffort;
 }): string[] {
-  const args = ["exec", "-s", "danger-full-access", "--json"];
+  const args = [
+    "exec",
+    "-s",
+    "danger-full-access",
+    "--json",
+    "-c",
+    "approval_policy=never",
+  ];
   if (opts.model) {
     args.push("-m", opts.model);
   }
@@ -379,8 +527,41 @@ export function buildCodexResumeArgs(
   sessionId: string,
   opts: { model?: string; reasoningEffort?: CodexReasoningEffort },
 ): string[] {
-  // Note: `codex exec resume` does not support --json; output is plain text.
-  const args = ["exec", "resume", "-c", "sandbox_mode=danger-full-access"];
+  const args = [
+    "exec",
+    "resume",
+    "--json",
+    "-c",
+    "approval_policy=never",
+    "-c",
+    "sandbox_mode=danger-full-access",
+  ];
+  if (opts.model) {
+    args.push("-c", `model="${opts.model}"`);
+  }
+  if (opts.reasoningEffort) {
+    args.push("-c", `model_reasoning_effort=${opts.reasoningEffort}`);
+  }
+  args.push(sessionId, "-");
+  return args;
+}
+
+/**
+ * @internal Legacy compatibility path for older Codex CLIs that reject
+ * `codex exec resume --json`.
+ */
+export function buildCodexPlainTextResumeArgs(
+  sessionId: string,
+  opts: { model?: string; reasoningEffort?: CodexReasoningEffort },
+): string[] {
+  const args = [
+    "exec",
+    "resume",
+    "-c",
+    "approval_policy=never",
+    "-c",
+    "sandbox_mode=danger-full-access",
+  ];
   if (opts.model) {
     args.push("-c", `model="${opts.model}"`);
   }
@@ -399,15 +580,29 @@ function parseCodexInvokeOutput(
   output: string,
   code: number | null,
   stderrText: string,
-): AgentResult {
+): CodexParsedResult {
+  const sawStructuredJson = hasStructuredCodexJsonEvent(output);
+
   try {
     const parsed = parseCodexJsonl(output);
-    const result = { ...parsed, stderrText };
+    const result: CodexParsedResult = {
+      ...parsed,
+      stderrText,
+      sawStructuredJson,
+    };
     if (code !== 0 && result.status === "success") {
+      const fallbackResponseText =
+        result.responseText ||
+        output.trim() ||
+        stderrText.trim() ||
+        `codex exited with code ${code}`;
       return {
         ...result,
+        responseText: fallbackResponseText,
         status: "error",
-        errorType: detectCodexError(output + stderrText),
+        errorType: detectCodexError(
+          `${fallbackResponseText}\n${output}\n${stderrText}`,
+        ),
       };
     }
     return result;
@@ -418,8 +613,124 @@ function parseCodexInvokeOutput(
       status: code === 0 ? "success" : "error",
       errorType: code === 0 ? undefined : "unknown",
       stderrText,
+      sawStructuredJson,
     };
   }
+}
+
+function parseCodexResumeJsonOutput(
+  sessionId: string,
+  output: string,
+  code: number | null,
+  stderrText: string,
+): CodexParsedResult {
+  const result = parseCodexInvokeOutput(output, code, stderrText);
+  if (result.sessionId === undefined) {
+    result.sessionId = sessionId;
+  }
+  return result;
+}
+
+function parseCodexResumePlainTextOutput(
+  sessionId: string,
+  prompt: string,
+  output: string,
+  exitCode: number | null,
+  stderrText: string,
+): AgentResult {
+  const result = parseCodexPlainText(output, exitCode, stderrText, prompt);
+  if (result.sessionId === undefined) {
+    result.sessionId = sessionId;
+  }
+  return result;
+}
+
+function withConditionalFallback<
+  TPrimary extends AgentResult,
+  TFallback extends AgentResult = TPrimary,
+>(
+  stream: AgentStream<TPrimary>,
+  shouldRetry: (result: TPrimary) => boolean,
+  retryFn: () => AgentStream<TFallback>,
+): AgentStream<TPrimary | TFallback>;
+function withConditionalFallback<
+  TPrimary extends AgentResult,
+  TFallback extends AgentResult,
+>(
+  stream: AgentStream<TPrimary>,
+  shouldRetry: (result: TPrimary) => boolean,
+  retryFn: () => AgentStream<TFallback>,
+): AgentStream<TPrimary | TFallback> {
+  let retryStream: AgentStream<TFallback> | undefined;
+  let iterated = false;
+
+  function ensureRetryStream(): AgentStream<TFallback> {
+    retryStream ??= retryFn();
+    return retryStream;
+  }
+
+  const result: Promise<TPrimary | TFallback> = (async () => {
+    const firstResult = await stream.result;
+    if (shouldRetry(firstResult)) {
+      return ensureRetryStream().result;
+    }
+    return firstResult;
+  })();
+
+  async function* chunks(): AsyncGenerator<string> {
+    yield* stream;
+    const firstResult = await stream.result;
+    if (shouldRetry(firstResult)) {
+      yield* ensureRetryStream();
+    }
+  }
+
+  return {
+    [Symbol.asyncIterator]() {
+      if (iterated) {
+        throw new Error("AgentStream can only be iterated once");
+      }
+      iterated = true;
+      return chunks();
+    },
+    get child() {
+      return retryStream?.child ?? stream.child;
+    },
+    result,
+  };
+}
+
+function hasUnsupportedJsonResumeArgumentLine(text: string): boolean {
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.toLowerCase();
+    if (!line.includes("--json")) continue;
+
+    if (
+      line.includes("unexpected argument") ||
+      line.includes("unexpected option") ||
+      line.includes("unexpected flag") ||
+      line.includes("unknown argument") ||
+      line.includes("unknown option") ||
+      line.includes("unknown flag") ||
+      line.includes("unrecognized argument") ||
+      line.includes("unrecognized option") ||
+      line.includes("unrecognized flag") ||
+      line.includes("wasn't expected")
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isUnsupportedJsonResumeFailure(result: CodexParsedResult): boolean {
+  if (result.status !== "error") return false;
+  if (result.sawStructuredJson) return false;
+
+  return hasUnsupportedJsonResumeArgumentLine(
+    `${result.responseText}\n${result.stderrText}`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -439,40 +750,15 @@ function parseCodexInvokeOutput(
  * active child process, so that cancellation (Ctrl+C) kills the right
  * process even when the fallback retry is running.
  */
-export function withXhighFallback(
-  stream: AgentStream,
-  retryFn: () => AgentStream,
-): AgentStream {
-  // Shared state: if the first attempt fails with config_parsing, the
-  // retry stream is stored here so both the iterator and result can
-  // reference it.
-  let retryStream: AgentStream | undefined;
-
-  const result = stream.result.then((r) => {
-    if (r.status === "error" && r.errorType === "config_parsing") {
-      retryStream = retryFn();
-      return retryStream.result;
-    }
-    return r;
-  });
-
-  async function* chunks(): AsyncGenerator<string> {
-    yield* stream;
-    // After the first stream finishes, await the result to know whether
-    // a fallback was triggered.
-    await result;
-    if (retryStream) {
-      yield* retryStream;
-    }
-  }
-
-  return {
-    [Symbol.asyncIterator]: () => chunks(),
-    get child() {
-      return retryStream?.child ?? stream.child;
-    },
-    result,
-  };
+export function withXhighFallback<TResult extends AgentResult>(
+  stream: AgentStream<TResult>,
+  retryFn: () => AgentStream<TResult>,
+): AgentStream<TResult> {
+  return withConditionalFallback<TResult, TResult>(
+    stream,
+    (r) => r.status === "error" && r.errorType === "config_parsing",
+    retryFn,
+  );
 }
 
 export function createCodexAdapter(
@@ -517,47 +803,79 @@ export function createCodexAdapter(
       );
     },
     resume(sessionId, prompt, options?: InvokeOptions) {
-      function parseResume(
-        output: string,
-        exitCode: number | null,
-        stderr: string,
-      ): AgentResult {
-        const result = parseCodexPlainText(output, exitCode, stderr);
-        // Preserve the input session ID when the plain text output
-        // does not contain one (e.g. older CLI versions).
-        if (result.sessionId === undefined) {
-          result.sessionId = sessionId;
-        }
-        return result;
+      function makeTransformer(): CodexStreamTransformer {
+        const t = new CodexStreamTransformer();
+        if (options?.onUsage) t.onUsage = options.onUsage;
+        return t;
       }
 
-      // codex exec resume outputs plain text, not JSONL.
-      const stream = spawnAgent({
-        command: "codex",
-        args: buildCodexResumeArgs(sessionId, {
-          model,
-          reasoningEffort,
-        }),
-        cwd: options?.cwd,
-        parseResult: parseResume,
-        // No chunkTransformer for resume — plain text is already
-        // human-readable and can go directly to the UI.
-        inactivityTimeoutMs,
-        stdin: prompt,
-      });
-      if (reasoningEffort !== "xhigh") return stream;
-      return withXhighFallback(stream, () =>
-        spawnAgent({
+      function spawnJsonResumeAttempt(
+        retryReasoningEffort: CodexReasoningEffort,
+      ): AgentStream<CodexParsedResult> {
+        return spawnAgent({
           command: "codex",
           args: buildCodexResumeArgs(sessionId, {
             model,
-            reasoningEffort: "high",
+            reasoningEffort: retryReasoningEffort,
           }),
           cwd: options?.cwd,
-          parseResult: parseResume,
+          parseResult: (output, exitCode, stderrText) =>
+            parseCodexResumeJsonOutput(sessionId, output, exitCode, stderrText),
+          chunkTransformer: makeTransformer(),
           inactivityTimeoutMs,
           stdin: prompt,
-        }),
+        });
+      }
+
+      function spawnPlainTextResumeAttempt(
+        retryReasoningEffort: CodexReasoningEffort,
+      ): AgentStream {
+        return spawnAgent({
+          command: "codex",
+          args: buildCodexPlainTextResumeArgs(sessionId, {
+            model,
+            reasoningEffort: retryReasoningEffort,
+          }),
+          cwd: options?.cwd,
+          parseResult: (output, exitCode, stderrText) =>
+            parseCodexResumePlainTextOutput(
+              sessionId,
+              prompt,
+              output,
+              exitCode,
+              stderrText,
+            ),
+          inactivityTimeoutMs,
+          stdin: prompt,
+        });
+      }
+
+      function withReasoningFallback<TResult extends AgentResult>(
+        spawnAttempt: (
+          retryReasoningEffort: CodexReasoningEffort,
+        ) => AgentStream<TResult>,
+        retryReasoningEffort: CodexReasoningEffort,
+      ): AgentStream<TResult> {
+        const stream = spawnAttempt(retryReasoningEffort);
+        if (retryReasoningEffort !== "xhigh") return stream;
+        return withXhighFallback(stream, () => spawnAttempt("high"));
+      }
+
+      const jsonStream = withReasoningFallback(
+        spawnJsonResumeAttempt,
+        reasoningEffort,
+      );
+
+      return withConditionalFallback(
+        jsonStream,
+        isUnsupportedJsonResumeFailure,
+        // Keep transport fallback separate from reasoning fallback. Very old
+        // CLIs can reject `--json` and `xhigh` independently, so the
+        // plain-text retry re-probes the configured effort instead of
+        // assuming the JSON path already established the final supported
+        // reasoning level.
+        () =>
+          withReasoningFallback(spawnPlainTextResumeAttempt, reasoningEffort),
       );
     },
   };
