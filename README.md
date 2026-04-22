@@ -98,9 +98,16 @@ last completed stage or start fresh.
 
 ## How it works
 
-AgentCoop runs an 8-stage pipeline (stages 2–9) with two agents:
-Agent A (author — implements the issue) and Agent B (reviewer).
+AgentCoop runs a 9-stage pipeline with two agents: Agent A (author
+— implements the issue) and Agent B (reviewer). Stages 2–9 run
+inside the TUI; Stage 1 is orchestrator-managed and runs beforehand.
 
+- **Stage 1 — Bootstrap:** Orchestrator-managed, runs before the TUI
+  mounts. Bootstraps the repository (clone or fetch), detects the
+  default branch via `gh repo view`, creates the git worktree for
+  this issue, and on resume promotes the starting stage past
+  `Create PR` if a PR already exists so `gh pr create` is not
+  replayed.
 - **Stage 2 — Implement:** Agent A implements the issue in a git worktree
 - **Stage 3 — Self-check:** Agent A self-checks against quality criteria
 - **Stage 4 — Create PR:** Agent A opens a pull request
