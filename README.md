@@ -27,32 +27,37 @@ minimal human involvement.
 ## Terminal UI
 
 ```text
-┌─ Agent A (author) — Claude Opus 4.6 v1.2.3 ● [*] ─┬─ Agent B (reviewer) — Codex GPT-5.4 v0.46.0 ─┐
-│                                            │                                │
-│  (streamed output)                         │  (streamed output)             │
-│                                            │                                │
-├────────────────────────────────────────────┴────────────────────────────────┤
-│ A (Claude): 12.3K in / 5.1K out            │ B (Codex): 8.7K in / 3.2K out  │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ owner/repo#42: Issue title                              4m 12s (7m 30s)     │
-│ Base: abc1234  │  Stage 3: Self-check (round 2)  │  Layout: horizontal      │
-│ ●:Active [*]:Focused Tab:Switch pane ↑↓:Scroll Ctrl+L:Layout Ctrl+C:Quit    │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ Pipeline running...                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─ Agent A (author) — Claude Opus 4.7 (1M) / High v2.1.116 ● [*] ─┬─ Agent B (reviewer) — Codex GPT-5.4 / Extra High v0.122.0 ──────┐
+│ ↑ 108 more lines                                                │ (idle — active in review stage)                                 │
+│                                                                 │                                                                 │
+│  (streamed output)                                              │  (streamed output)                                              │
+│                                                                 │                                                                 │
+├─────────────────────────────────────────────────────────────────┴─────────────────────────────────────────────────────────────────┤
+│ A (Claude): 12.3K in / 5.1K out                                 │ B (Codex): 8.7K in / 3.2K out                                   │
+├───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ owner/repo#42: Issue title                                                                                        4m 12s (7m 30s) │
+│ Base: abc1234  │  Stage 3: Self-check (round 2)  │  Completed: self-check ×1, review ×0  │  Layout: horizontal                    │
+│ ●:Active  [*]:Focused  Tab:Switch pane  ↑↓:Scroll  PgUp/Dn:Page scroll  Ctrl+L:Layout  Ctrl+C:Quit                                │
+├───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Pipeline running...                                                                                                               │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 - **Agent panes** — Streamed output from each agent in real time.
   The pane header shows the agent role, the CLI name (Claude / Codex),
-  the model name, and the installed CLI version (detected at pipeline
-  start). The active agent is marked with `●`, the focused pane (for
-  scrolling) with `[*]`.
+  the model name with context-window label, the effort level, and the
+  installed CLI version (detected at pipeline start). The active
+  agent is marked with `●`, the focused pane (for scrolling) with
+  `[*]`. When the focused pane is scrolled back, an `↑ N more lines`
+  indicator appears at the top; a pane that is not yet active in the
+  current stage shows an idle hint such as
+  `(idle — active in review stage)`.
 - **TokenBar** — Per-agent token usage (input/output, with cached
   token counts when available).
 - **StatusBar** — Issue reference with elapsed time (active and
   wall-clock), base commit SHA, current pipeline stage with loop
-  count, and layout indicator. Active time pauses while waiting
-  for user input.
+  count, completed loop counts per loop type, and layout indicator.
+  Active time pauses while waiting for user input.
 - **InputArea** — Shows "Pipeline running..." while agents work.
   When user input is needed (BLOCKED, loop budget, step-mode), it
   presents numbered choices or a free-text field.
