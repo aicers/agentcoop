@@ -117,10 +117,19 @@ inside the TUI; Stage 1 is orchestrator-managed and runs beforehand.
 - **Stage 6 — Test plan:** Agent A verifies the PR test plan
 - **Stage 7 — Review:** Agent B reviews; Agent A addresses feedback
   (multi-round)
-- **Stage 8 — Squash:** Agent A consolidates branch commits into one or a
-  few meaningful commits and force-pushes. Skipped if the branch
-  already has only one commit or if the existing commits are
-  already clean.
+- **Stage 8 — Squash:** Agent A decides whether the branch is best
+  presented as several meaningful commits or a single squash.
+  - _Multiple commits:_ Agent A rewrites history and force-pushes,
+    then CI is re-polled.
+  - _Single commit:_ Agent A does **not** force-push. It drafts the
+    squash title and body and posts them as a PR comment. AgentCoop
+    then asks the user how to apply the squash — _Agent squashes
+    now_ (agent applies the drafted message and CI is re-polled) or
+    _Apply via GitHub_ (the drafted message is surfaced on the
+    Stage 9 merge-confirm screen so the user can paste it into
+    GitHub's "Squash and merge" dialog).
+
+  Skipped automatically if the branch already has only one commit.
 - **Stage 9 — Done:** Check for merge conflicts, optionally rebase, confirm
   merge with the user, and clean up resources
 
