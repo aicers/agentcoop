@@ -865,13 +865,18 @@ export type MergeableState = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
 /** Result of the `queryPrState` callback. */
 export type PrLifecycleState = "OPEN" | "CLOSED" | "MERGED";
 
-/** Result of the `rebaseOntoMain` callback. */
-export interface RebaseResult {
-  /** Whether the rebase succeeded and was force-pushed. */
-  success: boolean;
-  /** Descriptive message (success note or error detail). */
-  message: string;
-}
+/**
+ * Result of the `rebaseOntoMain` callback.
+ *
+ * The three-way discriminator lets the Done stage distinguish a
+ * clean rebase from an agent-reported BLOCKED and from an agent
+ * process failure.  Errors are retryable; BLOCKED consumes the
+ * single-attempt budget.
+ */
+export type RebaseResult =
+  | { outcome: "completed"; message: string }
+  | { outcome: "blocked"; message: string }
+  | { outcome: "error"; message: string };
 
 /** Options for {@link createDoneStageHandler}. */
 export interface DoneStageOptions {
@@ -1112,18 +1117,34 @@ export function createDoneStageHandler(
             emitStageName(doneName);
             return { outcome: "completed", message: "" };
           }
-          if (!rebaseResult.success) {
+          if (rebaseResult.outcome === "error") {
+            // Agent process itself failed — do not consume the
+            // single-attempt budget.  Surface the real error text
+            // so the user can diagnose, then fall back to manual.
             emitStageName(doneName);
-            // Agent could not resolve — notify and fall back to manual.
+            rebaseAttempted = false;
             await options.prompt.waitForManualResolve(
-              m["pipeline.rebaseFailed"],
+              m["pipeline.rebaseAgentError"](rebaseResult.message),
             );
             if (ctx.signal?.aborted) {
               return { outcome: "completed", message: "" };
             }
             return afterResolution(ctx, summary);
           }
-          // Agent rebase succeeded — re-check mergeable.
+          if (rebaseResult.outcome === "blocked") {
+            // Agent could not resolve — surface the agent's own
+            // message so the user knows why, then fall back to manual.
+            emitStageName(doneName);
+            await options.prompt.waitForManualResolve(
+              m["pipeline.rebaseBlocked"](rebaseResult.message),
+            );
+            if (ctx.signal?.aborted) {
+              return { outcome: "completed", message: "" };
+            }
+            return afterResolution(ctx, summary);
+          }
+          // Agent rebase completed — afterResolution re-checks
+          // mergeable and will emit doneName once CI has resolved.
           return afterResolution(ctx, summary);
         }
 
@@ -1178,9 +1199,6 @@ export function createDoneStageHandler(
         // MERGEABLE — poll CI after resolution.
         const ciResult = await options.pollCiAndFix(ctx);
         emitStageName(doneName);
-        console.error(
-          `[done-stage-debug] afterResolution ciResult: ${JSON.stringify(ciResult)}`,
-        );
         if (ctx.signal?.aborted) {
           return { outcome: "completed", message: "" };
         }
@@ -1326,20 +1344,45 @@ export function createDoneStageHandler(
           emitStageName(doneName);
           return { outcome: "completed", message: "" };
         }
-        if (!rebaseResult.success) {
+        if (rebaseResult.outcome === "error") {
+          // Agent process failed — surface the error and keep the
+          // single-attempt budget unspent so the user can retry.
           emitStageName(doneName);
-          break; // rebase failed — back to confirmMerge
+          rebaseAttempted = false;
+          await options.prompt.waitForManualResolve(
+            m["pipeline.rebaseAgentError"](rebaseResult.message),
+          );
+          if (ctx.signal?.aborted) {
+            return { outcome: "completed", message: "" };
+          }
+          break; // back to confirmMerge
+        }
+        if (rebaseResult.outcome === "blocked") {
+          // Agent declared BLOCKED — surface its message before
+          // returning to confirmMerge so the user isn't met with
+          // silence.
+          emitStageName(doneName);
+          await options.prompt.waitForManualResolve(
+            m["pipeline.rebaseBlocked"](rebaseResult.message),
+          );
+          if (ctx.signal?.aborted) {
+            return { outcome: "completed", message: "" };
+          }
+          break; // back to confirmMerge
         }
 
-        // Rebase succeeded — poll CI and surface the result.
+        // Rebase completed — poll CI.  Match `afterResolution`:
+        // on fail, cleanup + complete; on pass, fall silently back
+        // to confirmMerge so the user isn't interrupted with a
+        // "CI passed" notice dressed up as a manual-resolve prompt.
         const ciResult = await options.pollCiAndFix(ctx);
         emitStageName(doneName);
         if (ctx.signal?.aborted) {
           return { outcome: "completed", message: "" };
         }
-        await options.prompt.waitForManualResolve(ciResult.message);
-        if (ctx.signal?.aborted) {
-          return { outcome: "completed", message: "" };
+        if (!ciResult.passed) {
+          await options.onNotMerged(ctx.signal);
+          return { outcome: "completed", message: ciResult.message };
         }
         break; // back to confirmMerge
       }

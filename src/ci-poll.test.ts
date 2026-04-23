@@ -416,6 +416,90 @@ describe("pollCiAndFix", () => {
     expect(agent.invoke).toHaveBeenCalledTimes(2);
   });
 
+  // -- confirmRetry opt-in prompt --------------------------------------------
+
+  test("confirmRetry is invoked when fix attempts are exhausted", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      );
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+    const agent = makeAgent();
+    const confirmRetry = vi.fn().mockResolvedValue(false);
+
+    const result = await pollCiAndFix(
+      makeOpts({
+        agent,
+        getCiStatus,
+        collectFailureLogs,
+        maxFixAttempts: 2,
+        confirmRetry,
+      }),
+    );
+
+    expect(confirmRetry).toHaveBeenCalledOnce();
+    // First arg is the exhausted attempt count (fixAttempts counter).
+    expect(confirmRetry.mock.calls[0][0]).toBe(2);
+    expect(confirmRetry.mock.calls[0][1]).toContain("still failing");
+    expect(result.passed).toBe(false);
+  });
+
+  test("confirmRetry true resets the counter and continues the loop", async () => {
+    // First 2 polls fail, then pass.  With maxFixAttempts=1 the
+    // exhaustion branch fires after the first attempt; a confirmed
+    // retry resets the counter so a second attempt can still run.
+    let pollCount = 0;
+    const getCiStatus = vi.fn().mockImplementation(() => {
+      pollCount++;
+      if (pollCount <= 2) {
+        return makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]);
+      }
+      return makeCiStatus("pass");
+    });
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+    const agent = makeAgent();
+    const confirmRetry = vi.fn().mockResolvedValue(true);
+
+    const result = await pollCiAndFix(
+      makeOpts({
+        agent,
+        getCiStatus,
+        collectFailureLogs,
+        maxFixAttempts: 1,
+        confirmRetry,
+      }),
+    );
+
+    expect(confirmRetry).toHaveBeenCalledOnce();
+    expect(result.passed).toBe(true);
+  });
+
+  test("confirmRetry is skipped when not provided", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      );
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+    const agent = makeAgent();
+
+    const result = await pollCiAndFix(
+      makeOpts({
+        agent,
+        getCiStatus,
+        collectFailureLogs,
+        maxFixAttempts: 1,
+        // confirmRetry deliberately omitted.
+      }),
+    );
+
+    // Falls through to the existing `passed: false` path without
+    // any extra prompt.
+    expect(result.passed).toBe(false);
+    expect(result.message).toContain("still failing after 1 fix attempt");
+  });
+
   // -- maxFixAttempts = 0 means no fix attempts -------------------------------
 
   test("returns error immediately with maxFixAttempts=0 on CI failure", async () => {

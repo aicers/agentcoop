@@ -160,6 +160,12 @@ export const en: Messages = {
   "pipeline.noConflicts": "No conflicts found — already up to date with main.",
   "pipeline.rebaseFailed":
     "Agent could not resolve conflicts. Please resolve manually.",
+  "pipeline.rebaseAgentError": (detail) =>
+    `Rebase agent failed: ${detail}\n` +
+    "Please resolve conflicts manually, or retry the rebase.",
+  "pipeline.rebaseBlocked": (detail) =>
+    `Agent reported the rebase is blocked:\n${detail}\n` +
+    "Please resolve conflicts manually.",
   "pipeline.rebaseAlreadyAttempted":
     "Agent rebase was already attempted. Please resolve conflicts manually.",
   "pipeline.prAlreadyMerged": "PR was already merged. Cleaning up worktree.",
@@ -263,6 +269,8 @@ export const en: Messages = {
     "CI checks passed. Findings were reviewed by the agent.",
   "ci.stillFailing": (attempts) =>
     `CI still failing after ${attempts} fix attempt(s).`,
+  "ci.retryPrompt": (attempts) =>
+    `CI still failing after ${attempts} fix attempt(s). Keep trying?`,
   "ci.agentError": (detail) => `Agent error during CI fix: ${detail}`,
   "squash.completed": "Commits squashed and CI passed.",
   "squash.singleCommitSkip": "Single commit — skipping squash.",

@@ -79,6 +79,17 @@ export interface CiPollOptions {
   delay?: (ms: number) => Promise<void>;
   /** Pipeline event emitter for diagnostic events. */
   events?: PipelineEventEmitter;
+  /**
+   * Optional callback invoked when the fix-attempt budget is
+   * exhausted.  When set, the caller is asked whether to reset the
+   * attempt counter and keep trying instead of returning a failure.
+   *
+   * Returning `true` resets `fixAttempts` and continues the loop;
+   * returning `false` falls through to the existing `passed: false`
+   * path.  Only wired from Stage 9 — stages 7 and 8 already present
+   * the engine's `dispatchError` prompt and must not double-ask.
+   */
+  confirmRetry?: (attempts: number, message: string) => Promise<boolean>;
 }
 
 export interface CiPollResult {
@@ -303,10 +314,21 @@ export async function pollCiAndFix(
 
     // CI failed — if we've exhausted fix attempts, give up.
     if (fixAttempts >= maxFix) {
-      return {
-        passed: false,
-        message: t()["ci.stillFailing"](maxFix),
-      };
+      const exhaustedMessage = t()["ci.stillFailing"](maxFix);
+      if (options.confirmRetry) {
+        const keepTrying = await options.confirmRetry(
+          fixAttempts,
+          exhaustedMessage,
+        );
+        if (keepTrying) {
+          // Reset the budget and loop once more before re-checking CI.
+          fixAttempts = 0;
+        } else {
+          return { passed: false, message: exhaustedMessage };
+        }
+      } else {
+        return { passed: false, message: exhaustedMessage };
+      }
     }
     fixAttempts++;
 

@@ -193,6 +193,12 @@ export const ko: Messages = {
   "pipeline.noConflicts": "충돌이 없습니다 — main과 이미 최신 상태입니다.",
   "pipeline.rebaseFailed":
     "에이전트가 충돌을 해결하지 못했습니다. 수동으로 해결해 주세요.",
+  "pipeline.rebaseAgentError": (detail) =>
+    `리베이스 에이전트 오류: ${detail}\n` +
+    "수동으로 충돌을 해결하거나 리베이스를 다시 시도해 주세요.",
+  "pipeline.rebaseBlocked": (detail) =>
+    `에이전트가 리베이스를 차단된 상태로 보고했습니다:\n${detail}\n` +
+    "수동으로 충돌을 해결해 주세요.",
   "pipeline.rebaseAlreadyAttempted":
     "에이전트 리베이스가 이미 시도되었습니다. 수동으로 충돌을 해결해 주세요.",
   "pipeline.prAlreadyMerged":
@@ -305,6 +311,8 @@ export const ko: Messages = {
     "CI 검사를 통과했습니다. 에이전트가 발견 사항을 검토했습니다.",
   "ci.stillFailing": (attempts) =>
     `${attempts}회 수정 시도 후에도 CI가 여전히 실패합니다.`,
+  "ci.retryPrompt": (attempts) =>
+    `${attempts}회 수정 시도 후에도 CI가 여전히 실패합니다. 계속 시도할까요?`,
   "ci.agentError": (detail) => `CI 수정 중 에이전트 오류: ${detail}`,
   "squash.completed": "커밋이 스쿼시되고 CI를 통과했습니다.",
   "squash.singleCommitSkip": "커밋이 하나뿐이므로 스쿼시를 건너뜁니다.",
