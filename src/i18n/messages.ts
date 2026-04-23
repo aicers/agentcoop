@@ -149,6 +149,8 @@ export interface Messages {
   "pipeline.unknownMergeable": string;
   "pipeline.noConflicts": string;
   "pipeline.rebaseFailed": string;
+  "pipeline.rebaseAgentError": (detail: string) => string;
+  "pipeline.rebaseBlocked": (detail: string) => string;
   "pipeline.rebaseAlreadyAttempted": string;
   "pipeline.prAlreadyMerged": string;
 
@@ -255,6 +257,7 @@ export interface Messages {
   "ci.passed": string;
   "ci.passedWithFindings": string;
   "ci.stillFailing": (attempts: number) => string;
+  "ci.retryPrompt": (attempts: number) => string;
   "ci.agentError": (detail: string) => string;
   "squash.completed": string;
   "squash.singleCommitSkip": string;

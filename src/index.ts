@@ -851,6 +851,15 @@ try {
         agent: agentA,
         issueTitle,
         issueBody,
+        // Stage 9 bypasses the engine's dispatchError prompt (the
+        // Done stage consumes pollCiAndFix inline), so without this
+        // opt-in prompt an exhausted fix loop silently ends the
+        // session.  Ask the user whether to keep retrying — `true`
+        // resets the attempt budget; `false` lets cleanup run.
+        confirmRetry: async (attempts) => {
+          if (!tuiPrompt) return false;
+          return tuiPrompt.confirmCleanup(t()["ci.retryPrompt"](attempts));
+        },
       });
     },
     cleanup: () => removeWorktree(owner, repo, issueNumber, wt.branch),

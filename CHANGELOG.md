@@ -154,6 +154,25 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Stage 9 no longer silently ends the session when the post-rebase CI fix
+  loop exhausts its attempt budget.  `pollCiAndFix` now accepts an
+  opt-in `confirmRetry` callback that Stage 9 wires to the TUI; when the
+  budget is spent the user is asked whether to keep trying, and the
+  cleanup path only runs after an explicit decline.  Stages 7 and 8 are
+  unchanged — they already route CI failures through the engine's
+  `dispatchError` prompt and must not double-ask.
+- Stage 9's rebase handler now distinguishes an agent process failure
+  from a BLOCKED verdict.  `RebaseResult` is a discriminated union
+  (`completed` / `blocked` / `error`), and both Stage 9 call sites
+  surface the agent's own message instead of the old generic
+  "resolve manually" notice.  Agent errors no longer consume the
+  single-attempt rebase budget, so the user can retry after dealing
+  with the underlying error.  The `check_conflicts` sub-path used to
+  silently `break` back to the merge-confirm screen on any rebase
+  failure; it now surfaces BLOCKED / error messages and, on CI
+  failure, terminates the stage via `onNotMerged` like the top-level
+  `afterResolution` path instead of misusing `waitForManualResolve`
+  to announce a CI pass.
 - AgentCoop-managed Codex runs now pin `approval_policy=never`
   explicitly instead of inheriting the user's local Codex approval
   setting. Fresh `codex exec` runs keep using

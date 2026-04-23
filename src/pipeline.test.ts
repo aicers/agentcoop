@@ -1101,7 +1101,9 @@ function makeDoneOpts(
   return {
     checkMergeable: vi.fn().mockResolvedValue("MERGEABLE"),
     prompt: makeDonePrompt(promptOverrides),
-    rebaseOntoMain: vi.fn().mockResolvedValue({ success: true, message: "ok" }),
+    rebaseOntoMain: vi
+      .fn()
+      .mockResolvedValue({ outcome: "completed", message: "ok" }),
     pollCiAndFix: vi
       .fn()
       .mockResolvedValue({ passed: true, message: "CI passed" }),
@@ -1535,16 +1537,17 @@ describe("createDoneStageHandler", () => {
     expect(result.outcome).toBe("completed");
   });
 
-  test("CONFLICTING: agent rebase fails, falls back to manual", async () => {
+  test("CONFLICTING: agent reports BLOCKED, surfaces message and falls back to manual", async () => {
     const checkMergeable = vi
       .fn()
       .mockResolvedValueOnce("CONFLICTING")
       .mockResolvedValueOnce("MERGEABLE");
+    const blockedDetail = "could not resolve binary file conflict";
     const opts = makeDoneOpts({
       checkMergeable,
       rebaseOntoMain: vi
         .fn()
-        .mockResolvedValue({ success: false, message: "conflict" }),
+        .mockResolvedValue({ outcome: "blocked", message: blockedDetail }),
       prompt: {
         handleConflict: vi.fn().mockResolvedValue("agent_rebase"),
       },
@@ -1558,10 +1561,55 @@ describe("createDoneStageHandler", () => {
     };
     const result = await stage.handler(ctx);
     expect(opts.rebaseOntoMain).toHaveBeenCalledOnce();
-    // After agent failure, user sees rebaseFailed notification (via
-    // waitForManualResolve), not a second handleConflict prompt.
+    // After BLOCKED, user sees the agent's own detail (not the old
+    // generic rebaseFailed message) via waitForManualResolve.
     expect(opts.prompt.handleConflict).toHaveBeenCalledOnce();
     expect(opts.prompt.waitForManualResolve).toHaveBeenCalledOnce();
+    expect(opts.prompt.waitForManualResolve).toHaveBeenCalledWith(
+      expect.stringContaining(blockedDetail),
+    );
+    expect(result.outcome).toBe("completed");
+  });
+
+  test("CONFLICTING: agent process error surfaces detail and keeps rebase retryable", async () => {
+    // The loop goes: CONFLICTING → handleConflict → agent_rebase
+    // (errors) → afterResolution re-checks CONFLICTING → bubble back
+    // to mergeableLoop → checkMergeable → CONFLICTING again →
+    // handleConflict offered again (because `error` did NOT consume
+    // the single-attempt budget) → agent_rebase → completed →
+    // afterResolution → MERGEABLE → CI poll → askMerge → merged.
+    const checkMergeable = vi
+      .fn()
+      .mockResolvedValueOnce("CONFLICTING") // initial
+      .mockResolvedValueOnce("CONFLICTING") // afterResolution after error
+      .mockResolvedValueOnce("CONFLICTING") // loop-back mergeableLoop
+      .mockResolvedValueOnce("MERGEABLE"); // afterResolution after success
+    const errorDetail = "execution_error (segfault)";
+    const rebaseOntoMain = vi
+      .fn()
+      .mockResolvedValueOnce({ outcome: "error", message: errorDetail })
+      .mockResolvedValueOnce({ outcome: "completed", message: "ok" });
+    const handleConflict = vi.fn().mockResolvedValue("agent_rebase");
+    const opts = makeDoneOpts({
+      checkMergeable,
+      rebaseOntoMain,
+      prompt: { handleConflict },
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    const result = await stage.handler(ctx);
+    // Two rebase attempts: `outcome: error` unlocked the budget so
+    // the second CONFLICTING loop could try again.
+    expect(rebaseOntoMain).toHaveBeenCalledTimes(2);
+    expect(handleConflict).toHaveBeenCalledTimes(2);
+    expect(opts.prompt.waitForManualResolve).toHaveBeenCalledWith(
+      expect.stringContaining(errorDetail),
+    );
     expect(result.outcome).toBe("completed");
   });
 
@@ -1640,7 +1688,7 @@ describe("createDoneStageHandler", () => {
     const handleConflict = vi.fn().mockResolvedValue("agent_rebase");
     const rebaseOntoMain = vi
       .fn()
-      .mockResolvedValue({ success: true, message: "ok" });
+      .mockResolvedValue({ outcome: "completed", message: "ok" });
     const opts = makeDoneOpts({
       checkMergeable,
       rebaseOntoMain,
@@ -1752,16 +1800,16 @@ describe("createDoneStageHandler", () => {
     expect(opts.cleanup).not.toHaveBeenCalled();
   });
 
-  test("CONFLICTING: agent rebase returning success: false does not advance to CI", async () => {
-    // When rebaseOntoMain returns success: false (e.g. agent could not
-    // resolve conflicts), the handler should fall back to manual resolve
-    // and NOT proceed directly to pollCiAndFix.
+  test("CONFLICTING: agent rebase returning outcome: blocked does not advance to CI", async () => {
+    // When rebaseOntoMain returns outcome: "blocked" (e.g. agent
+    // could not resolve conflicts), the handler should fall back to
+    // manual resolve and NOT proceed directly to pollCiAndFix.
     const checkMergeable = vi
       .fn()
       .mockResolvedValueOnce("CONFLICTING")
       .mockResolvedValueOnce("MERGEABLE");
     const rebaseOntoMain = vi.fn().mockResolvedValue({
-      success: false,
+      outcome: "blocked",
       message: "I could not resolve the conflicts and aborted the rebase.",
     });
     const opts = makeDoneOpts({
@@ -1831,7 +1879,7 @@ describe("createDoneStageHandler", () => {
       checkMergeable,
       rebaseOntoMain: vi
         .fn()
-        .mockResolvedValue({ success: false, message: "conflict" }),
+        .mockResolvedValue({ outcome: "blocked", message: "conflict" }),
       prompt: { handleConflict: vi.fn().mockResolvedValue("agent_rebase") },
     });
     const stage = createDoneStageHandler(opts);
@@ -1890,7 +1938,7 @@ describe("createDoneStageHandler", () => {
       checkMergeable: vi.fn().mockResolvedValue("CONFLICTING"),
       rebaseOntoMain: vi.fn().mockImplementation(async () => {
         controller.abort();
-        return { success: true, message: "" };
+        return { outcome: "completed", message: "" };
       }),
       prompt: { handleConflict: vi.fn().mockResolvedValue("agent_rebase") },
     });
@@ -1923,7 +1971,7 @@ describe("createDoneStageHandler", () => {
       checkMergeable,
       rebaseOntoMain: vi.fn().mockImplementation(async () => {
         controller.abort();
-        return { success: true, message: "" };
+        return { outcome: "completed", message: "" };
       }),
       prompt: { confirmMerge },
     });
@@ -2002,9 +2050,10 @@ describe("createDoneStageHandler", () => {
     expect(result.outcome).toBe("completed");
   });
 
-  test("check_conflicts → CONFLICTING → rebase succeeds → CI result shown before loop", async () => {
-    // Regression: pollCiAndFix result must be surfaced via waitForManualResolve
-    // before looping back to confirmMerge (for both pass and fail).
+  test("check_conflicts → CONFLICTING → rebase succeeds → CI passes silently falls back to confirmMerge", async () => {
+    // On CI pass the handler must NOT interrupt the user with a
+    // "CI passed" notice dressed up as a manual-resolve prompt —
+    // it simply falls back to confirmMerge.  Fixes #289.
     const checkMergeable = vi
       .fn()
       .mockResolvedValueOnce("MERGEABLE") // initial
@@ -2014,12 +2063,11 @@ describe("createDoneStageHandler", () => {
       .mockResolvedValueOnce("check_conflicts")
       .mockResolvedValueOnce("merged");
     const waitForManualResolve = vi.fn().mockResolvedValue(undefined);
-    const ciMessage = "CI failed: lint errors in src/foo.ts";
     const opts = makeDoneOpts({
       checkMergeable,
       pollCiAndFix: vi
         .fn()
-        .mockResolvedValue({ passed: false, message: ciMessage }),
+        .mockResolvedValue({ passed: true, message: "CI passed" }),
       prompt: { confirmMerge, waitForManualResolve },
     });
     const stage = createDoneStageHandler(opts);
@@ -2030,24 +2078,28 @@ describe("createDoneStageHandler", () => {
       userInstruction: undefined,
     };
     await stage.handler(ctx);
-    // The CI result message must be shown to the user before re-prompting.
-    expect(waitForManualResolve).toHaveBeenCalledWith(ciMessage);
+    // No "CI passed" notice — the user returns straight to confirmMerge.
+    expect(waitForManualResolve).not.toHaveBeenCalledWith("CI passed");
+    expect(confirmMerge).toHaveBeenCalledTimes(2);
   });
 
-  test("check_conflicts → CONFLICTING → rebase fails → loops back", async () => {
+  test("check_conflicts → CONFLICTING → rebase succeeds → CI fails terminates via onNotMerged", async () => {
+    // Regression for #289: on CI failure the handler must end the
+    // stage like afterResolution does (cleanup + complete), not
+    // silently loop back to confirmMerge.  The user has already
+    // been asked by pollCiAndFix's confirmRetry whether to keep
+    // trying — a `passed: false` here means they declined.
     const checkMergeable = vi
       .fn()
-      .mockResolvedValueOnce("MERGEABLE")
-      .mockResolvedValueOnce("CONFLICTING");
-    const confirmMerge = vi
-      .fn()
-      .mockResolvedValueOnce("check_conflicts")
-      .mockResolvedValueOnce("exit");
+      .mockResolvedValueOnce("MERGEABLE") // initial
+      .mockResolvedValueOnce("CONFLICTING"); // inside askMerge
+    const confirmMerge = vi.fn().mockResolvedValueOnce("check_conflicts");
+    const ciMessage = "CI still failing after 3 fix attempt(s).";
     const opts = makeDoneOpts({
       checkMergeable,
-      rebaseOntoMain: vi
+      pollCiAndFix: vi
         .fn()
-        .mockResolvedValue({ success: false, message: "conflict" }),
+        .mockResolvedValue({ passed: false, message: ciMessage }),
       prompt: { confirmMerge },
     });
     const stage = createDoneStageHandler(opts);
@@ -2058,12 +2110,94 @@ describe("createDoneStageHandler", () => {
       userInstruction: undefined,
     };
     const result = await stage.handler(ctx);
+    // Terminates the stage without re-prompting confirmMerge.
+    expect(confirmMerge).toHaveBeenCalledOnce();
+    expect(opts.onNotMerged).toHaveBeenCalledOnce();
+    expect(result.outcome).toBe("completed");
+    expect(result.message).toBe(ciMessage);
+  });
+
+  test("check_conflicts → CONFLICTING → rebase BLOCKED → surfaces message and loops back", async () => {
+    const checkMergeable = vi
+      .fn()
+      .mockResolvedValueOnce("MERGEABLE")
+      .mockResolvedValueOnce("CONFLICTING");
+    const confirmMerge = vi
+      .fn()
+      .mockResolvedValueOnce("check_conflicts")
+      .mockResolvedValueOnce("exit");
+    const blockedDetail = "aborted rebase — conflicting binary asset";
+    const waitForManualResolve = vi.fn().mockResolvedValue(undefined);
+    const opts = makeDoneOpts({
+      checkMergeable,
+      rebaseOntoMain: vi
+        .fn()
+        .mockResolvedValue({ outcome: "blocked", message: blockedDetail }),
+      prompt: { confirmMerge, waitForManualResolve },
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    const result = await stage.handler(ctx);
     expect(opts.rebaseOntoMain).toHaveBeenCalledOnce();
-    // CI not polled because rebase failed.
+    // CI not polled because rebase did not complete.
     expect(opts.pollCiAndFix).not.toHaveBeenCalled();
+    // The agent's own BLOCKED detail is surfaced before returning to
+    // confirmMerge — no more silent `break`.
+    expect(waitForManualResolve).toHaveBeenCalledWith(
+      expect.stringContaining(blockedDetail),
+    );
     // Loop back to confirmMerge, user exits.
     expect(confirmMerge).toHaveBeenCalledTimes(2);
     expect(opts.onNotMerged).toHaveBeenCalledOnce();
+    expect(result.outcome).toBe("completed");
+  });
+
+  test("check_conflicts → CONFLICTING → rebase ERROR → surfaces detail, keeps retryable, loops back", async () => {
+    // Regression for #289: `outcome: "error"` must not silently
+    // `break` back to confirmMerge — it must surface the agent's
+    // error detail AND keep the single-attempt budget unspent so
+    // the user can retry rebase after dealing with the error.
+    const checkMergeable = vi
+      .fn()
+      .mockResolvedValueOnce("MERGEABLE")
+      .mockResolvedValueOnce("CONFLICTING")
+      .mockResolvedValueOnce("MERGEABLE");
+    const confirmMerge = vi
+      .fn()
+      .mockResolvedValueOnce("check_conflicts")
+      .mockResolvedValueOnce("check_conflicts")
+      .mockResolvedValueOnce("merged");
+    const errorDetail = "execution_error (CLI crash)";
+    const rebaseOntoMain = vi
+      .fn()
+      .mockResolvedValue({ outcome: "error", message: errorDetail });
+    const waitForManualResolve = vi.fn().mockResolvedValue(undefined);
+    const opts = makeDoneOpts({
+      checkMergeable,
+      rebaseOntoMain,
+      pollCiAndFix: vi
+        .fn()
+        .mockResolvedValue({ passed: true, message: "CI passed" }),
+      prompt: { confirmMerge, waitForManualResolve },
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    const result = await stage.handler(ctx);
+    expect(rebaseOntoMain).toHaveBeenCalledOnce();
+    // Error detail surfaced (not thrown away).
+    expect(waitForManualResolve).toHaveBeenCalledWith(
+      expect.stringContaining(errorDetail),
+    );
     expect(result.outcome).toBe("completed");
   });
 
@@ -2081,7 +2215,7 @@ describe("createDoneStageHandler", () => {
     const handleConflict = vi.fn().mockResolvedValue("agent_rebase");
     const rebaseOntoMain = vi
       .fn()
-      .mockResolvedValue({ success: true, message: "ok" });
+      .mockResolvedValue({ outcome: "completed", message: "ok" });
     const confirmMerge = vi
       .fn()
       .mockResolvedValueOnce("check_conflicts")

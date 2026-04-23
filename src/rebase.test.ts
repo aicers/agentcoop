@@ -90,11 +90,11 @@ describe("createRebaseHandler", () => {
     const handler = createRebaseHandler(agent, "main");
     const result = await handler(BASE_CTX);
 
-    expect(result.success).toBe(true);
+    expect(result.outcome).toBe("completed");
     expect(result.message).toBe("rebased OK");
   });
 
-  test("BLOCKED → success: false", async () => {
+  test("BLOCKED → outcome: blocked with agent message", async () => {
     const agent: AgentAdapter = {
       invoke: vi
         .fn()
@@ -108,7 +108,10 @@ describe("createRebaseHandler", () => {
     const handler = createRebaseHandler(agent, "main");
     const result = await handler(BASE_CTX);
 
-    expect(result.success).toBe(false);
+    expect(result.outcome).toBe("blocked");
+    // BLOCKED keeps the work-step response so the user sees the
+    // agent's own explanation.
+    expect(result.message).toBe("could not resolve");
   });
 
   test("ambiguous verdict → clarification retry → COMPLETED", async () => {
@@ -128,7 +131,7 @@ describe("createRebaseHandler", () => {
     const handler = createRebaseHandler(agent, "main");
     const result = await handler(BASE_CTX);
 
-    expect(result.success).toBe(true);
+    expect(result.outcome).toBe("completed");
     expect(agent.resume).toHaveBeenCalledTimes(2);
   });
 
@@ -149,7 +152,7 @@ describe("createRebaseHandler", () => {
     const handler = createRebaseHandler(agent, "main");
     const result = await handler(BASE_CTX);
 
-    expect(result.success).toBe(false);
+    expect(result.outcome).toBe("blocked");
     expect(agent.resume).toHaveBeenCalledTimes(2);
   });
 
@@ -170,11 +173,11 @@ describe("createRebaseHandler", () => {
     const handler = createRebaseHandler(agent, "main");
     const result = await handler(BASE_CTX);
 
-    expect(result.success).toBe(true);
+    expect(result.outcome).toBe("completed");
     expect(agent.resume).toHaveBeenCalledTimes(2);
   });
 
-  test("FIXED is out-of-scope and not treated as success", async () => {
+  test("FIXED is out-of-scope and not treated as completed", async () => {
     let resumeCall = 0;
     const agent: AgentAdapter = {
       invoke: vi
@@ -193,17 +196,20 @@ describe("createRebaseHandler", () => {
     const handler = createRebaseHandler(agent, "main");
     const result = await handler(BASE_CTX);
 
-    // FIXED maps to "fixed" status, not "completed" → success: false
-    expect(result.success).toBe(false);
+    // FIXED is not in REBASE_KEYWORDS → treated as BLOCKED-equivalent.
+    expect(result.outcome).toBe("blocked");
   });
 
-  test("agent work step error → success: false", async () => {
+  test("agent work step error → outcome: error with diagnostic detail", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const agent: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(
         makeStream(
           makeResult({
             status: "error",
             errorType: "execution_error",
+            stderrText: "segfault",
+            exitCode: 139,
             responseText: "crash",
           }),
         ),
@@ -213,12 +219,19 @@ describe("createRebaseHandler", () => {
     const handler = createRebaseHandler(agent, "main");
     const result = await handler(BASE_CTX);
 
-    expect(result.success).toBe(false);
-    expect(result.message).toBe("crash");
+    expect(result.outcome).toBe("error");
+    // The message carries the buildErrorDetail output so the user
+    // can see what actually went wrong, not the bare response text.
+    expect(result.message).toContain("execution_error");
+    expect(result.message).toContain("segfault");
     expect(agent.resume).not.toHaveBeenCalled();
+    // logAgentFailure writes the full diagnostic trail to stderr.
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 
-  test("verdict follow-up error → success: false", async () => {
+  test("verdict follow-up error → outcome: error", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const agent: AgentAdapter = {
       invoke: vi
         .fn()
@@ -228,7 +241,8 @@ describe("createRebaseHandler", () => {
           makeResult({
             status: "error",
             errorType: "execution_error",
-            responseText: "verdict crash",
+            stderrText: "verdict crash",
+            responseText: "",
           }),
         ),
       ),
@@ -236,11 +250,13 @@ describe("createRebaseHandler", () => {
     const handler = createRebaseHandler(agent, "main");
     const result = await handler(BASE_CTX);
 
-    expect(result.success).toBe(false);
-    expect(result.message).toBe("verdict crash");
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("verdict crash");
+    errorSpy.mockRestore();
   });
 
-  test("clarification retry error → success: false", async () => {
+  test("clarification retry error → outcome: error", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     let resumeCall = 0;
     const agent: AgentAdapter = {
       invoke: vi
@@ -255,7 +271,8 @@ describe("createRebaseHandler", () => {
           makeResult({
             status: "error",
             errorType: "execution_error",
-            responseText: "crash",
+            stderrText: "clarify crash",
+            responseText: "",
           }),
         );
       }),
@@ -263,7 +280,9 @@ describe("createRebaseHandler", () => {
     const handler = createRebaseHandler(agent, "main");
     const result = await handler(BASE_CTX);
 
-    expect(result.success).toBe(false);
+    expect(result.outcome).toBe("error");
+    expect(result.message).toContain("clarify crash");
+    errorSpy.mockRestore();
   });
 
   test("reports session ID via onSessionId", async () => {

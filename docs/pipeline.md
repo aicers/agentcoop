@@ -1498,17 +1498,28 @@ Cleanup
 
    - **CONFLICTING** -> offer the user a choice:
      - **Agent rebase** — invoke Agent A to rebase onto the
-       latest default branch. Only one rebase attempt is allowed
-       per pipeline run. After the attempt:
-       - If **successful**: the orchestrator polls CI. If CI
-         passes, proceed to merge confirmation. If CI fix
-         attempts are exhausted, offer cleanup and exit.
-       - If **failed** (`BLOCKED`): the user is notified and
-         prompted to resolve conflicts manually. After manual
-         resolution, the mergeable status is re-checked.
-       - If rebase was **already attempted** earlier in this
-         run: the agent rebase option is not offered. The user
-         is prompted to resolve manually.
+       latest default branch. The rebase handler returns one of
+       three outcomes:
+       - `completed` — rebase succeeded and was force-pushed.
+         The orchestrator polls CI. If CI passes, proceed to
+         merge confirmation; on exhausted retries the user is
+         asked (via `confirmRetry`) whether to keep trying, and
+         only cleanup when they decline.
+       - `blocked` — the agent finished but reported `BLOCKED`.
+         The user sees the agent's own explanation (no longer
+         a generic "resolve manually" notice) and falls back to
+         manual resolution.  This consumes the single-attempt
+         budget.
+       - `error` — the agent process itself failed (crash, CLI
+         error, timeout).  The error detail is surfaced to the
+         user and the single-attempt budget is _not_ consumed,
+         so the user can retry rebase after dealing with the
+         underlying error.
+       Only `completed` and `blocked` count against the
+       one-attempt-per-run rebase budget.
+     - If rebase was **already attempted** earlier in this run
+       (`completed` or `blocked`) the agent rebase option is
+       not offered.  The user is prompted to resolve manually.
      - **Manual** — pause and wait for the user to resolve
        conflicts outside of AgentCoop (e.g., in their own
        terminal). Once the user signals completion, the
@@ -1595,7 +1606,9 @@ Do not include any other commentary — just the keyword.
   attempt across the entire pipeline run, regardless of how many
   times the user loops back through the merge confirmation flow.
   This prevents the agent from repeatedly attempting (and failing)
-  a difficult rebase.
+  a difficult rebase.  The budget counts `completed` and
+  `blocked` outcomes only — an `error` (agent process failure)
+  leaves the budget intact so the user can retry.
 - **Build and test verification.** The agent is instructed to
   verify the result locally before force-pushing. If the build or
   tests fail after conflict resolution, the agent must abort the
@@ -1607,7 +1620,11 @@ Do not include any other commentary — just the keyword.
 - **CI re-validation.** After a successful rebase and force-push,
   the orchestrator polls CI and runs the CI fix loop if needed,
   because the rebase may have introduced regressions even if
-  local tests passed.
+  local tests passed.  When the fix loop exhausts its attempt
+  budget, Stage 9 asks the user whether to keep trying (the
+  opt-in `confirmRetry` callback on `pollCiAndFix`); cleanup only
+  runs after an explicit decline, so the session never ends
+  silently on a transient CI blip.
 - **Fallback to manual.** If the agent rebase fails, or if it
   was already attempted, the user is always offered manual
   resolution as a fallback.

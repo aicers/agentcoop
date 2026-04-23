@@ -12,9 +12,14 @@
  * Extracted from `index.ts` for testability.
  */
 
-import type { AgentAdapter } from "./agent.js";
+import type { AgentAdapter, AgentResult } from "./agent.js";
 import type { StageContext } from "./pipeline.js";
-import { drainToSink, sendFollowUp } from "./stage-util.js";
+import {
+  buildErrorDetail,
+  drainToSink,
+  logAgentFailure,
+  sendFollowUp,
+} from "./stage-util.js";
 import {
   buildClarificationPrompt,
   parseVerdictKeyword,
@@ -22,9 +27,25 @@ import {
 
 export const REBASE_KEYWORDS = ["COMPLETED", "BLOCKED"] as const;
 
-export interface RebaseResult {
-  success: boolean;
-  message: string;
+/**
+ * Outcome of a rebase attempt.
+ *
+ * - `completed` — agent resolved conflicts and force-pushed.
+ * - `blocked`   — agent finished but reported BLOCKED (e.g. could
+ *                 not resolve conflicts cleanly).  The rebase ran
+ *                 to completion; the agent declared failure.
+ * - `error`     — the agent process itself failed (crash, timeout,
+ *                 CLI error).  Distinct from BLOCKED so callers can
+ *                 surface the diagnostic detail and offer a retry.
+ */
+export type RebaseResult =
+  | { outcome: "completed"; message: string }
+  | { outcome: "blocked"; message: string }
+  | { outcome: "error"; message: string };
+
+function mapAgentError(result: AgentResult, context: string): RebaseResult {
+  logAgentFailure(result, context);
+  return { outcome: "error", message: buildErrorDetail(result) };
 }
 
 export function buildRebasePrompt(
@@ -99,7 +120,7 @@ export function createRebaseHandler(
     }
 
     if (result.status === "error") {
-      return { success: false, message: result.responseText };
+      return mapAgentError(result, "during rebase work step");
     }
 
     // Verdict follow-up: ask for exactly COMPLETED or BLOCKED.
@@ -116,7 +137,7 @@ export function createRebaseHandler(
     );
 
     if (verdictResult.status === "error") {
-      return { success: false, message: verdictResult.responseText };
+      return mapAgentError(verdictResult, "during rebase verdict follow-up");
     }
 
     let verdict = parseVerdictKeyword(
@@ -150,7 +171,10 @@ export function createRebaseHandler(
       );
 
       if (retryResult.status === "error") {
-        return { success: false, message: retryResult.responseText };
+        return mapAgentError(
+          retryResult,
+          "during rebase verdict clarification",
+        );
       }
 
       verdictResult = retryResult;
@@ -167,7 +191,10 @@ export function createRebaseHandler(
       }
     }
 
-    const success = verdict.keyword?.toUpperCase() === "COMPLETED";
-    return { success, message: result.responseText };
+    const completed = verdict.keyword?.toUpperCase() === "COMPLETED";
+    return {
+      outcome: completed ? "completed" : "blocked",
+      message: result.responseText,
+    };
   };
 }
