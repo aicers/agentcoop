@@ -246,7 +246,7 @@ export interface AppProps {
   onPromptReady?: (prompt: UserPrompt) => void;
   /** Short model identifier for Agent A (e.g., "opus"). */
   modelNameA?: string;
-  /** Short model identifier for Agent B (e.g., "gpt-5.4"). */
+  /** Short model identifier for Agent B (e.g., "gpt-5.5"). */
   modelNameB?: string;
   /** CLI identifier for Agent A (e.g. "claude" or "codex"). */
   cliTypeA?: string;

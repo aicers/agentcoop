@@ -297,7 +297,7 @@ describe("extractCodexResumeResponse", () => {
     "OpenAI Codex v0.46.0 (research preview)",
     "--------",
     "workdir: /some/path",
-    "model: gpt-5.4",
+    "model: gpt-5.5",
     "provider: openai",
     "approval: never",
     "sandbox: read-only",
@@ -443,7 +443,7 @@ describe("parseCodexPlainText", () => {
     "OpenAI Codex v0.46.0 (research preview)",
     "--------",
     "workdir: /path",
-    "model: gpt-5.4",
+    "model: gpt-5.5",
     "session id: sess-1",
     "--------",
   ].join("\n");
@@ -1129,7 +1129,7 @@ describe("parseCodexPlainText token usage", () => {
     "OpenAI Codex v0.46.0 (research preview)",
     "--------",
     "workdir: /path",
-    "model: gpt-5.4",
+    "model: gpt-5.5",
     "session id: sess-1",
     "--------",
   ].join("\n");
