@@ -37,11 +37,11 @@ describe("loadModelsFile", () => {
   test("parses valid models.json", () => {
     const path = writeModels({
       claude: [{ name: "Claude Opus 4.6", value: "opus" }],
-      codex: [{ name: "GPT-5.4", value: "gpt-5.4" }],
+      codex: [{ name: "GPT-5.5", value: "gpt-5.5" }],
     });
     const result = loadModelsFile(path);
     expect(result.claude).toEqual([{ name: "Claude Opus 4.6", value: "opus" }]);
-    expect(result.codex).toEqual([{ name: "GPT-5.4", value: "gpt-5.4" }]);
+    expect(result.codex).toEqual([{ name: "GPT-5.5", value: "gpt-5.5" }]);
   });
 
   test("parses multiple entries per CLI", () => {
@@ -51,13 +51,14 @@ describe("loadModelsFile", () => {
         { name: "Claude Sonnet 4.6", value: "sonnet" },
       ],
       codex: [
+        { name: "GPT-5.5", value: "gpt-5.5" },
         { name: "GPT-5.4", value: "gpt-5.4" },
         { name: "GPT-5.3-Codex", value: "gpt-5.3-codex" },
       ],
     });
     const result = loadModelsFile(path);
     expect(result.claude).toHaveLength(2);
-    expect(result.codex).toHaveLength(2);
+    expect(result.codex).toHaveLength(3);
   });
 
   test("throws ModelsLoadError when file is missing", () => {
@@ -105,7 +106,7 @@ describe("loadModelsFile", () => {
 
   test("throws ModelsLoadError when claude key is missing", () => {
     const path = writeModels({
-      codex: [{ name: "GPT-5.4", value: "gpt-5.4" }],
+      codex: [{ name: "GPT-5.5", value: "gpt-5.5" }],
     });
     expect(() => loadModelsFile(path)).toThrow(ModelsLoadError);
   });
@@ -162,7 +163,11 @@ describe("getModels", () => {
         { name: "Claude Opus 4.6", value: "opus" },
         { name: "Claude Sonnet 4.6", value: "sonnet" },
       ],
-      codex: [{ name: "GPT-5.4", value: "gpt-5.4" }],
+      codex: [
+        { name: "GPT-5.5", value: "gpt-5.5" },
+        { name: "GPT-5.4", value: "gpt-5.4" },
+        { name: "GPT-5.3-Codex", value: "gpt-5.3-codex" },
+      ],
     });
     initModels(path);
     setCustomModels({});
@@ -181,7 +186,11 @@ describe("getModels", () => {
   });
 
   test("returns codex defaults", () => {
-    expect(getModels("codex")).toEqual([{ name: "GPT-5.4", value: "gpt-5.4" }]);
+    expect(getModels("codex")).toEqual([
+      { name: "GPT-5.5", value: "gpt-5.5" },
+      { name: "GPT-5.4", value: "gpt-5.4" },
+      { name: "GPT-5.3-Codex", value: "gpt-5.3-codex" },
+    ]);
   });
 
   test("merges customs after defaults", () => {
@@ -210,7 +219,9 @@ describe("getModels", () => {
       codex: [{ name: "GPT-6", value: "gpt-6" }],
     });
     expect(getModels("codex")).toEqual([
+      { name: "GPT-5.5", value: "gpt-5.5" },
       { name: "GPT-5.4", value: "gpt-5.4" },
+      { name: "GPT-5.3-Codex", value: "gpt-5.3-codex" },
       { name: "GPT-6", value: "gpt-6" },
     ]);
   });
@@ -218,7 +229,11 @@ describe("getModels", () => {
   test("missing CLI key in customs treated as empty", () => {
     setCustomModels({ claude: [{ name: "New", value: "new" }] });
     // codex should still return just defaults
-    expect(getModels("codex")).toEqual([{ name: "GPT-5.4", value: "gpt-5.4" }]);
+    expect(getModels("codex")).toEqual([
+      { name: "GPT-5.5", value: "gpt-5.5" },
+      { name: "GPT-5.4", value: "gpt-5.4" },
+      { name: "GPT-5.3-Codex", value: "gpt-5.3-codex" },
+    ]);
   });
 
   test("setCustomModels with undefined resets customs", () => {
@@ -279,7 +294,11 @@ describe("getModelDisplayName", () => {
     mkdirSync(tmpDir, { recursive: true });
     const path = writeModels({
       claude: [{ name: "Claude Opus 4.6", value: "opus" }],
-      codex: [{ name: "GPT-5.4", value: "gpt-5.4" }],
+      codex: [
+        { name: "GPT-5.5", value: "gpt-5.5" },
+        { name: "GPT-5.4", value: "gpt-5.4" },
+        { name: "GPT-5.3-Codex", value: "gpt-5.3-codex" },
+      ],
     });
     initModels(path);
     setCustomModels({});
@@ -291,7 +310,7 @@ describe("getModelDisplayName", () => {
 
   test("returns display name for known model", () => {
     expect(getModelDisplayName("claude", "opus")).toBe("Claude Opus 4.6");
-    expect(getModelDisplayName("codex", "gpt-5.4")).toBe("GPT-5.4");
+    expect(getModelDisplayName("codex", "gpt-5.5")).toBe("GPT-5.5");
   });
 
   test("falls back to raw value for unknown model", () => {

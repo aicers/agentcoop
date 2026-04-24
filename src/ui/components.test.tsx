@@ -75,8 +75,8 @@ describe("formatPaneHeader", () => {
     // model names are ambiguous or user-configured.  Issue #276 asked
     // for the CLI name beside the version in the header.
     expect(
-      formatPaneHeader("Agent B (reviewer)", "GPT-5.4", "0.46.0", "Codex"),
-    ).toBe("Agent B (reviewer) — Codex GPT-5.4 v0.46.0");
+      formatPaneHeader("Agent B (reviewer)", "GPT-5.5", "0.46.0", "Codex"),
+    ).toBe("Agent B (reviewer) — Codex GPT-5.5 v0.46.0");
   });
 
   test("does not duplicate CLI name when model already starts with it", () => {
@@ -179,7 +179,7 @@ describe("AgentPane", () => {
     const { lastFrame } = render(
       <AgentPane
         label="Agent B (reviewer)"
-        modelName="GPT-5.4"
+        modelName="GPT-5.5"
         cliVersion="0.46.0"
         cliName="Codex"
         agent="b"
@@ -191,7 +191,7 @@ describe("AgentPane", () => {
     const frame = lastFrame();
     // The CLI name is what answers "which CLI build is driving this
     // pane?" when model names are shared or ambiguous.
-    expect(frame).toContain("Agent B (reviewer) — Codex GPT-5.4 v0.46.0");
+    expect(frame).toContain("Agent B (reviewer) — Codex GPT-5.5 v0.46.0");
   });
 
   test("renders streamed lines after agent:chunk events", async () => {
@@ -2317,7 +2317,7 @@ describe("viewport height constraint", () => {
     const viewportHeight = 16;
     const labelA = "Agent A (author)";
     const labelB = "Agent B (reviewer)";
-    const modelA = "GPT-5.4 / Extra High";
+    const modelA = "GPT-5.5 / Extra High";
     const flags = computeVisibilityFlags(viewportHeight, 1, true, "row", {
       terminalWidth: viewportWidth,
       paneHeaderTexts: [
@@ -2394,7 +2394,7 @@ describe("viewport height constraint", () => {
     // The label and model name may wrap across lines in narrow panes,
     // so check for key fragments rather than the full combined string.
     expect(frame).toContain(labelA);
-    expect(frame).toContain("GPT-5.4");
+    expect(frame).toContain("GPT-5.5");
 
     // Separator must be present when enabled.
     if (flags.showPaneSeparator) {

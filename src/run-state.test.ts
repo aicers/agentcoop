@@ -111,7 +111,7 @@ describe("saveRunState / loadRunState round-trip", () => {
       },
       agentB: {
         cli: "codex",
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         contextWindow: undefined,
         effortLevel: "xhigh",
         sessionId: undefined,
@@ -375,7 +375,7 @@ describe("resume preserves contextWindow and effortLevel", () => {
       },
       agentB: {
         cli: "codex",
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         contextWindow: undefined,
         effortLevel: "xhigh",
         sessionId: undefined,
@@ -431,7 +431,7 @@ describe("resume preserves contextWindow and effortLevel", () => {
     const raw = {
       ...makeRunState(),
       agentA: { cli: "claude", model: "opus", sessionId: "s1" },
-      agentB: { cli: "codex", model: "gpt-5.4", sessionId: undefined },
+      agentB: { cli: "codex", model: "gpt-5.5", sessionId: undefined },
     };
     const path = runStatePath("org", "repo", 42);
     mkdirSync(join(tmpHome, ".agentcoop", "runs", "org", "repo"), {

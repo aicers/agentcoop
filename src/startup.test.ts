@@ -63,6 +63,7 @@ const CLAUDE_TEST_MODELS = [
 ];
 
 const CODEX_TEST_MODELS = [
+  { name: "GPT-5.5", value: "gpt-5.5" },
   { name: "GPT-5.4", value: "gpt-5.4" },
   { name: "GPT-5.3-Codex", value: "gpt-5.3-codex" },
 ];
@@ -70,6 +71,7 @@ const CODEX_TEST_MODELS = [
 const MODEL_DISPLAY_NAMES: Record<string, string> = {
   opus: "Claude Opus 4.6",
   sonnet: "Claude Sonnet 4.6",
+  "gpt-5.5": "GPT-5.5",
   "gpt-5.4": "GPT-5.4",
   "gpt-5.3-codex": "GPT-5.3-Codex",
 };
@@ -128,7 +130,7 @@ function setupHappyPath() {
     .mockResolvedValueOnce("200k") // agent A context window
     .mockResolvedValueOnce("high") // agent A effort
     .mockResolvedValueOnce("codex") // agent B CLI
-    .mockResolvedValueOnce("gpt-5.4") // agent B model
+    .mockResolvedValueOnce("gpt-5.5") // agent B model
     .mockResolvedValueOnce("high") // agent B effort
     .mockResolvedValueOnce("auto") // execution mode
     .mockResolvedValueOnce("en"); // language
@@ -172,7 +174,7 @@ describe("runStartup — happy path", () => {
     });
     expect(result.agentB).toEqual({
       cli: "codex",
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       contextWindow: undefined,
       effortLevel: "high",
     });
@@ -575,6 +577,7 @@ describe("runStartup — model selection", () => {
     expect(values).toContain("opus");
     expect(values).toContain("sonnet");
     expect(values).toContain("__custom__");
+    expect(values).not.toContain("gpt-5.5");
     expect(values).not.toContain("gpt-5.4");
     expect(values).not.toContain("gpt-5.3-codex");
     expect(values).toHaveLength(3);
@@ -582,7 +585,7 @@ describe("runStartup — model selection", () => {
 
   test("switching CLI seeds defaults from CLI_DEFAULTS", async () => {
     // Config has Claude saved for agent A; user switches to Codex.
-    // The model/effort prompts should receive Codex defaults (gpt-5.4, xhigh)
+    // The model/effort prompts should receive Codex defaults (gpt-5.5, xhigh)
     // instead of falling back to the first choice.
     const config = {
       ...defaultConfig(),
@@ -597,7 +600,7 @@ describe("runStartup — model selection", () => {
     mockSelect
       .mockResolvedValueOnce("aicers") // owner
       .mockResolvedValueOnce("codex") // agent A CLI — switched!
-      .mockResolvedValueOnce("gpt-5.4") // agent A model
+      .mockResolvedValueOnce("gpt-5.5") // agent A model
       .mockResolvedValueOnce("xhigh") // agent A effort
       .mockResolvedValueOnce("claude") // agent B CLI
       .mockResolvedValueOnce("opus") // agent B model
@@ -618,7 +621,7 @@ describe("runStartup — model selection", () => {
 
     // Agent A model prompt (index 2) should have Codex default
     const agentAModelCall = mockSelect.mock.calls[2][0];
-    expect(agentAModelCall.default).toBe("gpt-5.4");
+    expect(agentAModelCall.default).toBe("gpt-5.5");
 
     // Agent A effort prompt (index 3) should have Codex default
     const agentAEffortCall = mockSelect.mock.calls[3][0];
@@ -841,7 +844,7 @@ describe("runStartup — config dirty tracking", () => {
       },
       agentB: {
         cli: "codex" as const,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         effortLevel: "high",
       },
       executionMode: "auto" as const,
@@ -854,7 +857,7 @@ describe("runStartup — config dirty tracking", () => {
       .mockResolvedValueOnce("200k") // agent A context window
       .mockResolvedValueOnce("high") // agent A effort
       .mockResolvedValueOnce("codex") // agent B CLI
-      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("gpt-5.5") // agent B model
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
       .mockResolvedValueOnce("en"); // language
@@ -1553,7 +1556,7 @@ describe("runStartup with target parameter", () => {
       .mockResolvedValueOnce("200k") // agent A context window
       .mockResolvedValueOnce("high") // agent A effort
       .mockResolvedValueOnce("codex") // agent B CLI
-      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("gpt-5.5") // agent B model
       .mockResolvedValueOnce("high") // agent B effort
       .mockResolvedValueOnce("auto") // execution mode
       .mockResolvedValueOnce("en"); // language
@@ -1568,7 +1571,7 @@ describe("runStartup with target parameter", () => {
     expect(result.agentA.cli).toBe("claude");
     expect(result.agentA.model).toBe("opus");
     expect(result.agentB.cli).toBe("codex");
-    expect(result.agentB.model).toBe("gpt-5.4");
+    expect(result.agentB.model).toBe("gpt-5.5");
     // Should NOT have called search (repo) or input (issue number).
     expect(mockSearch).not.toHaveBeenCalled();
   });
@@ -1589,7 +1592,7 @@ describe("runStartup — quick-start", () => {
       },
       agentB: {
         cli: "codex" as const,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         effortLevel: "xhigh",
       },
       executionMode: "auto" as const,
@@ -1619,7 +1622,7 @@ describe("runStartup — quick-start", () => {
     });
     expect(result.agentB).toEqual({
       cli: "codex",
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       effortLevel: "xhigh",
     });
     expect(result.executionMode).toBe("auto");
@@ -1764,7 +1767,7 @@ describe("runStartup — quick-start", () => {
     const logs = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
     expect(logs).toContain("Found saved configuration:");
     expect(logs).toContain("Agent A (author): Claude Opus 4.6 (1M) / High");
-    expect(logs).toContain("Agent B (reviewer): GPT-5.4 / Extra High");
+    expect(logs).toContain("Agent B (reviewer): GPT-5.5 / Extra High");
     expect(logs).toContain("Mode: auto");
     expect(logs).toContain("Language: English");
     expect(logs).toContain("Pipeline settings:");
@@ -1790,7 +1793,7 @@ describe("runStartup — quick-start", () => {
       },
       agentB: {
         cli: "codex" as const,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         effortLevel: "xhigh",
       },
       // executionMode is undefined

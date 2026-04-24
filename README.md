@@ -27,7 +27,7 @@ minimal human involvement.
 ## Terminal UI
 
 ```text
-┌─ Agent A (author) — Claude Opus 4.7 (1M) / High v2.1.116 ● [*] ─┬─ Agent B (reviewer) — Codex GPT-5.4 / Extra High v0.122.0 ──────┐
+┌─ Agent A (author) — Claude Opus 4.7 (1M) / High v2.1.116 ● [*] ─┬─ Agent B (reviewer) — Codex GPT-5.5 / Extra High v0.122.0 ──────┐
 │ ↑ 108 more lines                                                │ (idle — active in review stage)                                 │
 │                                                                 │                                                                 │
 │  (streamed output)                                              │  (streamed output)                                              │

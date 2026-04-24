@@ -4,6 +4,7 @@
     { "name": "Claude Sonnet 4.6", "value": "sonnet" }
   ],
   "codex": [
+    { "name": "GPT-5.5", "value": "gpt-5.5" },
     { "name": "GPT-5.4", "value": "gpt-5.4" },
     { "name": "GPT-5.3-Codex", "value": "gpt-5.3-codex" }
   ]

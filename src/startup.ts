@@ -384,7 +384,7 @@ const CLI_DEFAULTS: Record<"claude" | "codex", AgentConfig> = {
     contextWindow: "1m",
     effortLevel: "high",
   },
-  codex: { cli: "codex", model: "gpt-5.4", effortLevel: "xhigh" },
+  codex: { cli: "codex", model: "gpt-5.5", effortLevel: "xhigh" },
 };
 
 const DEFAULT_AGENT_A = CLI_DEFAULTS.claude;
