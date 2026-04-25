@@ -142,6 +142,9 @@ export interface Messages {
   "pipeline.mergeConfirmSquashTip": string;
   "pipeline.suggestedSquashTitle": string;
   "pipeline.suggestedSquashBody": string;
+  "pipeline.suggestedSquashBodyLines": (lines: number) => string;
+  "pipeline.suggestedSquashBodyCopyHint": string;
+  "pipeline.suggestedSquashBodyViewInPr": string;
   "pipeline.prUrl": (url: string) => string;
   "pipeline.worktreeCleanedUp": string;
   "pipeline.worktreePreserved": string;
@@ -236,6 +239,7 @@ export interface Messages {
   "input.copy": string;
   "input.copied": string;
   "input.copyFailed": string;
+  "input.truncated": string;
 
   // ---- agent pane / labels ------------------------------------------------
 

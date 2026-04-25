@@ -1148,17 +1148,25 @@ describe("createDoneStageHandler", () => {
     const message = confirmMerge.mock.calls[0][0] as string;
     expect(message).toContain("Squash and merge");
     expect(message).toContain("Fix widget rendering");
-    expect(message).toContain("Closes #5");
     expect(message).toContain("https://github.com/org/repo/pull/123");
-    // Title and body sit on their own lines with no inline prefix so that
+    // Title sits on its own line with no inline prefix so that
     // triple-click selects exactly the value.
     expect(message).toContain("Suggested title:\nFix widget rendering\n");
-    expect(message).toContain("Suggested body:\nBody line\n\nCloses #5");
     expect(message).not.toMatch(/Suggested title: Fix widget rendering/);
+    // Body content is NOT inlined — only a one-line summary appears,
+    // since a long body otherwise pushes the choice lines off the
+    // visible viewport (#293).  The clipboard-unavailable branch shows
+    // a "view in the PR comment" hint instead of an inline copy
+    // affordance.
+    expect(message).not.toContain("Closes #5");
+    expect(message).not.toContain("Body line");
+    expect(message).toContain(
+      "Suggested body: 3 lines\nview in the PR comment",
+    );
     // Blank lines separate each labelled section from surrounding content.
     expect(message).toContain("\n\nSuggested title:");
     expect(message).toContain("\n\nSuggested body:");
-    expect(message).toMatch(/Closes #5\n\nPR: https:\/\//);
+    expect(message).toMatch(/PR: https:\/\//);
   });
 
   test("MERGEABLE: clipboard available embeds sentinels and forwards hotkeys", async () => {
@@ -1196,9 +1204,12 @@ describe("createDoneStageHandler", () => {
     expect(message).toContain(
       `Suggested title: ${titleSentinel?.[0]}\nFix widget`,
     );
-    expect(message).toContain(
-      `Suggested body: ${bodySentinel?.[0]}\nBody line`,
-    );
+    // Body is summarised on a single line — no body content is
+    // inlined.  The body hotkey sentinel sits next to the line-count
+    // summary (#293).
+    expect(message).toContain(`Suggested body: 3 lines ${bodySentinel?.[0]}`);
+    expect(message).not.toContain("Body line");
+    expect(message).not.toContain("Closes #5");
     expect(hotkeys).toHaveLength(2);
     expect(hotkeys[0].id).toMatch(/^title-[0-9a-f]+$/);
     expect(hotkeys[0].key).toBe("t");
@@ -1245,18 +1256,31 @@ describe("createDoneStageHandler", () => {
       string,
       { id: string; key: string; onPress: () => Promise<"ok" | "error"> }[],
     ];
-    // The literal `{{hk:title}}` / `{{hk:body}}` substrings from the
-    // user-authored content must survive untouched (they still appear in
-    // the message text), and the real sentinels are distinct per-render
-    // ids with a random suffix.
+    // The title still ships verbatim, so a literal `{{hk:title}}`
+    // substring inside the title must not collide with the real
+    // per-render sentinel ids (which carry a random suffix).
     expect(message).toContain("Docs: document {{hk:title}} placeholder");
-    expect(message).toContain(
+    // Body is no longer inlined (#293), so the body's literal
+    // sentinel-looking substrings do not appear in the rendered
+    // message at all.  The body sentinel must still be the
+    // per-render one with a random suffix.
+    expect(message).not.toContain(
       "Explain {{hk:body}} and {{hk:title}} in the guide",
     );
     expect(hotkeys[0].id).toMatch(/^title-[0-9a-f]+$/);
     expect(hotkeys[0].id).not.toBe("title");
     expect(hotkeys[1].id).toMatch(/^body-[0-9a-f]+$/);
     expect(hotkeys[1].id).not.toBe("body");
+    // The body's clipboard hotkey still copies the full original body,
+    // including the sentinel-looking substrings, when invoked.
+    await hotkeys[1].onPress();
+    const writeToClipboardSpy = opts.writeToClipboard as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    expect(writeToClipboardSpy).toHaveBeenCalledWith(
+      "Explain {{hk:body}} and {{hk:title}} in the guide",
+      ["pbcopy"],
+    );
   });
 
   test("MERGEABLE: clipboard unavailable omits sentinels and forwards no hotkeys", async () => {
@@ -1390,6 +1414,97 @@ describe("createDoneStageHandler", () => {
     expect(second).toBe("merged");
     // Spy must NOT have been called again — fallback was taken.
     expect(tuiConfirmMerge).toHaveBeenCalledOnce();
+  });
+
+  // #293 regression: a long squash body must not be inlined into the
+  // confirmMerge message, so the choice / input lines are guaranteed
+  // to remain visible regardless of body length.
+  test("MERGEABLE: long body content is not inlined; only line count is rendered", async () => {
+    const confirmMerge = vi.fn().mockResolvedValue("merged");
+    const longBody = Array.from(
+      { length: 80 },
+      (_, i) => `body line ${i}`,
+    ).join("\n");
+    const opts = makeDoneOpts({
+      prompt: { confirmMerge },
+      getSquashMergeHint: () => ({
+        title: "Fix widget",
+        body: longBody,
+        prUrl: "https://github.com/org/repo/pull/9",
+      }),
+      detectClipboardSupport: () => ["pbcopy"],
+      writeToClipboard: vi.fn().mockResolvedValue("ok"),
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    await stage.handler(ctx);
+    const [message] = confirmMerge.mock.calls[0] as [string, unknown];
+    // None of the body's individual lines should appear in the
+    // rendered prompt — they only live inside the clipboard payload
+    // and the PR comment.
+    expect(message).not.toMatch(/^body line \d+$/m);
+    expect(message).toMatch(/Suggested body: 80 lines \{\{hk:body-/);
+    // The total number of `\n` in the rendered message stays small —
+    // proportional to the static prompt structure, not the 80-line
+    // body — so the choice lines cannot be pushed off-screen.
+    const lineCount = message.split("\n").length;
+    expect(lineCount).toBeLessThan(15);
+  });
+
+  test("MERGEABLE: ellipsizes a pathologically long title", async () => {
+    const confirmMerge = vi.fn().mockResolvedValue("merged");
+    const longTitle = `Fix ${"x".repeat(500)}`;
+    const opts = makeDoneOpts({
+      prompt: { confirmMerge },
+      getSquashMergeHint: () => ({
+        title: longTitle,
+        body: "body",
+      }),
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    await stage.handler(ctx);
+    const [message] = confirmMerge.mock.calls[0] as [string, unknown];
+    expect(message).not.toContain(longTitle);
+    expect(message).toMatch(/Fix x{100,}…/);
+  });
+
+  test("MERGEABLE: clipboard unavailable shows view-in-PR hint instead of copy affordance", async () => {
+    const confirmMerge = vi.fn().mockResolvedValue("merged");
+    const opts = makeDoneOpts({
+      prompt: { confirmMerge },
+      getSquashMergeHint: () => ({
+        title: "Fix widget",
+        body: "Body line\n\nCloses #5",
+        prUrl: "https://github.com/org/repo/pull/9",
+      }),
+      detectClipboardSupport: () => [],
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    await stage.handler(ctx);
+    const [message] = confirmMerge.mock.calls[0] as [string, unknown];
+    expect(message).toContain(
+      "Suggested body: 3 lines\nview in the PR comment",
+    );
+    expect(message).toContain("https://github.com/org/repo/pull/9");
+    expect(message).not.toContain("Body line");
+    expect(message).not.toContain("Closes #5");
   });
 
   test("MERGEABLE: omits hint when getSquashMergeHint returns undefined", async () => {

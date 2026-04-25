@@ -40,6 +40,14 @@ export interface InputRequest {
 export interface InputAreaProps {
   request: InputRequest | null;
   onSubmit: (value: string) => void;
+  /**
+   * Hard cap on how many terminal rows the input area is allowed to
+   * consume.  When the message + choices/textinput would exceed this
+   * cap, the message is truncated tail-first and the last visible line
+   * becomes a `…(truncated)` marker.  This keeps the choice / text-input
+   * line on screen when a caller passes a long message (#293).
+   */
+  maxRows?: number;
 }
 
 type HotkeyStatus = "idle" | "copied" | "failed";
@@ -49,7 +57,7 @@ const SENTINEL_REGEX = /\{\{hk:([a-zA-Z0-9_-]+)\}\}/g;
 
 // ---- component ---------------------------------------------------------------
 
-export function InputArea({ request, onSubmit }: InputAreaProps) {
+export function InputArea({ request, onSubmit, maxRows }: InputAreaProps) {
   const [text, setText] = useState("");
   const [hotkeyStatus, setHotkeyStatus] = useState<
     Record<string, HotkeyStatus>
@@ -154,12 +162,21 @@ export function InputArea({ request, onSubmit }: InputAreaProps) {
 
   const hotkeyById = new Map((hotkeys ?? []).map((h) => [h.id, h]));
 
+  const truncatedLabel = t()["input.truncated"];
+  const reservedRows = request.choices ? request.choices.length : 1;
+  const renderedMessage = truncateMessageToFit(
+    request.message,
+    maxRows,
+    reservedRows,
+    truncatedLabel,
+  );
+
   if (request.choices) {
     return (
       <Box flexDirection="column" paddingX={1} flexShrink={0}>
-        {renderMessageLines(request.message, hotkeyById, hotkeyStatus)}
+        {renderMessageLines(renderedMessage, hotkeyById, hotkeyStatus)}
         {request.choices.map((c, i) => (
-          <Text key={c.value}>
+          <Text key={c.value} wrap="truncate-end">
             {"  "}
             <Text bold color="cyan">
               {i + 1}
@@ -174,7 +191,7 @@ export function InputArea({ request, onSubmit }: InputAreaProps) {
 
   return (
     <Box flexDirection="column" paddingX={1} flexShrink={0}>
-      {renderMessageLines(request.message, hotkeyById, hotkeyStatus)}
+      {renderMessageLines(renderedMessage, hotkeyById, hotkeyStatus)}
       <Box>
         <Text bold color="cyan">
           {">"}{" "}
@@ -196,6 +213,13 @@ export function InputArea({ request, onSubmit }: InputAreaProps) {
  * Render `message` line-by-line, substituting `{{hk:<id>}}` tokens
  * with inline hint labels driven by `status`.  Sentinels referring to
  * unknown ids fall through as literal text so caller bugs surface.
+ *
+ * `wrap="truncate-end"` is applied to each per-line `<Text>` so a long
+ * source line cannot wrap to multiple rendered rows on a narrow
+ * terminal, which would otherwise push the choice / text-input row
+ * past the terminal viewport (#293).  With this guarantee the
+ * newline-based row counting in `truncateMessageToFit` and
+ * `inputAreaHeight` accurately matches the rendered row count.
  */
 function renderMessageLines(
   message: string,
@@ -208,12 +232,14 @@ function renderMessageLines(
     if (parts.length === 1 && parts[0].kind === "text") {
       return (
         // biome-ignore lint/suspicious/noArrayIndexKey: message lines never reorder
-        <Text key={lineIdx}>{line || " "}</Text>
+        <Text key={lineIdx} wrap="truncate-end">
+          {line || " "}
+        </Text>
       );
     }
     return (
       // biome-ignore lint/suspicious/noArrayIndexKey: message lines never reorder
-      <Text key={lineIdx}>
+      <Text key={lineIdx} wrap="truncate-end">
         {parts.map((part, partIdx) => {
           const partKey = `${lineIdx}:${partIdx}`;
           if (part.kind === "text") {
@@ -244,6 +270,28 @@ function renderMessageLines(
       </Text>
     );
   });
+}
+
+/**
+ * Cap `message` so its line count plus `reservedRows` (choices or the
+ * text-input line) does not exceed `maxRows`.  When truncation is
+ * needed, the tail is replaced with a single `truncatedLabel` line so
+ * the choice / input line stays visible.  Returns the message
+ * unchanged when no cap is supplied or the message already fits.
+ */
+export function truncateMessageToFit(
+  message: string,
+  maxRows: number | undefined,
+  reservedRows: number,
+  truncatedLabel: string,
+): string {
+  if (maxRows === undefined) return message;
+  const messageBudget = maxRows - reservedRows;
+  if (messageBudget <= 0) return truncatedLabel;
+  const lines = message.split("\n");
+  if (lines.length <= messageBudget) return message;
+  if (messageBudget === 1) return truncatedLabel;
+  return [...lines.slice(0, messageBudget - 1), truncatedLabel].join("\n");
 }
 
 function filterChoiceCollisions(

@@ -150,6 +150,11 @@ export const en: Messages = {
     "message is in a PR comment.",
   "pipeline.suggestedSquashTitle": "Suggested title:",
   "pipeline.suggestedSquashBody": "Suggested body:",
+  "pipeline.suggestedSquashBodyLines": (lines) =>
+    `${lines} ${lines === 1 ? "line" : "lines"}`,
+  "pipeline.suggestedSquashBodyCopyHint":
+    "press the hotkey to copy, or view in the PR comment",
+  "pipeline.suggestedSquashBodyViewInPr": "view in the PR comment",
   "pipeline.prUrl": (url) => `PR: ${url}`,
   "pipeline.worktreeCleanedUp": "Worktree cleaned up.",
   "pipeline.worktreePreserved": "Worktree preserved (merge not confirmed).",
@@ -244,6 +249,7 @@ export const en: Messages = {
   "input.copy": "copy",
   "input.copied": "copied",
   "input.copyFailed": "copy failed",
+  "input.truncated": "…(truncated)",
 
   // ---- agent pane / labels ------------------------------------------------
 

@@ -86,12 +86,50 @@ interface VisibilityBudgetOptions {
   paneHeaderTexts?: readonly string[];
 }
 
-/** Compute the height of the InputArea in terminal rows. */
-export function inputAreaHeight(request: InputRequest | null): number {
+/**
+ * Minimum rows the InputArea is always allowed to consume (one message
+ * line + one choice/input line).  Used as a floor when capping the
+ * area's height to prevent the cap collapsing the input out of sight.
+ */
+export const MIN_INPUT_AREA_ROWS = 2;
+
+/**
+ * Compute the height of the InputArea in terminal rows.  When
+ * `terminalHeight` is supplied, the result is capped so that at least
+ * `MIN_PANE_CONTENT * 2` rows remain available for the agent panes
+ * plus the minimum status-bar height.  This prevents a long prompt
+ * message — for example a Stage 9 squash hint — from pushing the
+ * choice lines off the bottom of the viewport (#293).
+ */
+export function inputAreaHeight(
+  request: InputRequest | null,
+  terminalHeight?: number,
+): number {
+  const raw = computeRawInputAreaHeight(request);
+  if (terminalHeight === undefined) return raw;
+  return Math.min(raw, computeInputAreaCap(terminalHeight));
+}
+
+function computeRawInputAreaHeight(request: InputRequest | null): number {
   if (!request) return 1;
   const messageLines = request.message.split("\n").length;
   if (request.choices) return messageLines + request.choices.length;
   return messageLines + 1;
+}
+
+/**
+ * Cap on rows the InputArea is allowed to consume.  Reserves the
+ * minimum status-bar height (4 rows when key hints are hidden) and
+ * `MIN_PANE_CONTENT * 2` rows for agent-pane content, then floors at
+ * `MIN_INPUT_AREA_ROWS` so the input line itself never disappears.
+ */
+export function computeInputAreaCap(terminalHeight: number): number {
+  const minStatusBar = 4;
+  const reservedForPanes = MIN_PANE_CONTENT * 2;
+  return Math.max(
+    MIN_INPUT_AREA_ROWS,
+    terminalHeight - minStatusBar - reservedForPanes,
+  );
 }
 
 /**
@@ -350,7 +388,11 @@ export function App({
   }, [emitter]);
 
   // Compute visibility flags based on terminal dimensions.
-  const inputHeight = inputAreaHeight(inputRequest);
+  const inputAreaCap =
+    terminalHeight !== undefined
+      ? computeInputAreaCap(terminalHeight)
+      : undefined;
+  const inputHeight = inputAreaHeight(inputRequest, terminalHeight);
   const labelA = messages["agent.labelARole"];
   const labelB = messages["agent.labelBRole"];
   const cliNameA = cliTypeA ? cliDisplayName(cliTypeA) : undefined;
@@ -567,7 +609,11 @@ export function App({
         initialReviewCount={initialReviewCount}
         firstExecutingStage={firstExecutingStage}
       />
-      <InputArea request={inputRequest} onSubmit={handleSubmit} />
+      <InputArea
+        request={inputRequest}
+        onSubmit={handleSubmit}
+        maxRows={inputAreaCap}
+      />
     </Box>
   );
 }
