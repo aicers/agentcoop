@@ -138,7 +138,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   overflow, the tail is replaced with a single `…(truncated)` marker so
   the choice lines stay visible.  Pathologically long suggested squash
   titles (>120 characters or containing embedded newlines) are also
-  ellipsized at the assembly stage.
+  ellipsized at the assembly stage.  Each rendered prompt line — message
+  rows and choice rows alike — is rendered with `wrap="truncate-end"` so
+  a long single-line title or hint cannot wrap to multiple terminal rows
+  on a narrow terminal, which would otherwise break the row budget.
 
 ### Changed
 

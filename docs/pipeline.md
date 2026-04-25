@@ -1569,7 +1569,10 @@ Cleanup
    long, the InputArea also caps its height so the choice /
    text-input line is always visible.  When the message would
    exceed that cap, the tail is replaced with a single
-   `…(truncated)` marker.
+   `…(truncated)` marker.  Each rendered line — message rows and
+   choice rows — also uses `wrap="truncate-end"` so a long
+   single-line title or hint cannot wrap to multiple rendered
+   rows on a narrow terminal, keeping the row budget accurate.
 
 **Agent rebase prompt:**
 

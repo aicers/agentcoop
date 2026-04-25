@@ -3072,6 +3072,65 @@ describe("InputArea maxRows truncation (issue #293 safety net)", () => {
     expect(frame).toContain("Short prompt");
     expect(frame).toContain("OK");
   });
+
+  // ink-testing-library renders at a fixed 100 columns. A 200-char
+  // single-line message would normally wrap to 2 rendered rows on a
+  // 100-col terminal, breaking the newline-based row budget and
+  // pushing the choice lines past the viewport (#293).  With each
+  // per-line `<Text>` rendered with `wrap="truncate-end"`, every
+  // source line stays at exactly one rendered row, and the choice
+  // lines remain visible.
+  test("a long single-line message renders as one row, choices stay visible", () => {
+    const longLine = "x".repeat(200);
+    const request: InputRequest = {
+      message: longLine,
+      choices: [
+        { label: "Yes", value: "yes" },
+        { label: "No", value: "no" },
+      ],
+    };
+    const { lastFrame } = render(
+      <InputArea request={request} onSubmit={() => {}} />,
+    );
+    const frame = lastFrame() ?? "";
+    const lines = frame.split("\n");
+    // Total rendered rows: 1 message line + 2 choice lines = 3.
+    expect(lines.length).toBe(3);
+    // The single message row is truncated with `…`.
+    expect(lines[0]).toMatch(/x+…$/);
+    expect(lines[0].length).toBeLessThanOrEqual(100);
+    // Choices are still visible (would have been pushed off if the
+    // long line had wrapped to 2 rendered rows).
+    expect(frame).toContain("Yes");
+    expect(frame).toContain("No");
+  });
+
+  // The same protection applies to messages with hotkey sentinels
+  // embedded in a long line — the outer-`<Text>` `truncate-end`
+  // wraps the composed (substituted) text so the hint segments
+  // can't push the line into a second wrapped row either.
+  test("a long message line containing a sentinel still renders as one row", () => {
+    const longPrefix = "y".repeat(180);
+    const request: InputRequest = {
+      message: `${longPrefix} {{hk:copy}}`,
+      hotkeys: [
+        {
+          id: "copy",
+          key: "c",
+          onPress: async () => "ok" as const,
+        },
+      ],
+      choices: [{ label: "OK", value: "ok" }],
+    };
+    const { lastFrame } = render(
+      <InputArea request={request} onSubmit={() => {}} />,
+    );
+    const frame = lastFrame() ?? "";
+    const lines = frame.split("\n");
+    expect(lines.length).toBe(2);
+    expect(lines[0].length).toBeLessThanOrEqual(100);
+    expect(frame).toContain("OK");
+  });
 });
 
 // ---- fitInfoSegments ---------------------------------------------------------

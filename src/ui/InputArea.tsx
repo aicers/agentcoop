@@ -176,7 +176,7 @@ export function InputArea({ request, onSubmit, maxRows }: InputAreaProps) {
       <Box flexDirection="column" paddingX={1} flexShrink={0}>
         {renderMessageLines(renderedMessage, hotkeyById, hotkeyStatus)}
         {request.choices.map((c, i) => (
-          <Text key={c.value}>
+          <Text key={c.value} wrap="truncate-end">
             {"  "}
             <Text bold color="cyan">
               {i + 1}
@@ -213,6 +213,13 @@ export function InputArea({ request, onSubmit, maxRows }: InputAreaProps) {
  * Render `message` line-by-line, substituting `{{hk:<id>}}` tokens
  * with inline hint labels driven by `status`.  Sentinels referring to
  * unknown ids fall through as literal text so caller bugs surface.
+ *
+ * `wrap="truncate-end"` is applied to each per-line `<Text>` so a long
+ * source line cannot wrap to multiple rendered rows on a narrow
+ * terminal, which would otherwise push the choice / text-input row
+ * past the terminal viewport (#293).  With this guarantee the
+ * newline-based row counting in `truncateMessageToFit` and
+ * `inputAreaHeight` accurately matches the rendered row count.
  */
 function renderMessageLines(
   message: string,
@@ -225,12 +232,14 @@ function renderMessageLines(
     if (parts.length === 1 && parts[0].kind === "text") {
       return (
         // biome-ignore lint/suspicious/noArrayIndexKey: message lines never reorder
-        <Text key={lineIdx}>{line || " "}</Text>
+        <Text key={lineIdx} wrap="truncate-end">
+          {line || " "}
+        </Text>
       );
     }
     return (
       // biome-ignore lint/suspicious/noArrayIndexKey: message lines never reorder
-      <Text key={lineIdx}>
+      <Text key={lineIdx} wrap="truncate-end">
         {parts.map((part, partIdx) => {
           const partKey = `${lineIdx}:${partIdx}`;
           if (part.kind === "text") {
