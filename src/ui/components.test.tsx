@@ -22,12 +22,19 @@ import {
   splitIntoRows,
 } from "./AgentPane.js";
 import {
+  computeInputAreaCap,
   computeLayoutWidth,
   computeVisibilityFlags,
   inputAreaHeight,
+  MIN_INPUT_AREA_ROWS,
+  MIN_PANE_CONTENT,
   useTerminalHeight,
 } from "./App.js";
-import { InputArea, type InputRequest } from "./InputArea.js";
+import {
+  InputArea,
+  type InputRequest,
+  truncateMessageToFit,
+} from "./InputArea.js";
 import { fitInfoSegments, formatElapsed, StatusBar } from "./StatusBar.js";
 import { cliDisplayName, formatTokenCount, TokenBar } from "./TokenBar.js";
 import {
@@ -2949,6 +2956,121 @@ describe("inputAreaHeight", () => {
         choices: [{ label: "A", value: "a" }],
       }),
     ).toBe(4);
+  });
+
+  // #293: when terminalHeight is supplied, the height is clamped so a
+  // very tall prompt cannot starve the agent panes of their reserved
+  // MIN_PANE_CONTENT*2 rows.
+  test("clamps to computeInputAreaCap when terminalHeight is supplied", () => {
+    const tall: InputRequest = {
+      message: Array.from({ length: 80 }, (_, i) => `line ${i}`).join("\n"),
+      choices: [{ label: "A", value: "a" }],
+    };
+    const cap = computeInputAreaCap(50);
+    expect(inputAreaHeight(tall, 50)).toBe(cap);
+    expect(inputAreaHeight(tall, 50)).toBeLessThan(81);
+  });
+
+  test("returns raw height when it fits under the cap", () => {
+    const small: InputRequest = {
+      message: "Choose:",
+      choices: [
+        { label: "A", value: "a" },
+        { label: "B", value: "b" },
+      ],
+    };
+    expect(inputAreaHeight(small, 50)).toBe(3);
+  });
+});
+
+// ---- computeInputAreaCap -----------------------------------------------------
+
+describe("computeInputAreaCap", () => {
+  test("floors at MIN_INPUT_AREA_ROWS so the input never collapses entirely", () => {
+    expect(computeInputAreaCap(0)).toBe(MIN_INPUT_AREA_ROWS);
+    expect(computeInputAreaCap(5)).toBe(MIN_INPUT_AREA_ROWS);
+  });
+
+  test("scales with terminal height, reserving panes + status bar", () => {
+    // Reserves: status bar (4) + MIN_PANE_CONTENT*2.
+    expect(computeInputAreaCap(50)).toBe(50 - 4 - MIN_PANE_CONTENT * 2);
+    expect(computeInputAreaCap(24)).toBe(24 - 4 - MIN_PANE_CONTENT * 2);
+  });
+});
+
+// ---- truncateMessageToFit ----------------------------------------------------
+
+describe("truncateMessageToFit", () => {
+  test("returns message unchanged when no maxRows is supplied", () => {
+    const msg = "a\nb\nc\nd\ne\nf";
+    expect(truncateMessageToFit(msg, undefined, 1, "...")).toBe(msg);
+  });
+
+  test("returns message unchanged when it already fits", () => {
+    const msg = "a\nb\nc";
+    // 3 message lines + 1 reserved = 4 rows; cap of 5 means it fits.
+    expect(truncateMessageToFit(msg, 5, 1, "...")).toBe(msg);
+  });
+
+  test("truncates tail to a single marker line when needed", () => {
+    const msg = "a\nb\nc\nd\ne";
+    // cap = 4, reserved = 1 → message budget 3 → keep 2 + marker.
+    expect(truncateMessageToFit(msg, 4, 1, "...")).toBe("a\nb\n...");
+  });
+
+  test("returns just the marker when budget is 1 row", () => {
+    const msg = "a\nb\nc";
+    // cap=2, reserved=1 → budget=1 → only the marker line fits.
+    expect(truncateMessageToFit(msg, 2, 1, "...")).toBe("...");
+  });
+
+  test("returns the marker when budget is non-positive", () => {
+    expect(truncateMessageToFit("a\nb", 1, 1, "...")).toBe("...");
+    expect(truncateMessageToFit("a\nb", 1, 5, "...")).toBe("...");
+  });
+});
+
+// ---- InputArea: maxRows truncation ------------------------------------------
+
+describe("InputArea maxRows truncation (issue #293 safety net)", () => {
+  test("renders truncation marker when message exceeds maxRows budget", () => {
+    const longMessage = Array.from(
+      { length: 30 },
+      (_, i) => `body line ${i}`,
+    ).join("\n");
+    const request: InputRequest = {
+      message: longMessage,
+      choices: [
+        { label: "Yes", value: "yes" },
+        { label: "No", value: "no" },
+      ],
+    };
+    const { lastFrame } = render(
+      <InputArea request={request} onSubmit={() => {}} maxRows={6} />,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("…(truncated)");
+    // Last "body line" rendered must be well below 30 — proves the
+    // tail was dropped, not the head.
+    expect(frame).toContain("body line 0");
+    expect(frame).not.toContain("body line 29");
+    // Choice lines stay visible.
+    expect(frame).toContain("Yes");
+    expect(frame).toContain("No");
+  });
+
+  test("does not truncate when message already fits", () => {
+    const request: InputRequest = {
+      message: "Short prompt",
+      choices: [{ label: "OK", value: "ok" }],
+    };
+    const { lastFrame } = render(
+      <InputArea request={request} onSubmit={() => {}} maxRows={10} />,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).not.toContain("…(truncated)");
+    expect(frame).toContain("Short prompt");
+    expect(frame).toContain("OK");
   });
 });
 

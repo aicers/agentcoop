@@ -1247,7 +1247,7 @@ export function createDoneStageHandler(
           const label = clipboardAvailable
             ? `${m["pipeline.suggestedSquashTitle"]} {{hk:${titleSentinelId}}}`
             : m["pipeline.suggestedSquashTitle"];
-          tipSections.push(`${label}\n${hint.title}`);
+          tipSections.push(`${label}\n${ellipsizeTitle(hint.title)}`);
           if (clipboardAvailable) {
             hotkeys.push({
               id: titleSentinelId,
@@ -1257,16 +1257,28 @@ export function createDoneStageHandler(
           }
         }
         if (hint.body) {
-          const label = clipboardAvailable
-            ? `${m["pipeline.suggestedSquashBody"]} {{hk:${bodySentinelId}}}`
-            : m["pipeline.suggestedSquashBody"];
-          tipSections.push(`${label}\n${hint.body}`);
+          // Render only a one-line summary so a long squash body cannot
+          // push the choice lines past the terminal viewport (#293).  The
+          // full body remains accessible via the `[b]` clipboard hotkey
+          // and the PR comment linked below.
+          const lineCount = countLines(bodyValue);
+          const lineSummary = m["pipeline.suggestedSquashBodyLines"](lineCount);
           if (clipboardAvailable) {
+            tipSections.push(
+              `${m["pipeline.suggestedSquashBody"]} ${lineSummary} ` +
+                `{{hk:${bodySentinelId}}}\n` +
+                `${m["pipeline.suggestedSquashBodyCopyHint"]}`,
+            );
             hotkeys.push({
               id: bodySentinelId,
               key: "b",
               onPress: () => write(bodyValue, candidates),
             });
+          } else {
+            tipSections.push(
+              `${m["pipeline.suggestedSquashBody"]} ${lineSummary}\n` +
+                `${m["pipeline.suggestedSquashBodyViewInPr"]}`,
+            );
           }
         }
         if (hint.prUrl) {
@@ -1388,6 +1400,29 @@ export function createDoneStageHandler(
       }
     }
   }
+}
+
+/**
+ * Cap the title rendered inside `confirmMerge` so a pathologically long
+ * single-line title cannot wrap to multiple rows and reintroduce the
+ * #293 viewport overflow that the body-suppression fix addressed.  The
+ * limit is conservative: standard git title conventions sit at 50–72
+ * characters, so 120 leaves headroom for unusual but legitimate titles
+ * and only ellipsizes truly excessive ones.
+ */
+const MAX_SQUASH_TITLE_CHARS = 120;
+function ellipsizeTitle(title: string): string {
+  // Collapse embedded newlines first — a "title" that contains them is
+  // already malformed and would otherwise wrap on its own.
+  const flat = title.replace(/\r?\n/g, " ");
+  if (flat.length <= MAX_SQUASH_TITLE_CHARS) return flat;
+  return `${flat.slice(0, MAX_SQUASH_TITLE_CHARS - 1)}…`;
+}
+
+/** Count lines in a body string, treating an empty value as 0 lines. */
+function countLines(body: string): number {
+  if (body.length === 0) return 0;
+  return body.split("\n").length;
 }
 
 /**

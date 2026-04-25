@@ -109,24 +109,36 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   user can then either let the agent perform the squash (which reruns CI)
   or apply the suggestion via GitHub's "Squash and merge" at merge time
   (which avoids the extra CI cycle).
-- Stage 9 (Done) merge-confirm screen now prints the suggested squash title,
-  body, and PR URL inline when the squash stage finished via the
+- Stage 9 (Done) merge-confirm screen now surfaces the suggested squash
+  title and PR URL inline when the squash stage finished via the
   squash-suggestion comment path, so the user can copy-paste without opening
-  the browser.
+  the browser.  The body is represented by a one-line summary (`Suggested
+  body: N lines`) rather than being inlined verbatim, since a long body
+  otherwise pushed the merge-confirm choice lines off the bottom of the
+  terminal viewport with no way to scroll them back into view.  The full
+  body remains accessible through the `[b]` clipboard hotkey and the linked
+  PR comment.
 - Stage 9 (Done) merge-confirm screen now renders `[t] copy` / `[b] copy`
-  hotkey hints next to the suggested squash title and body when the terminal
-  can write to the system clipboard.  Pressing `t` copies the title and `b`
-  copies the body (each independently, so the values line up with GitHub's
-  separate "Squash and merge" title / body fields).  A small clipboard
-  utility detects the environment and returns an ordered candidate list
-  (`pbcopy` / `wl-copy` / `xclip` on local sessions, OSC 52 first on SSH
-  sessions, OSC 52 as fallback everywhere stdout is a TTY), and the writer
-  tries candidates in order until one succeeds.  When no candidate is
-  reachable, the hints are not rendered at all — the user falls back to
-  drag-select as before, rather than seeing a hint that silently does
-  nothing.  Per-hotkey status (`copy` / `copied` / `copy failed`) is
-  reflected in the label; `copied` auto-reverts after ~1s, `copy failed`
-  persists until the next re-render.
+  hotkey hints next to the suggested squash title and the body summary
+  when the terminal can write to the system clipboard.  Pressing `t` copies
+  the title and `b` copies the body (each independently, so the values line
+  up with GitHub's separate "Squash and merge" title / body fields).  A
+  small clipboard utility detects the environment and returns an ordered
+  candidate list (`pbcopy` / `wl-copy` / `xclip` on local sessions, OSC 52
+  first on SSH sessions, OSC 52 as fallback everywhere stdout is a TTY),
+  and the writer tries candidates in order until one succeeds.  When no
+  candidate is reachable, the hints are not rendered at all — the user
+  falls back to opening the PR comment, rather than seeing a hint that
+  silently does nothing.  Per-hotkey status (`copy` / `copied` / `copy
+  failed`) is reflected in the label; `copied` auto-reverts after ~1s,
+  `copy failed` persists until the next re-render.
+- Stage 9's merge-confirm prompt now caps the height of the InputArea so
+  even an unexpectedly long prompt cannot push the choice / input lines
+  past the bottom of the terminal viewport.  When the message would
+  overflow, the tail is replaced with a single `…(truncated)` marker so
+  the choice lines stay visible.  Pathologically long suggested squash
+  titles (>120 characters or containing embedded newlines) are also
+  ellipsized at the assembly stage.
 
 ### Changed
 

@@ -1545,16 +1545,31 @@ Cleanup
      the PR. Each action is individually selectable.
 
    When a squash suggestion is live in a PR comment, the
-   merge-confirm screen also renders `[t] copy` / `[b] copy`
-   hotkey hints next to the suggested title and body.  Pressing
-   `t` or `b` writes the corresponding value to the system
-   clipboard (via `pbcopy` / `wl-copy` / `xclip` on local
-   sessions, or OSC 52 on SSH) so the user can paste it straight
-   into GitHub's "Squash and merge" dialog.  If the environment
-   can reach neither a native clipboard tool nor an OSC 52–capable
-   stdout, the hints are not rendered — the user falls back to
-   drag-select without being told about a feature that cannot
-   work here.
+   merge-confirm screen renders the suggested title verbatim
+   (ellipsized if pathologically long) and a one-line summary of
+   the body (`Suggested body: N lines`).  The full body is _not_
+   inlined: a long body would otherwise push the choice lines off
+   the bottom of the terminal viewport with no way to scroll them
+   back, since Ink renders in-place without an alt-screen.  The
+   PR URL is shown right below so the user can open the comment
+   to read the body.
+
+   When the terminal can write to the system clipboard, the
+   screen also renders `[t] copy` / `[b] copy` hotkey hints next
+   to the title and body-summary lines.  Pressing `t` or `b`
+   writes the corresponding value (the full title / the full
+   body) to the system clipboard via `pbcopy` / `wl-copy` /
+   `xclip` on local sessions, or OSC 52 on SSH.  If the
+   environment can reach neither a native clipboard tool nor an
+   OSC 52–capable stdout, the hints are not rendered — the user
+   falls back to opening the PR comment without being told about
+   a feature that cannot work here.
+
+   As a defensive measure against any future prompt growing
+   long, the InputArea also caps its height so the choice /
+   text-input line is always visible.  When the message would
+   exceed that cap, the tail is replaced with a single
+   `…(truncated)` marker.
 
 **Agent rebase prompt:**
 

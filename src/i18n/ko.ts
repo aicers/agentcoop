@@ -184,6 +184,10 @@ export const ko: Messages = {
     "이 저장소가 'Squash and merge'를 허용한다면, 제안된 커밋 메시지가 PR 코멘트에 있습니다.",
   "pipeline.suggestedSquashTitle": "제안 제목:",
   "pipeline.suggestedSquashBody": "제안 본문:",
+  "pipeline.suggestedSquashBodyLines": (lines) => `${lines}줄`,
+  "pipeline.suggestedSquashBodyCopyHint":
+    "단축키로 복사하거나 PR 코멘트에서 확인",
+  "pipeline.suggestedSquashBodyViewInPr": "PR 코멘트에서 확인",
   "pipeline.prUrl": (url) => `PR: ${url}`,
   "pipeline.worktreeCleanedUp": "워크트리가 정리되었습니다.",
   "pipeline.worktreePreserved": "워크트리가 보존되었습니다 (병합 미확인).",
@@ -282,6 +286,7 @@ export const ko: Messages = {
   "input.copy": "복사",
   "input.copied": "복사됨",
   "input.copyFailed": "복사 실패",
+  "input.truncated": "…(잘림)",
 
   // ---- agent pane / labels ------------------------------------------------
 
