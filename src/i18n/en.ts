@@ -162,7 +162,7 @@ export const en: Messages = {
     "Pipeline completed, but merge conflicts with main detected.",
   "pipeline.unknownMergeable":
     "Could not determine merge status after retries.",
-  "pipeline.noConflicts": "No conflicts found — already up to date with main.",
+  "pipeline.noConflicts": "No conflicts — branch is up to date with main.",
   "pipeline.rebaseFailed":
     "Agent could not resolve conflicts. Please resolve manually.",
   "pipeline.rebaseAgentError": (detail) =>

@@ -194,7 +194,7 @@ export const ko: Messages = {
   "pipeline.conflictsDetected":
     "파이프라인이 완료되었지만 main과 병합 충돌이 감지되었습니다.",
   "pipeline.unknownMergeable": "재시도 후에도 병합 상태를 확인할 수 없습니다.",
-  "pipeline.noConflicts": "충돌이 없습니다 — main과 이미 최신 상태입니다.",
+  "pipeline.noConflicts": "충돌 없음 — 브랜치가 main과 최신 상태입니다.",
   "pipeline.rebaseFailed":
     "에이전트가 충돌을 해결하지 못했습니다. 수동으로 해결해 주세요.",
   "pipeline.rebaseAgentError": (detail) =>

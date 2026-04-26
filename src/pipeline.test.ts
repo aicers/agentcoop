@@ -2104,9 +2104,11 @@ describe("createDoneStageHandler", () => {
 
   // ---- askMerge "check_conflicts" sub-path --------------------------------
 
-  test("check_conflicts → MERGEABLE shows noConflicts message and loops back", async () => {
+  test("check_conflicts → MERGEABLE folds noConflicts notice into next confirmMerge and loops back", async () => {
     // User selects "check_conflicts" first time (no conflicts),
-    // then "merged" on the loop-back.
+    // then "merged" on the loop-back.  The "no conflicts" result
+    // must NOT block on a press-enter prompt (#295) — instead it
+    // folds into the redrawn confirmMerge as a transient notice.
     const confirmMerge = vi
       .fn()
       .mockResolvedValueOnce("check_conflicts")
@@ -2125,13 +2127,55 @@ describe("createDoneStageHandler", () => {
     const result = await stage.handler(ctx);
     // checkMergeable: once at entry (MERGEABLE), once inside askMerge.
     expect(opts.checkMergeable).toHaveBeenCalledTimes(2);
-    // "No conflicts" message shown via waitForManualResolve.
-    expect(waitForManualResolve).toHaveBeenCalledWith(
-      expect.stringContaining("No conflicts"),
-    );
+    // "No conflicts" must NOT be surfaced via the blocking
+    // press-enter prompt — that's reserved for genuine manual work.
+    expect(waitForManualResolve).not.toHaveBeenCalled();
+    // The redrawn confirmMerge carries the no-conflicts notice.
     expect(confirmMerge).toHaveBeenCalledTimes(2);
+    const secondCallMessage = confirmMerge.mock.calls[1]?.[0] as string;
+    expect(secondCallMessage).toContain("No conflicts");
+    // First confirmMerge (initial entry) does not carry the notice.
+    const firstCallMessage = confirmMerge.mock.calls[0]?.[0] as string;
+    expect(firstCallMessage).not.toContain("No conflicts");
     expect(opts.cleanup).toHaveBeenCalledOnce();
     expect(result.outcome).toBe("completed");
+  });
+
+  test("check_conflicts → MERGEABLE notice is one-shot — cleared after the redraw consumes it", async () => {
+    // After the no-conflicts notice has been folded into one redraw,
+    // a subsequent confirmMerge invocation must be clean.  Here the
+    // user picks check_conflicts (MERGEABLE → notice set), accepts
+    // the notice-carrying redraw with another check_conflicts
+    // (state UNKNOWN → user exits), so we can inspect both calls.
+    const checkMergeable = vi
+      .fn()
+      .mockResolvedValueOnce("MERGEABLE") // initial entry
+      .mockResolvedValueOnce("MERGEABLE") // first check_conflicts
+      .mockResolvedValueOnce("UNKNOWN"); // second check_conflicts
+    const confirmMerge = vi
+      .fn()
+      .mockResolvedValueOnce("check_conflicts")
+      .mockResolvedValueOnce("check_conflicts");
+    const handleUnknownMergeable = vi.fn().mockResolvedValue("exit");
+    const opts = makeDoneOpts({
+      checkMergeable,
+      prompt: { confirmMerge, handleUnknownMergeable },
+    });
+    const stage = createDoneStageHandler(opts);
+    const ctx: StageContext = {
+      ...BASE_CTX,
+      iteration: 0,
+      lastAutoIteration: false,
+      userInstruction: undefined,
+    };
+    await stage.handler(ctx);
+    // First redraw (entry) has no notice; second (after the
+    // MERGEABLE recheck) carries it exactly once.
+    expect(confirmMerge).toHaveBeenCalledTimes(2);
+    const firstMsg = confirmMerge.mock.calls[0]?.[0] as string;
+    const secondMsg = confirmMerge.mock.calls[1]?.[0] as string;
+    expect(firstMsg).not.toContain("No conflicts");
+    expect(secondMsg).toContain("No conflicts");
   });
 
   test("check_conflicts → CONFLICTING → rebase succeeds → CI → loops back", async () => {
@@ -2325,8 +2369,7 @@ describe("createDoneStageHandler", () => {
       .fn()
       .mockResolvedValueOnce("CONFLICTING") // initial mergeableLoop
       .mockResolvedValueOnce("MERGEABLE") // afterResolution
-      .mockResolvedValueOnce("MERGEABLE") // afterResolution (CI pass)
-      .mockResolvedValueOnce("CONFLICTING"); // inside askMerge
+      .mockResolvedValueOnce("CONFLICTING"); // inside askMerge — guard fires
     const handleConflict = vi.fn().mockResolvedValue("agent_rebase");
     const rebaseOntoMain = vi
       .fn()

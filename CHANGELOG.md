@@ -169,6 +169,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Stage 9's `check_conflicts` recheck no longer blocks on a press-enter
+  prompt when GitHub reports `MERGEABLE`.  The "no conflicts" result is
+  now folded into the redrawn merge-confirm screen as a one-shot notice
+  and the inner loop returns to `confirmMerge` immediately.
+  `waitForManualResolve` stays reserved for the cases where the user
+  actually has manual work to do (post-rebase / already-attempted
+  CONFLICTING).
 - Stage 9 no longer silently ends the session when the post-rebase CI fix
   loop exhausts its attempt budget.  `pollCiAndFix` now accepts an
   opt-in `confirmRetry` callback that Stage 9 wires to the TUI; when the
