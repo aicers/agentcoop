@@ -1224,12 +1224,21 @@ export function createDoneStageHandler(
     const detect =
       options.detectClipboardSupport ?? defaultDetectClipboardSupport;
     const write = options.writeToClipboard ?? defaultWriteToClipboard;
+    // Carries a one-shot status notice (e.g. "no conflicts") into the
+    // next confirmMerge redraw so a successful check_conflicts loops
+    // back without blocking on a press-enter prompt.
+    let transientNotice: string | undefined;
     for (;;) {
       const hint = options.getSquashMergeHint?.();
       const candidates = hint ? detect() : [];
       const clipboardAvailable = candidates.length > 0;
       const hotkeys: InputHotkey[] = [];
-      const sections: string[] = [summary];
+      const sections: string[] = [];
+      if (transientNotice) {
+        sections.push(transientNotice);
+        transientNotice = undefined;
+      }
+      sections.push(summary);
       if (hint) {
         // Generate per-render unique sentinel ids so that agent-generated
         // title/body content containing a literal `{{hk:title}}` /
@@ -1320,10 +1329,10 @@ export function createDoneStageHandler(
         }
 
         if (state === "MERGEABLE") {
-          await options.prompt.waitForManualResolve(m["pipeline.noConflicts"]);
-          if (ctx.signal?.aborted) {
-            return { outcome: "completed", message: "" };
-          }
+          // No conflicts — fold a brief notice into the next
+          // confirmMerge redraw rather than blocking on a press-enter
+          // prompt (#295).  The user has nothing to resolve.
+          transientNotice = m["pipeline.noConflicts"];
           break; // back to confirmMerge
         }
 
