@@ -6,6 +6,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-29
+
 ### Added
 
 - Agent pane headers now include the CLI name and installed CLI
@@ -263,4 +265,5 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial public release of AgentCoop.
 
+[0.2.0]: https://github.com/aicers/agentcoop/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/aicers/agentcoop/tree/0.1.0
