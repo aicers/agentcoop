@@ -1280,9 +1280,30 @@ The work prompt asks the agent to:
      the squash title and body, then post them as a PR comment whose
      body contains the marker block
      `<!-- agentcoop:squash-suggestion:start -->` …
-     `<!-- agentcoop:squash-suggestion:end -->`.  Post idempotently:
-     if a prior comment with the same start marker exists, edit it
-     via `gh api --method PATCH
+     `<!-- agentcoop:squash-suggestion:end -->`.  Inside the marker
+     block, each field is wrapped in its own CommonMark fenced code
+     block under a `**Title**` / `**Body**` label.  GitHub renders a
+     one-click copy icon on a fenced block, and the fence preserves
+     content verbatim so Markdown-active characters (`*`, `` ` ``,
+     `_`, leading `#`, `>`, backslashes) survive a drag-select
+     paste.
+
+     The opening and closing fence length is computed independently
+     for each field as
+     `fence_len = max(longest run of backticks in the content, 2) + 1`
+     (minimum 3).  This lets a body that itself contains a
+     triple-backtick code sample (e.g. a README excerpt) round up
+     to a four-or-more-backtick outer fence so the inner fence does
+     not close the outer block early.  Stage 9 reads the same block
+     via `parseSquashSuggestionBlock`, which mirrors the CommonMark
+     rule (closing fence ≥ opening, same character).  Only the
+     fenced format is accepted — the earlier `**Title:** …` /
+     `**Body:** …` plain-text format was supported for one release
+     cycle and has since been removed; a stale legacy block is
+     treated as missing.
+
+     Post idempotently: if a prior comment with the same start
+     marker exists, edit it via `gh api --method PATCH
      /repos/{owner}/{repo}/issues/comments/{id}` so the timeline
      does not accumulate duplicates.  The PR body is left untouched.
      Do not force-push.
@@ -1311,6 +1332,18 @@ Do not include any other commentary — just the keyword.
 The handler calls `parseVerdictKeyword` directly with these three
 keywords (rather than feeding them through the shared `KEYWORD_MAP`)
 because the three-way distinction is squash-specific.
+
+**Already-merged short-circuit:** Before any destructive action
+(the `"agent"` apply branch and the `squashing` resume branch in
+particular), a `guardIfPrMerged` helper runs `queryPrState`
+(`gh pr view --json state`, fails open to `OPEN`).  If the user
+merged the PR on GitHub mid-run, the helper clears
+`squashSubStep` and finishes the stage with
+`squash.alreadyMerged` so the pipeline does not force-push history
+onto a closed branch or kick off a CI poll for a head SHA with no
+open PR.  Stage 8 cannot reuse Stage 9's `ensurePrStillOpen`
+helper because the Done stage owns the worktree lifecycle —
+cleanup stays in Stage 9.
 
 **Verdict handling:**
 
@@ -1492,6 +1525,17 @@ Cleanup
    starting at 2 seconds, doubling each time) before reporting
    the state to the user.
 
+   Each `checkMergeable` call is wrapped in `ensurePrStillOpen`,
+   which reads the PR lifecycle via `queryPrState`
+   (`gh pr view --json state`, fails open to `OPEN`).  If the user
+   merged the PR on GitHub mid-run, the helper short-circuits
+   straight to `stopServices()` + `cleanup()` — the same silent
+   path used on `confirmMerge === "merged"` — so the stage does
+   not burn its full backoff budget on `UNKNOWN` against a closed
+   branch.  The guard is centralised at the helper boundary and
+   fires at all three call sites: the initial mergeable loop,
+   `afterResolution`, and the `check_conflicts` inner loop.
+
 2. **Based on the result:**
 
    - **MERGEABLE** -> proceed to merge confirmation.
@@ -1538,24 +1582,47 @@ Cleanup
      worktree and branch, and report completion.
    - **Check conflicts** — run the mergeable check again without
      leaving this screen. This lets the user verify the state
-     right before merging. If conflicts are found here, the same
-     conflict resolution flow (agent rebase or manual) is
-     available. After resolution, the merge confirmation is
-     re-presented.
+     right before merging. If `MERGEABLE` comes back, the inner
+     loop **does not** block on a press-enter prompt; instead it
+     stashes a one-shot `pipeline.noConflicts` notice and falls
+     straight back to `confirmMerge`, which folds the notice into
+     its next redraw and clears it.  `waitForManualResolve` stays
+     reserved for cases where the user actually has manual work to
+     do (post-rebase / already-attempted `CONFLICTING`).  If
+     conflicts are found here, the same conflict resolution flow
+     (agent rebase or manual) is available; after resolution, the
+     merge confirmation is re-presented.
    - **Exit** — stop the pipeline without merging. The
      orchestrator offers cleanup options: stop running services,
      delete the worktree, delete the remote branch, and close
      the PR. Each action is individually selectable.
 
+   **Prompt viewport cap.** Stage 9's prompts must always leave the
+   choice / text-input line visible.  Ink renders in-place without
+   an alt-screen, so anything that overflows the bottom of the
+   terminal cannot be scrolled back into view and the prompt
+   appears frozen.  Two policies enforce this:
+
+   - The merge-confirm screen never inlines arbitrarily long
+     content.  Rendered values are summarised (e.g. body length
+     in lines) and pathologically long single-line values are
+     ellipsized so they cannot wrap to multiple rendered rows.
+   - As a defensive backstop, `InputArea` caps its own height —
+     reserving the status bar plus `MIN_PANE_CONTENT * 2` rows for
+     the agent panes — and tail-truncates any future overflow with
+     a single `…(truncated)` marker.  Each rendered line is drawn
+     with `wrap="truncate-end"` so a long single-line message
+     cannot wrap to multiple rendered rows on a narrow terminal,
+     keeping the newline-based row budget accurate.
+
    When a squash suggestion is live in a PR comment, the
    merge-confirm screen renders the suggested title verbatim
    (ellipsized if pathologically long) and a one-line summary of
    the body (`Suggested body: N lines`).  The full body is _not_
-   inlined: a long body would otherwise push the choice lines off
-   the bottom of the terminal viewport with no way to scroll them
-   back, since Ink renders in-place without an alt-screen.  The
-   PR URL is shown right below so the user can open the comment
-   to read the body.
+   inlined: under the viewport-cap policy above, a long body would
+   otherwise push the choice lines off the bottom of the terminal
+   with no way to scroll them back.  The PR URL is shown right
+   below so the user can open the comment to read the body.
 
    When the terminal can write to the system clipboard, the
    screen also renders `[t] copy` / `[b] copy` hotkey hints next
@@ -1567,15 +1634,6 @@ Cleanup
    OSC 52–capable stdout, the hints are not rendered — the user
    falls back to opening the PR comment without being told about
    a feature that cannot work here.
-
-   As a defensive measure against any future prompt growing
-   long, the InputArea also caps its height so the choice /
-   text-input line is always visible.  When the message would
-   exceed that cap, the tail is replaced with a single
-   `…(truncated)` marker.  Each rendered line — message rows and
-   choice rows — also uses `wrap="truncate-end"` so a long
-   single-line title or hint cannot wrap to multiple rendered
-   rows on a narrow terminal, keeping the row budget accurate.
 
 **Agent rebase prompt:**
 
