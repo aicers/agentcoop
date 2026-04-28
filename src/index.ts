@@ -26,7 +26,10 @@ import {
   loadConfig,
   patchVersionCheckState,
 } from "./config.js";
-import { createDonePromptOptions } from "./done-prompt-options.js";
+import {
+  buildDoneConfirmRetryPrompt,
+  createDonePromptOptions,
+} from "./done-prompt-options.js";
 import { getGitHubUsername, getIssue } from "./github.js";
 import { initI18n, t } from "./i18n/index.js";
 import {
@@ -853,12 +856,13 @@ try {
         issueBody,
         // Stage 9 bypasses the engine's dispatchError prompt (the
         // Done stage consumes pollCiAndFix inline), so without this
-        // opt-in prompt an exhausted fix loop silently ends the
-        // session.  Ask the user whether to keep retrying — `true`
-        // resets the attempt budget; `false` lets cleanup run.
-        confirmRetry: async (attempts) => {
+        // opt-in prompt the fix-exhausted, pending-timeout, and
+        // agent-error branches would silently end the session.  Ask
+        // the user whether to keep trying — `true` resumes per the
+        // semantics in `ConfirmRetryInfo`; `false` lets cleanup run.
+        confirmRetry: async (info) => {
           if (!tuiPrompt) return false;
-          return tuiPrompt.confirmCleanup(t()["ci.retryPrompt"](attempts));
+          return tuiPrompt.confirmCleanup(buildDoneConfirmRetryPrompt(info));
         },
       });
     },

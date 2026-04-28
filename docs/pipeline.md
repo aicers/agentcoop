@@ -1502,9 +1502,12 @@ Cleanup
        three outcomes:
        - `completed` — rebase succeeded and was force-pushed.
          The orchestrator polls CI. If CI passes, proceed to
-         merge confirmation; on exhausted retries the user is
-         asked (via `confirmRetry`) whether to keep trying, and
-         only cleanup when they decline.
+         merge confirmation; on every `pollCiAndFix` failure
+         path (fix-budget exhausted, pending timeout, or agent
+         error during findings review or fix) the user is
+         asked via `confirmRetry` whether to keep trying.
+         Cleanup only runs after an explicit decline, so the
+         session never ends silently on a transient blip.
        - `blocked` — the agent finished but reported `BLOCKED`.
          The user sees the agent's own explanation (no longer
          a generic "resolve manually" notice) and falls back to
@@ -1638,11 +1641,27 @@ Do not include any other commentary — just the keyword.
 - **CI re-validation.** After a successful rebase and force-push,
   the orchestrator polls CI and runs the CI fix loop if needed,
   because the rebase may have introduced regressions even if
-  local tests passed.  When the fix loop exhausts its attempt
-  budget, Stage 9 asks the user whether to keep trying (the
-  opt-in `confirmRetry` callback on `pollCiAndFix`); cleanup only
-  runs after an explicit decline, so the session never ends
-  silently on a transient CI blip.
+  local tests passed.  Stage 9's `confirmRetry` callback on
+  `pollCiAndFix` covers all three non-pass branches that would
+  otherwise terminate the stage silently:
+  - `exhausted` — the fix-attempt budget hit `maxFixAttempts`.
+    On confirm, the counter resets to 0 and the fix loop
+    re-enters.
+  - `timeout` — `pollTimeoutMs` (default 10 minutes) elapsed
+    while CI was still pending.  On confirm, polling resumes;
+    HEAD SHA is re-read at the top of the outer loop so a fix
+    that landed during the timeout window is automatically
+    picked up.
+  - `agent_error` — the findings-review or fix turn itself
+    failed (CLI crash, timeout, etc.).  On confirm, the same
+    step re-runs and the relevant counter is decremented to
+    undo the pre-increment, so a permanent failure cannot
+    silently exhaust the budget across retries.
+  Cleanup only runs after an explicit decline, so the session
+  never ends silently on a transient CI blip.  Stages 7 and 8
+  do not pass `confirmRetry` — they already route CI failures
+  through the engine's `dispatchError` prompt and must not
+  double-ask.
 - **Fallback to manual.** If the agent rebase fails, or if it
   was already attempted, the user is always offered manual
   resolution as a fallback.

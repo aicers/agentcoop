@@ -262,6 +262,8 @@ export interface Messages {
   "ci.passedWithFindings": string;
   "ci.stillFailing": (attempts: number) => string;
   "ci.retryPrompt": (attempts: number) => string;
+  "ci.timeoutRetryPrompt": (seconds: number) => string;
+  "ci.agentErrorRetryPrompt": (detail: string) => string;
   "ci.agentError": (detail: string) => string;
   "squash.completed": string;
   "squash.singleCommitSkip": string;

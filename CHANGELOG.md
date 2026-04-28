@@ -183,6 +183,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   cleanup path only runs after an explicit decline.  Stages 7 and 8 are
   unchanged — they already route CI failures through the engine's
   `dispatchError` prompt and must not double-ask.
+- Stage 9's `confirmRetry` prompt now also surfaces on CI pending-timeout
+  and findings-review / fix agent errors, not just on fix-budget
+  exhaustion.  Previously these three branches in `pollCiAndFix`
+  returned `passed: false` directly and the Done stage advanced to the
+  cleanup ("Delete local worktree?") prompt without giving the user a
+  chance to keep waiting or retry.  The callback signature is now a
+  discriminated `ConfirmRetryInfo` union (`exhausted` / `timeout` /
+  `agent_error`) so each reason carries its own metadata; on confirm,
+  timeout resumes polling, agent errors retry the same step with the
+  pre-incremented counter undone so a permanent failure cannot
+  prematurely exhaust the budget, and exhaustion resets the fix
+  counter (existing behavior).  Stages 7 and 8 still do not pass
+  `confirmRetry`, so their `dispatchError` flow is unaffected.
 - Stage 9's rebase handler now distinguishes an agent process failure
   from a BLOCKED verdict.  `RebaseResult` is a discriminated union
   (`completed` / `blocked` / `error`), and both Stage 9 call sites

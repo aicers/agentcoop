@@ -439,9 +439,10 @@ describe("pollCiAndFix", () => {
     );
 
     expect(confirmRetry).toHaveBeenCalledOnce();
-    // First arg is the exhausted attempt count (fixAttempts counter).
-    expect(confirmRetry.mock.calls[0][0]).toBe(2);
-    expect(confirmRetry.mock.calls[0][1]).toContain("still failing");
+    const info = confirmRetry.mock.calls[0][0];
+    expect(info.reason).toBe("exhausted");
+    expect(info.attempts).toBe(2);
+    expect(info.message).toContain("still failing");
     expect(result.passed).toBe(false);
   });
 
@@ -498,6 +499,303 @@ describe("pollCiAndFix", () => {
     // any extra prompt.
     expect(result.passed).toBe(false);
     expect(result.message).toContain("still failing after 1 fix attempt");
+  });
+
+  // -- confirmRetry: timeout --------------------------------------------------
+
+  test("confirmRetry true on timeout resumes polling", async () => {
+    // First polling cycle exceeds the timeout window; on the second
+    // cycle (after confirmRetry returns true) CI passes.
+    let elapsed = 0;
+    const startTime = Date.now();
+    const delay = vi.fn().mockImplementation(async () => {
+      elapsed += 500;
+    });
+    vi.spyOn(Date, "now").mockImplementation(() => startTime + elapsed);
+
+    // `pending` until the user confirms the retry; `pass` thereafter.
+    let pendingPhase = true;
+    const getCiStatus = vi.fn().mockImplementation(() => {
+      return pendingPhase ? makeCiStatus("pending") : makeCiStatus("pass");
+    });
+
+    const confirmRetry = vi.fn().mockImplementation(async () => {
+      pendingPhase = false;
+      return true;
+    });
+
+    const result = await pollCiAndFix(
+      makeOpts({
+        getCiStatus,
+        delay,
+        pollIntervalMs: 100,
+        pollTimeoutMs: 1000,
+        confirmRetry,
+      }),
+    );
+
+    expect(confirmRetry).toHaveBeenCalledOnce();
+    const info = confirmRetry.mock.calls[0][0];
+    expect(info.reason).toBe("timeout");
+    expect(info.seconds).toBe(1);
+    expect(info.message).toContain("still pending");
+    expect(result.passed).toBe(true);
+
+    vi.restoreAllMocks();
+  });
+
+  test("confirmRetry false on timeout returns passed: false", async () => {
+    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pending"));
+    let elapsed = 0;
+    const startTime = Date.now();
+    const delay = vi.fn().mockImplementation(async () => {
+      elapsed += 500;
+    });
+    vi.spyOn(Date, "now").mockImplementation(() => startTime + elapsed);
+
+    const confirmRetry = vi.fn().mockResolvedValue(false);
+
+    const result = await pollCiAndFix(
+      makeOpts({
+        getCiStatus,
+        delay,
+        pollIntervalMs: 100,
+        pollTimeoutMs: 1000,
+        confirmRetry,
+      }),
+    );
+
+    expect(confirmRetry).toHaveBeenCalledOnce();
+    expect(confirmRetry.mock.calls[0][0].reason).toBe("timeout");
+    expect(result.passed).toBe(false);
+    expect(result.message).toContain("still pending");
+
+    vi.restoreAllMocks();
+  });
+
+  test("timeout without confirmRetry returns passed: false (regression guard)", async () => {
+    // Stages 7/8 do not pass `confirmRetry`; the timeout branch must
+    // continue to surface as a failure so the engine's
+    // `dispatchError` flow can prompt instead.
+    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pending"));
+    let elapsed = 0;
+    const startTime = Date.now();
+    const delay = vi.fn().mockImplementation(async () => {
+      elapsed += 500;
+    });
+    vi.spyOn(Date, "now").mockImplementation(() => startTime + elapsed);
+
+    const result = await pollCiAndFix(
+      makeOpts({
+        getCiStatus,
+        delay,
+        pollIntervalMs: 100,
+        pollTimeoutMs: 1000,
+        // confirmRetry deliberately omitted.
+      }),
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.message).toContain("still pending");
+
+    vi.restoreAllMocks();
+  });
+
+  // -- confirmRetry: agent_error during findings review -----------------------
+
+  test("confirmRetry true on findings-review agent error retries without consuming budget", async () => {
+    // First findings-review attempt fails with an agent error;
+    // confirmRetry true re-runs the same review step.  The second
+    // attempt succeeds without pushing, so findings are acknowledged.
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "Unused variable",
+        file: "src/app.ts",
+        line: 10,
+        checkRunId: 500,
+        checkRunName: "ESLint",
+        commitSha: "abc123",
+      },
+    ];
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+    const getHeadSha = vi.fn().mockReturnValue("same-sha");
+
+    let invokeCall = 0;
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockImplementation(() => {
+        invokeCall++;
+        if (invokeCall === 1) {
+          return makeStream(
+            makeResult({
+              status: "error",
+              errorType: "execution_error",
+              stderrText: "crash",
+              responseText: "",
+            }),
+          );
+        }
+        return makeStream(makeResult({ responseText: "Acknowledged." }));
+      }),
+      resume: vi.fn(),
+    };
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const confirmRetry = vi.fn().mockResolvedValue(true);
+
+    // maxFixAttempts=1 → maxFindingsReviews=1.  If the
+    // pre-incremented counter were not undone, the second attempt
+    // would short-circuit to "passed with findings" without invoking
+    // the agent again.
+    const result = await pollCiAndFix(
+      makeOpts({
+        agent,
+        getCiStatus,
+        getHeadSha,
+        maxFixAttempts: 1,
+        confirmRetry,
+      }),
+    );
+
+    expect(confirmRetry).toHaveBeenCalledOnce();
+    expect(confirmRetry.mock.calls[0][0].reason).toBe("agent_error");
+    expect(confirmRetry.mock.calls[0][0].detail).toContain("crash");
+    // Two invokes: the failed first attempt + the retry.  This proves
+    // the findingsReviews counter was decremented on retry.
+    expect(agent.invoke).toHaveBeenCalledTimes(2);
+    expect(result.passed).toBe(true);
+
+    errorSpy.mockRestore();
+  });
+
+  test("confirmRetry false on findings-review agent error returns passed: false", async () => {
+    const findings: CiFinding[] = [
+      {
+        level: "warning",
+        message: "x",
+        file: "f",
+        line: 1,
+        checkRunId: 1,
+        checkRunName: "lint",
+        commitSha: "abc",
+      },
+    ];
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+    const getHeadSha = vi.fn().mockReturnValue("sha");
+
+    const agent = makeAgent(
+      makeResult({
+        status: "error",
+        errorType: "execution_error",
+        stderrText: "boom",
+        responseText: "",
+      }),
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const confirmRetry = vi.fn().mockResolvedValue(false);
+
+    const result = await pollCiAndFix(
+      makeOpts({ agent, getCiStatus, getHeadSha, confirmRetry }),
+    );
+
+    expect(confirmRetry).toHaveBeenCalledOnce();
+    expect(confirmRetry.mock.calls[0][0].reason).toBe("agent_error");
+    expect(result.passed).toBe(false);
+    expect(result.message).toContain("Agent error during CI fix");
+
+    errorSpy.mockRestore();
+  });
+
+  // -- confirmRetry: agent_error during fix -----------------------------------
+
+  test("confirmRetry true on fix agent error retries without consuming budget", async () => {
+    // First fix attempt fails with an agent error; confirmRetry true
+    // re-runs the fix.  The retried attempt succeeds and CI passes.
+    const failedRun = makeCiRun({ conclusion: "failure" });
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(makeCiStatus("fail", [failedRun]))
+      .mockReturnValueOnce(makeCiStatus("fail", [failedRun]))
+      .mockReturnValueOnce(makeCiStatus("pass"));
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+
+    let invokeCall = 0;
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockImplementation(() => {
+        invokeCall++;
+        if (invokeCall === 1) {
+          return makeStream(
+            makeResult({
+              status: "error",
+              errorType: "execution_error",
+              stderrText: "boom",
+              responseText: "",
+            }),
+          );
+        }
+        return makeStream(makeResult({ responseText: "Fixed." }));
+      }),
+      resume: vi.fn(),
+    };
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const confirmRetry = vi.fn().mockResolvedValue(true);
+
+    // maxFixAttempts=1.  Without the counter decrement on retry, the
+    // second attempt would hit `fixAttempts >= maxFix` and bypass the
+    // fix entirely (or re-prompt as exhausted).
+    const result = await pollCiAndFix(
+      makeOpts({
+        agent,
+        getCiStatus,
+        collectFailureLogs,
+        maxFixAttempts: 1,
+        confirmRetry,
+      }),
+    );
+
+    expect(confirmRetry).toHaveBeenCalledOnce();
+    expect(confirmRetry.mock.calls[0][0].reason).toBe("agent_error");
+    expect(agent.invoke).toHaveBeenCalledTimes(2);
+    expect(result.passed).toBe(true);
+
+    errorSpy.mockRestore();
+  });
+
+  test("confirmRetry false on fix agent error returns passed: false", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      );
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+    const agent = makeAgent(
+      makeResult({
+        status: "error",
+        errorType: "execution_error",
+        stderrText: "boom",
+        responseText: "",
+      }),
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const confirmRetry = vi.fn().mockResolvedValue(false);
+
+    const result = await pollCiAndFix(
+      makeOpts({ agent, getCiStatus, collectFailureLogs, confirmRetry }),
+    );
+
+    expect(confirmRetry).toHaveBeenCalledOnce();
+    expect(confirmRetry.mock.calls[0][0].reason).toBe("agent_error");
+    expect(result.passed).toBe(false);
+    expect(result.message).toContain("Agent error during CI fix");
+
+    errorSpy.mockRestore();
   });
 
   // -- maxFixAttempts = 0 means no fix attempts -------------------------------

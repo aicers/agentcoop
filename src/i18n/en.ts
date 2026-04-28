@@ -277,6 +277,10 @@ export const en: Messages = {
     `CI still failing after ${attempts} fix attempt(s).`,
   "ci.retryPrompt": (attempts) =>
     `CI still failing after ${attempts} fix attempt(s). Keep trying?`,
+  "ci.timeoutRetryPrompt": (seconds) =>
+    `CI checks still pending after ${seconds}s. Keep waiting?`,
+  "ci.agentErrorRetryPrompt": (detail) =>
+    `Agent error during CI fix: ${detail}. Retry?`,
   "ci.agentError": (detail) => `Agent error during CI fix: ${detail}`,
   "squash.completed": "Commits squashed and CI passed.",
   "squash.singleCommitSkip": "Single commit — skipping squash.",
