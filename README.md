@@ -157,9 +157,12 @@ force-pushes) or **manual resolution**. Agent rebase is limited to
 one attempt per run when the agent completes or reports `BLOCKED`;
 a bare agent process failure surfaces the error detail and leaves
 the attempt budget intact so the user can retry. After any
-resolution, CI is re-validated; if the CI fix loop exhausts its
-budget, the user is asked whether to keep trying before cleanup
-runs, so a transient CI failure never silently ends the session.
+resolution, CI is re-validated; whenever the post-rebase CI poll
+cannot proceed — fix budget exhausted, pending timeout, or an agent
+error during findings review or fix — the user is asked whether to
+keep trying (timeout resumes polling; agent-error retries the same
+step; exhaustion resets the fix counter) before cleanup runs, so
+none of those branches can silently end the session.
 Once the user confirms the PR has been merged, the orchestrator
 stops any running services (e.g., Docker Compose), deletes the git
 worktree and its branch, and ends the agent sessions.  See

@@ -89,6 +89,8 @@ describe("catalogs are complete", () => {
       "ci.pendingTimeout": [30],
       "ci.stillFailing": [3],
       "ci.retryPrompt": [3],
+      "ci.timeoutRetryPrompt": [600],
+      "ci.agentErrorRetryPrompt": ["crash"],
       "ci.agentError": ["timeout"],
       "review.approved": [2],
       "review.unresolvedItems": ["Review approved.", "item 1"],

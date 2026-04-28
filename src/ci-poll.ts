@@ -80,17 +80,39 @@ export interface CiPollOptions {
   /** Pipeline event emitter for diagnostic events. */
   events?: PipelineEventEmitter;
   /**
-   * Optional callback invoked when the fix-attempt budget is
-   * exhausted.  When set, the caller is asked whether to reset the
-   * attempt counter and keep trying instead of returning a failure.
+   * Optional callback invoked when CI cannot proceed via the normal
+   * fix loop — exhausted fix budget, pending timeout, or an agent
+   * error during findings review or fix.  When set, the caller is
+   * asked whether to keep trying instead of returning a failure.
    *
-   * Returning `true` resets `fixAttempts` and continues the loop;
-   * returning `false` falls through to the existing `passed: false`
-   * path.  Only wired from Stage 9 — stages 7 and 8 already present
-   * the engine's `dispatchError` prompt and must not double-ask.
+   * Returning `true` resumes the loop using the per-reason retry
+   * semantics described in {@link ConfirmRetryInfo}; returning
+   * `false` (or omitting the callback) falls through to the existing
+   * `passed: false` path.  Only wired from Stage 9 — stages 7 and 8
+   * already present the engine's `dispatchError` prompt and must
+   * not double-ask.
    */
-  confirmRetry?: (attempts: number, message: string) => Promise<boolean>;
+  confirmRetry?: (info: ConfirmRetryInfo) => Promise<boolean>;
 }
+
+/**
+ * Discriminated reason for which {@link CiPollOptions.confirmRetry}
+ * is being invoked.  Each reason carries the metadata its prompt
+ * needs to render and is mapped to a distinct retry semantic:
+ *
+ * - `exhausted` — the fix-attempt budget hit `maxFixAttempts`.
+ *   Retry resets the counter to 0 and re-enters the fix loop.
+ * - `timeout` — `pollTimeoutMs` elapsed while CI was still pending.
+ *   Retry resumes the polling loop without consuming any budget.
+ * - `agent_error` — the agent process itself failed during a
+ *   findings-review or fix turn.  Retry re-runs the same step and
+ *   the relevant counter is decremented to undo the pre-increment
+ *   so a permanent failure cannot prematurely exhaust the budget.
+ */
+export type ConfirmRetryInfo =
+  | { reason: "exhausted"; attempts: number; message: string }
+  | { reason: "timeout"; seconds: number; message: string }
+  | { reason: "agent_error"; detail: string; message: string };
 
 export interface CiPollResult {
   /** Whether CI ultimately passed. */
@@ -238,10 +260,22 @@ export async function pollCiAndFix(
     });
 
     if (timedOut) {
-      return {
-        passed: false,
-        message: t()["ci.pendingTimeout"](Math.round(pollTimeout / 1000)),
-      };
+      const timeoutSeconds = Math.round(pollTimeout / 1000);
+      const timeoutMessage = t()["ci.pendingTimeout"](timeoutSeconds);
+      if (options.confirmRetry) {
+        const keepWaiting = await options.confirmRetry({
+          reason: "timeout",
+          seconds: timeoutSeconds,
+          message: timeoutMessage,
+        });
+        if (keepWaiting) {
+          // Resume polling.  HEAD SHA is re-read at the top of the
+          // outer loop, so a fix that landed during the timeout
+          // window is automatically picked up.
+          continue;
+        }
+      }
+      return { passed: false, message: timeoutMessage };
     }
 
     if (
@@ -295,10 +329,23 @@ export async function pollCiAndFix(
       if (reviewResult.status === "error") {
         logAgentFailure(reviewResult, "during CI findings review");
         const detail = buildErrorDetail(reviewResult);
-        return {
-          passed: false,
-          message: t()["ci.agentError"](detail),
-        };
+        const errorMessage = t()["ci.agentError"](detail);
+        if (options.confirmRetry) {
+          const keepTrying = await options.confirmRetry({
+            reason: "agent_error",
+            detail,
+            message: errorMessage,
+          });
+          if (keepTrying) {
+            // Re-run the same findings-review step.  Undo the
+            // pre-increment of `findingsReviews` so a permanent
+            // agent failure cannot silently exhaust the review
+            // budget across user-confirmed retries.
+            findingsReviews--;
+            continue;
+          }
+        }
+        return { passed: false, message: errorMessage };
       }
 
       const shaAfterReview = readHeadSha(ctx.worktreePath);
@@ -316,10 +363,11 @@ export async function pollCiAndFix(
     if (fixAttempts >= maxFix) {
       const exhaustedMessage = t()["ci.stillFailing"](maxFix);
       if (options.confirmRetry) {
-        const keepTrying = await options.confirmRetry(
-          fixAttempts,
-          exhaustedMessage,
-        );
+        const keepTrying = await options.confirmRetry({
+          reason: "exhausted",
+          attempts: fixAttempts,
+          message: exhaustedMessage,
+        });
         if (keepTrying) {
           // Reset the budget and loop once more before re-checking CI.
           fixAttempts = 0;
@@ -374,10 +422,22 @@ export async function pollCiAndFix(
     if (fixResult.status === "error") {
       logAgentFailure(fixResult, "during CI fix");
       const detail = buildErrorDetail(fixResult);
-      return {
-        passed: false,
-        message: t()["ci.agentError"](detail),
-      };
+      const errorMessage = t()["ci.agentError"](detail);
+      if (options.confirmRetry) {
+        const keepTrying = await options.confirmRetry({
+          reason: "agent_error",
+          detail,
+          message: errorMessage,
+        });
+        if (keepTrying) {
+          // Re-run the same fix step.  Undo the pre-increment of
+          // `fixAttempts` so a permanent agent failure cannot
+          // silently exhaust the fix budget across retries.
+          fixAttempts--;
+          continue;
+        }
+      }
+      return { passed: false, message: errorMessage };
     }
 
     // Agent pushed a fix — loop back to poll CI again.

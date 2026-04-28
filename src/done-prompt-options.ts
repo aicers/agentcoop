@@ -1,3 +1,5 @@
+import type { ConfirmRetryInfo } from "./ci-poll.js";
+import { t } from "./i18n/index.js";
 import type { DoneStageOptions, UserPrompt } from "./pipeline.js";
 
 /**
@@ -54,4 +56,24 @@ export function createDonePromptOptions(
       if (tuiPrompt) return tuiPrompt.waitForManualResolve(msg);
     },
   };
+}
+
+/**
+ * Map a {@link ConfirmRetryInfo} record to the localized prompt
+ * string shown in Stage 9's keep-trying confirmation.  Centralised
+ * so a missing `reason` branch is caught here as a TypeScript error
+ * and verified by a focused unit test, instead of silently falling
+ * through to a fallback in `index.ts` where it would not surface in
+ * either ci-poll or pipeline tests.
+ */
+export function buildDoneConfirmRetryPrompt(info: ConfirmRetryInfo): string {
+  const m = t();
+  switch (info.reason) {
+    case "exhausted":
+      return m["ci.retryPrompt"](info.attempts);
+    case "timeout":
+      return m["ci.timeoutRetryPrompt"](info.seconds);
+    case "agent_error":
+      return m["ci.agentErrorRetryPrompt"](info.detail);
+  }
 }
