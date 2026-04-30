@@ -1338,27 +1338,34 @@ cleanup stays in Stage 9.
 
 **Envelope-driven SUGGESTED_SINGLE shortcut:** Before running the
 verdict turn, the handler scans the work response for the
-`<<<TITLE>>>` / `<<<BODY>>>` envelope.  Detection is **strict** —
-all four tags must appear on their own lines, in the order
-TITLE_OPEN → TITLE_CLOSE → BODY_OPEN → BODY_CLOSE — so that prose
-which merely mentions the tag names (e.g. backtick-quoted in a
-multi-commit reply explaining why the envelope was not used) is
-not mistaken for an envelope attempt.  Three outcomes:
+`<<<TITLE>>>` / `<<<BODY>>>` envelope.  Detection keys off a
+`<<<TITLE>>>` open tag on its own line — prose that merely names
+the tags mid-sentence or in backticks (e.g. a multi-commit reply
+explaining why the envelope was not used) never produces a tag on
+a line by itself, so it does not register as envelope intent.
+Once envelope intent is declared, the parser walks the structure
+and classifies the response as one of three outcomes:
 
-- **Well-formed envelope** → agentcoop calls
+- **Well-formed envelope** (TITLE_OPEN → TITLE_CLOSE → BODY_OPEN
+  → BODY_CLOSE all present on their own lines, in order, with
+  non-empty content) → agentcoop calls
   `buildSquashSuggestionComment` to render the canonical marker
   block (asserts round-trip parseability as defense-in-depth),
   then `postOrUpdateSquashSuggestion` PATCHes the prior comment by
-  id (when one exists) or POSTs a fresh one.  The verdict turn is
-  skipped — the envelope is the SUGGESTED_SINGLE signal — and the
-  handler proceeds directly to the user-choice path.  A
-  `pipeline:verdict` event with keyword `SUGGESTED_SINGLE` is
-  emitted so telemetry consumers see the verdict.
-- **Malformed envelope** (all four tags on their own lines and in
-  order, but content is empty — empty title or empty body) → send
-  one focused **clarification turn** asking the agent to reply
-  with either a valid envelope or a `SQUASHED_MULTI` /
-  `BLOCKED` keyword (no other commentary).  Re-parse the retry:
+  id (when one exists) or POSTs a fresh one.  A transient lookup
+  failure inside the write helper (auth, network, rate-limit) is
+  surfaced as a `blocked` outcome rather than POSTing a duplicate
+  suggestion comment.  The verdict turn is skipped — the envelope
+  is the SUGGESTED_SINGLE signal — and the handler proceeds
+  directly to the user-choice path.  A `pipeline:verdict` event
+  with keyword `SUGGESTED_SINGLE` is emitted so telemetry
+  consumers see the verdict.
+- **Malformed envelope** (envelope intent declared but the
+  structure is broken: a missing close tag, an absent body
+  section, or empty title / body content) → send one focused
+  **clarification turn** asking the agent to reply with either a
+  valid envelope or a `SQUASHED_MULTI` / `BLOCKED` keyword (no
+  other commentary).  Re-parse the retry:
   - Valid envelope → author and post the comment, proceed to the
     user-choice path.
   - `SQUASHED_MULTI` keyword → run the CI poll path.
@@ -1368,12 +1375,18 @@ not mistaken for an envelope attempt.  Three outcomes:
     with `blocked` and surface both responses for diagnostics.
   The clarification preserves the recoverable-mistake path the
   verdict-clarification round already provides, so a single
-  formatting slip does not dump the user into "Give instruction /
-  Halt" with no context.
-- **Envelope absent** → fall through to the existing verdict /
-  clarification chain.  Envelope absence on its own is not a
-  SUGGESTED_SINGLE signal: the agent could be in the
-  SQUASHED_MULTI branch, or BLOCKED, or simply ambiguous.
+  formatting slip — including a dropped close tag, exactly the
+  failure mode that caused the original issue — does not dump the
+  user into "Give instruction / Halt" with no context.  Falling
+  through to the verdict path instead would either hard-block
+  opaquely (when the verdict comes back as SUGGESTED_SINGLE
+  without an envelope to draw from) or quietly reuse a stale
+  prior suggestion comment from an earlier run.
+- **Envelope absent** (no `<<<TITLE>>>` tag on its own line) →
+  fall through to the existing verdict / clarification chain.
+  Envelope absence on its own is not a SUGGESTED_SINGLE signal:
+  the agent could be in the SQUASHED_MULTI branch, or BLOCKED,
+  or simply ambiguous.
 
 **Verdict handling** (only reached when the envelope is absent):
 

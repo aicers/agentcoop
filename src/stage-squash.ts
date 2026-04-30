@@ -554,50 +554,72 @@ function findOwnLineTag(lines: string[], tag: string, start: number): number {
  * Parse the agent's `<<<TITLE>>>...<<</TITLE>>> / <<<BODY>>>...<<</BODY>>>`
  * envelope from a free-form response.
  *
- * Detection is strict by design: each of the four tags must appear
- * as a line by itself, in the order
- * TITLE_OPEN → TITLE_CLOSE → BODY_OPEN → BODY_CLOSE, before the
- * response is treated as an envelope attempt at all.  This rejects
- * stray prose mentions like "I did not use the `<<<TITLE>>>` envelope"
- * — those classify as `missing` and the caller falls through to the
- * verdict flow rather than hard-blocking on a multi-commit reply that
- * happens to quote the tags.
+ * Detection treats a `<<<TITLE>>>` open tag *on its own line* as a
+ * clear declaration of envelope intent: stray prose like "I did not
+ * use the `<<<TITLE>>>` envelope" mentions the tag inline (mid-line,
+ * backtick-quoted, or both) and never produces a tag on its own
+ * line, so it classifies as `missing` and falls through to the
+ * verdict flow.  Once envelope intent is declared, a missing close
+ * tag, missing body section, or empty content classifies as
+ * `malformed` so the caller's focused clarification turn can fire —
+ * a dropped line is exactly the recoverable formatting mistake
+ * issue #304 wants the agent to be able to repair.
  *
  * Returns:
- *   - `{ kind: "missing" }` when the strict shape is not present
- *     (tags inline in prose, any tag absent, or out-of-order).  The
- *     caller should fall through to the verdict flow: envelope
- *     absence on its own is not a SUGGESTED_SINGLE signal.
- *   - `{ kind: "malformed", reason }` when the four tags are present
- *     on their own lines and in order but the content between them
- *     is unusable (empty title or body).  The caller should send a
- *     focused clarification rather than blocking outright — the agent
- *     declared intent to use the envelope, so a missed line is
- *     usually recoverable on retry.
+ *   - `{ kind: "missing" }` when no `<<<TITLE>>>` tag appears on its
+ *     own line.  The caller falls through to the verdict flow:
+ *     envelope absence on its own is not a SUGGESTED_SINGLE signal,
+ *     and prose that merely names the tags is not envelope intent.
+ *   - `{ kind: "malformed", reason }` when envelope intent is
+ *     declared (TITLE_OPEN on its own line) but the structure is
+ *     broken — a close tag missing, body section absent, body open
+ *     before the title closes, or empty title/body content.  The
+ *     caller should send a focused clarification rather than
+ *     blocking outright.
  *   - `{ kind: "ok", suggestion }` on a well-formed envelope.
  */
 export function parseSquashEnvelope(text: string): SquashEnvelopeResult {
   const lines = text.split("\n");
   const titleOpenIdx = findOwnLineTag(lines, ENVELOPE_TITLE_OPEN, 0);
   if (titleOpenIdx === -1) return { kind: "missing" };
+  // From here on the agent has declared envelope intent (an open tag
+  // on its own line is not something prose mentions produce).  Any
+  // subsequent structural break is a recoverable formatting mistake,
+  // not "no envelope at all", so it must classify as `malformed` to
+  // route into the clarification turn.
   const titleCloseIdx = findOwnLineTag(
     lines,
     ENVELOPE_TITLE_CLOSE,
     titleOpenIdx + 1,
   );
-  if (titleCloseIdx === -1) return { kind: "missing" };
+  if (titleCloseIdx === -1) {
+    return {
+      kind: "malformed",
+      reason: "missing <<</TITLE>>> close tag after <<<TITLE>>>",
+    };
+  }
   const bodyOpenIdx = findOwnLineTag(
     lines,
     ENVELOPE_BODY_OPEN,
     titleCloseIdx + 1,
   );
-  if (bodyOpenIdx === -1) return { kind: "missing" };
+  if (bodyOpenIdx === -1) {
+    return {
+      kind: "malformed",
+      reason: "missing <<<BODY>>> open tag after the title envelope",
+    };
+  }
   const bodyCloseIdx = findOwnLineTag(
     lines,
     ENVELOPE_BODY_CLOSE,
     bodyOpenIdx + 1,
   );
-  if (bodyCloseIdx === -1) return { kind: "missing" };
+  if (bodyCloseIdx === -1) {
+    return {
+      kind: "malformed",
+      reason: "missing <<</BODY>>> close tag after <<<BODY>>>",
+    };
+  }
 
   const title = lines
     .slice(titleOpenIdx + 1, titleCloseIdx)
@@ -681,6 +703,15 @@ export interface PostOrUpdateSquashSuggestionDeps {
  * exists and exposes its id, edit it via PATCH so the PR timeline
  * does not accumulate duplicate suggestion comments.  Otherwise,
  * post a fresh comment.
+ *
+ * Errors from the lookup propagate to the caller — they are NOT
+ * swallowed into "no prior comment".  Issue #304 reviewer round 2
+ * called out the original swallow behaviour: a transient auth /
+ * network / rate-limit failure during lookup would otherwise be
+ * indistinguishable from "no matching comment", and the helper would
+ * happily POST a fresh comment, creating duplicates on the PR
+ * timeline on every blip.  The handler converts the error into a
+ * `blocked` outcome instead.
  *
  * If the prior-comment lookup returns a body without an id (older
  * fixtures, manual stubs), this falls back to POST — the caller will
@@ -841,9 +872,23 @@ export function createSquashStageHandler(
       const countCommits = opts.countBranchCommits ?? defaultCountBranchCommits;
       const findSuggestionCommentBody =
         opts.findSuggestionCommentBody ??
-        ((owner, repo, prNumber, marker) =>
-          defaultFindLatestCommentWithMarker(owner, repo, prNumber, marker)
-            ?.body);
+        ((owner, repo, prNumber, marker) => {
+          // Read-side: a transient lookup failure here only affects
+          // resume/fallback decisions, so silently degrading to "no
+          // matching comment" is acceptable.  The write side, by
+          // contrast, must let the error propagate so it does not
+          // turn into a duplicate POST.
+          try {
+            return defaultFindLatestCommentWithMarker(
+              owner,
+              repo,
+              prNumber,
+              marker,
+            )?.body;
+          } catch {
+            return undefined;
+          }
+        });
       const findPrNumber = opts.findPrNumber ?? defaultFindPrNumber;
       const postSuggestionComment =
         opts.postSuggestionComment ?? postOrUpdateSquashSuggestion;
@@ -1017,18 +1062,23 @@ export function createSquashStageHandler(
       // contract where the agent posted the comment itself and the
       // verdict turn carried "I posted it" semantics.
       //
-      // The detection in `parseSquashEnvelope` is strict — it requires
-      // all four tags on their own lines, in order — so prose that
-      // merely mentions the tag names (e.g. "I did not use the
-      // `<<<TITLE>>>` envelope" in a multi-commit reply) classifies as
-      // `missing` and falls through to the existing verdict flow.
-      // SQUASHED_MULTI and BLOCKED keep their behaviour.
+      // The detection in `parseSquashEnvelope` keys off a `<<<TITLE>>>`
+      // open tag on its own line — prose that merely mentions the tag
+      // names (e.g. backtick-quoted "I did not use the `<<<TITLE>>>`
+      // envelope" in a multi-commit reply) never produces a tag on a
+      // line by itself, so it classifies as `missing` and falls through
+      // to the verdict flow.  SQUASHED_MULTI and BLOCKED keep their
+      // behaviour.
       //
-      // When the shape is present but content is empty (the only
-      // remaining `malformed` case), send a focused clarification
-      // before giving up so the agent has a chance to repair a
-      // formatting-only mistake — issue #304 reviewer round 1
-      // explicitly preserves that recovery path.
+      // Once envelope intent is declared, any structural break (a
+      // missing close tag, an absent body section, or empty content)
+      // classifies as `malformed` and routes into the focused
+      // clarification turn rather than the verdict flow.  This is what
+      // issue #304 reviewer round 2 called out: a dropped close tag is
+      // exactly the recoverable mistake the clarification round was
+      // meant to repair, and falling through to the verdict path
+      // instead either hard-blocks opaquely or reuses a stale prior
+      // suggestion comment.
 
       /**
        * Author the marker-delimited PR comment from a parsed envelope
@@ -1063,7 +1113,23 @@ export function createSquashStageHandler(
             "buildSquashSuggestionComment produced an unparseable block — formatter / parser are out of sync",
           );
         }
-        postSuggestionComment(ctx.owner, ctx.repo, prNumber, commentBody);
+        // The write helper looks up the prior suggestion comment to
+        // decide between PATCH and POST.  A transient `gh` failure
+        // during that lookup MUST surface as an error here rather than
+        // being silently treated as "no prior comment" — otherwise the
+        // PR would accumulate duplicate suggestion comments on every
+        // network blip.  Convert any thrown error into a `blocked`
+        // outcome with the failure surfaced for the user.
+        try {
+          postSuggestionComment(ctx.owner, ctx.repo, prNumber, commentBody);
+        } catch (err) {
+          opts.onSquashSubStep?.(undefined);
+          const detail = err instanceof Error ? err.message : String(err);
+          return {
+            outcome: "blocked",
+            message: `${rawResponseText}\n\n---\n\nSquash-suggestion comment lookup or post failed: ${detail}.  Resolve the underlying gh / GitHub error and retry — agentcoop refused to POST a fresh comment to avoid creating a duplicate suggestion.`,
+          };
+        }
         verdictCtx?.events.emit("pipeline:verdict", {
           agent: verdictCtx.agent,
           keyword: "SUGGESTED_SINGLE",

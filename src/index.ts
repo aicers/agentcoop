@@ -876,15 +876,22 @@ try {
     getSquashMergeHint: () => {
       if (runState.squashSubStep !== "applied_via_github") return undefined;
       const prNum = runState.prNumber ?? findPrNumber(owner, repo, wt.branch);
-      const commentBody =
-        prNum !== undefined
-          ? findLatestCommentWithMarker(
-              owner,
-              repo,
-              prNum,
-              SQUASH_SUGGESTION_START_MARKER,
-            )?.body
-          : undefined;
+      // Read-side: silently degrade to "no comment" on transient
+      // lookup failure; this hint is purely cosmetic and the write
+      // side has its own error-propagating path.
+      let commentBody: string | undefined;
+      if (prNum !== undefined) {
+        try {
+          commentBody = findLatestCommentWithMarker(
+            owner,
+            repo,
+            prNum,
+            SQUASH_SUGGESTION_START_MARKER,
+          )?.body;
+        } catch {
+          commentBody = undefined;
+        }
+      }
       const suggestion = parseSquashSuggestionBlock(commentBody);
       const prUrl =
         prNum !== undefined

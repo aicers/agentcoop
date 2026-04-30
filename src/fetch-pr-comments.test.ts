@@ -96,12 +96,16 @@ describe("findLatestCommentWithMarker", () => {
     });
   });
 
-  test("returns undefined when the gh call throws", () => {
+  test("propagates errors when the gh call throws", () => {
+    // Issue #304 reviewer round 2: lookup failures must surface to the
+    // caller so the write side can distinguish "no matching comment"
+    // from "lookup failed" and refuse to POST a duplicate suggestion
+    // comment on a transient API blip.
     mockExecFileSync.mockImplementation(() => {
       throw new Error("boom");
     });
-    expect(
-      findLatestCommentWithMarker("org", "repo", 1, MARKER),
-    ).toBeUndefined();
+    expect(() => findLatestCommentWithMarker("org", "repo", 1, MARKER)).toThrow(
+      "boom",
+    );
   });
 });

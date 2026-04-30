@@ -18,19 +18,33 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   failures where a missing end marker or unterminated fence in the
   agent-authored comment would silently flip the stage to
   `blocked` after the verdict cleanly returned `SUGGESTED_SINGLE`.
-  Envelope detection is strict — all four tags must appear on
-  their own lines, in order — so a multi-commit reply that merely
-  mentions the tag names in prose still falls through to the
-  existing verdict flow instead of pre-empting it with a
-  malformed-envelope block.  When the shape is detected but
-  content is empty, the stage sends one focused clarification turn
-  asking for either a valid envelope or a SQUASHED_MULTI / BLOCKED
-  keyword before blocking, preserving the recoverable-mistake path
-  that the verdict-clarification round already provides.
+  Envelope detection keys off a `<<<TITLE>>>` open tag on its own
+  line — prose that merely mentions the tag names mid-sentence or
+  in backticks never produces a tag on a line by itself, so a
+  multi-commit reply that quotes the tags still falls through to
+  the existing verdict flow instead of pre-empting it with a
+  malformed-envelope block.  Once envelope intent is declared, any
+  structural break (a missing close tag, an absent body section,
+  empty title or body content) classifies as malformed and routes
+  into a focused clarification turn that asks for either a valid
+  envelope or a SQUASHED_MULTI / BLOCKED keyword.  This preserves
+  the recoverable-mistake path the verdict-clarification round
+  already provides — a dropped close tag is exactly the kind of
+  formatting-only mistake the clarification turn was meant to
+  repair.
 - `findLatestCommentWithMarker` now returns `{ id, body }` instead
   of just the body so callers that need to PATCH an existing
   comment can do so without a second lookup.  Read-only callers
-  destructure `.body`.
+  destructure `.body`.  Errors from the underlying `gh api` call
+  propagate to the caller — they are no longer swallowed into
+  `undefined`.  Write-side callers like `postOrUpdateSquashSuggestion`
+  must distinguish "no matching comment" from "lookup failed" so a
+  transient auth / network / rate-limit failure does not turn an
+  idempotent PATCH into a duplicate POST; the squash stage converts
+  any thrown lookup error into a `blocked` outcome instead.
+  Read-only callers (`getSquashMergeHint` in `index.ts`, the
+  in-handler `findSuggestionCommentBody` adapter) wrap the call in
+  `try`/`catch` to silently degrade to "no matching comment".
 
 ## [0.2.0] - 2026-04-29
 

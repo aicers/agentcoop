@@ -145,8 +145,17 @@ export function patchPrComment(
  * Find the most recent PR comment whose body contains `marker`.
  *
  * Returns `{ id, body }` for the latest matching comment (the last one
- * in chronological order returned by `gh`), or `undefined` when no
- * comment matches, the PR cannot be resolved, or the API call fails.
+ * in chronological order returned by `gh`), or `undefined` only when
+ * the lookup succeeded and no comment matched.
+ *
+ * Errors from the underlying `gh api` call (network, auth, rate
+ * limit) propagate to the caller — they are NOT swallowed into
+ * `undefined`.  Write-side callers like
+ * `postOrUpdateSquashSuggestion` must distinguish "no matching
+ * comment" from "lookup failed" so a transient failure does not turn
+ * an idempotent PATCH into a duplicate POST.  Read-only callers that
+ * prefer to silently degrade should wrap this with `try`/`catch`
+ * themselves.
  *
  * The id is required by callers that want to PATCH the comment
  * idempotently rather than posting a new one; read-only callers can
@@ -160,12 +169,7 @@ export function findLatestCommentWithMarker(
   prNumber: number,
   marker: string,
 ): { id: number | undefined; body: string } | undefined {
-  let comments: PrComment[];
-  try {
-    comments = fetchPrComments(owner, repo, prNumber);
-  } catch {
-    return undefined;
-  }
+  const comments = fetchPrComments(owner, repo, prNumber);
   let latest: { id: number | undefined; body: string } | undefined;
   for (const c of comments) {
     if (c.body.includes(marker)) latest = { id: c.id, body: c.body };

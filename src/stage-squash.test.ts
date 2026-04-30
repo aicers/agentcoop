@@ -2212,19 +2212,40 @@ describe("parseSquashEnvelope", () => {
     expect(parseSquashEnvelope(text)).toEqual({ kind: "missing" });
   });
 
-  test("returns missing when TITLE close tag is absent (treated as not-an-envelope)", () => {
-    // Under strict shape detection, an absent close tag is
-    // indistinguishable from "the agent did not use the envelope".
-    // The caller falls through to the verdict flow rather than
-    // hard-blocking.
+  // Issue #304 reviewer round 2: when the TITLE_OPEN tag is on its own
+  // line, the agent has clearly declared envelope intent — that is not
+  // something stray prose produces.  A subsequent missing close tag,
+  // missing body section, or out-of-order tag is a recoverable
+  // formatting mistake, so it must classify as `malformed` and route
+  // into the clarification turn rather than `missing` (which would
+  // fall through to the verdict path and either hard-block opaquely
+  // or reuse a stale prior suggestion comment).
+  test("returns malformed when TITLE close tag is absent", () => {
     const text = "<<<TITLE>>>\nFix widget\n\n<<<BODY>>>\nB\n<<</BODY>>>";
-    expect(parseSquashEnvelope(text)).toEqual({ kind: "missing" });
+    const result = parseSquashEnvelope(text);
+    expect(result.kind).toBe("malformed");
+    if (result.kind === "malformed") {
+      expect(result.reason).toContain("<<</TITLE>>>");
+    }
   });
 
-  test("returns missing when BODY close tag is absent (treated as not-an-envelope)", () => {
+  test("returns malformed when BODY close tag is absent", () => {
     const text =
       "<<<TITLE>>>\nFix widget\n<<</TITLE>>>\n\n<<<BODY>>>\nFirst line.";
-    expect(parseSquashEnvelope(text)).toEqual({ kind: "missing" });
+    const result = parseSquashEnvelope(text);
+    expect(result.kind).toBe("malformed");
+    if (result.kind === "malformed") {
+      expect(result.reason).toContain("<<</BODY>>>");
+    }
+  });
+
+  test("returns malformed when BODY section is absent after a closed title envelope", () => {
+    const text = "<<<TITLE>>>\nFix widget\n<<</TITLE>>>\n\nplain prose";
+    const result = parseSquashEnvelope(text);
+    expect(result.kind).toBe("malformed");
+    if (result.kind === "malformed") {
+      expect(result.reason).toContain("<<<BODY>>>");
+    }
   });
 
   test("returns malformed for empty title", () => {
@@ -2316,6 +2337,30 @@ describe("postOrUpdateSquashSuggestion", () => {
 
     expect(patch).not.toHaveBeenCalled();
     expect(post).toHaveBeenCalledWith("org", "repo", 42, "new body");
+  });
+
+  // Issue #304 reviewer round 2: a transient `gh` failure during the
+  // prior-comment lookup must NOT be silently treated as "no prior
+  // comment".  Doing so would turn an idempotent PATCH into a
+  // duplicate POST on every transient blip, defeating the whole point
+  // of moving the bookkeeping into deterministic code.
+  test("propagates errors from findLatest and does not POST a duplicate", () => {
+    const findLatest = vi.fn().mockImplementation(() => {
+      throw new Error("rate limited");
+    });
+    const patch = vi.fn();
+    const post = vi.fn();
+
+    expect(() =>
+      postOrUpdateSquashSuggestion("org", "repo", 42, "new body", {
+        findLatest,
+        patch,
+        post,
+      }),
+    ).toThrow("rate limited");
+
+    expect(patch).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
   });
 });
 
@@ -2641,5 +2686,154 @@ describe("envelope-driven SUGGESTED_SINGLE flow", () => {
     expect(result.outcome).toBe("completed");
     expect(opts.agent.resume).toHaveBeenCalled();
     expect(opts.postSuggestionComment).not.toHaveBeenCalled();
+  });
+
+  // Issue #304 reviewer round 2 #1: a work response that clearly
+  // started the envelope (TITLE_OPEN on its own line) but dropped a
+  // close tag must route into the focused clarification turn, not
+  // fall through to the old verdict path.  Falling through would
+  // either hard-block opaquely (when the verdict comes back as
+  // SUGGESTED_SINGLE without an envelope to draw from) or quietly
+  // reuse a stale prior suggestion comment from an earlier run.
+  test("envelope with missing TITLE close tag → clarification asked, recovers on valid retry", async () => {
+    const malformed = [
+      "<<<TITLE>>>",
+      "Fix widget",
+      "", // dropped closing tag
+      "<<<BODY>>>",
+      "Body content",
+      "<<</BODY>>>",
+    ].join("\n");
+    const repaired = [
+      "<<<TITLE>>>",
+      "Fix widget",
+      "<<</TITLE>>>",
+      "",
+      "<<<BODY>>>",
+      "Body content",
+      "<<</BODY>>>",
+    ].join("\n");
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-squash",
+            responseText: malformed,
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: repaired }))),
+    };
+    const postSuggestionComment = vi.fn();
+    const chooseSquashApplyMode = vi.fn().mockResolvedValue("github");
+    const opts = makeOpts({
+      agent,
+      postSuggestionComment,
+      chooseSquashApplyMode,
+    });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    // The clarification turn fired exactly once — not the verdict
+    // turn.  resume is the only follow-up channel in the test
+    // adapter, so this also implicitly asserts the verdict path was
+    // skipped.
+    expect(agent.resume).toHaveBeenCalledTimes(1);
+    expect(postSuggestionComment).toHaveBeenCalledTimes(1);
+    const postedBody = postSuggestionComment.mock.calls[0][3] as string;
+    expect(postedBody).toContain("Fix widget");
+    expect(postedBody).toContain("Body content");
+  });
+
+  test("envelope with missing BODY close tag → clarification asked", async () => {
+    const malformed = [
+      "<<<TITLE>>>",
+      "Fix widget",
+      "<<</TITLE>>>",
+      "",
+      "<<<BODY>>>",
+      "Body content",
+      // dropped closing tag
+    ].join("\n");
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-squash",
+            responseText: malformed,
+          }),
+        ),
+      ),
+      // Retry says SQUASHED_MULTI — agent reconsidered and chose the
+      // multi-commit branch instead of repairing the envelope.
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "SQUASHED_MULTI" })),
+        ),
+    };
+    const postSuggestionComment = vi.fn();
+    const opts = makeOpts({ agent, postSuggestionComment });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    // Clarification fires (resume called once for clarification only,
+    // not for verdict) and SQUASHED_MULTI on retry routes into the
+    // CI-poll path with no comment posted.
+    expect(result.outcome).toBe("completed");
+    expect(agent.resume).toHaveBeenCalledTimes(1);
+    expect(postSuggestionComment).not.toHaveBeenCalled();
+  });
+
+  // Issue #304 reviewer round 2 #2: a transient lookup failure inside
+  // the write helper must surface as a `blocked` outcome, not a
+  // duplicate POST.  The handler converts the thrown error into a
+  // user-facing blocked message.
+  test("postSuggestionComment lookup throw → blocked, no duplicate POST", async () => {
+    const envelopeText = [
+      "<<<TITLE>>>",
+      "Fix widget",
+      "<<</TITLE>>>",
+      "",
+      "<<<BODY>>>",
+      "Body content",
+      "<<</BODY>>>",
+    ].join("\n");
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-squash",
+            responseText: envelopeText,
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+    const postSuggestionComment = vi.fn().mockImplementation(() => {
+      throw new Error("rate limited during lookup");
+    });
+    const onSquashSubStep = vi.fn();
+    const opts = makeOpts({
+      agent,
+      postSuggestionComment,
+      onSquashSubStep,
+    });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.message).toContain("rate limited during lookup");
+    expect(result.message).toContain("duplicate");
+    // The user-choice flow was never entered.
+    const states = onSquashSubStep.mock.calls.map((c) => c[0]);
+    expect(states).not.toContain("awaiting_user_choice");
+    expect(states[states.length - 1]).toBe(undefined);
+    // Verdict turn was not used to recover (the shortcut owned the
+    // SUGGESTED_SINGLE branch), and resume must not have been called.
+    expect(agent.resume).not.toHaveBeenCalled();
   });
 });
