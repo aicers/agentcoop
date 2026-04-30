@@ -142,16 +142,18 @@ The standard PR sync instructions appear in stages 5 through 8:
 
 The squash stage extends this contract with a marker-delimited
 **squash suggestion block**.  When a single commit is the right
-shape for the branch, the agent posts the proposed title and body
-as a PR comment whose body contains the marker block
-`<!-- agentcoop:squash-suggestion:start -->` …
-`<!-- agentcoop:squash-suggestion:end -->` instead of force-pushing.
-The comment is updated idempotently — re-runs PATCH any prior
-squash-suggestion comment rather than appending a new one so the
-timeline stays close to the "Squash and merge" dropdown.  The
-Stage 9 merge-confirm screen reads this block back so the user can
-apply the message via GitHub's "Squash and merge" without opening
-the browser.
+shape for the branch, the agent drafts the proposed title and body
+inside a `<<<TITLE>>>` / `<<<BODY>>>` envelope in its reply, and
+agentcoop authors the marker-delimited PR comment
+(`<!-- agentcoop:squash-suggestion:start -->` …
+`<!-- agentcoop:squash-suggestion:end -->`) from those fields
+deterministically — fence sizing, marker placement, and idempotent
+PATCH/POST bookkeeping are all owned by the code, not the agent.
+Re-runs PATCH any prior squash-suggestion comment rather than
+appending a new one so the timeline stays close to the "Squash and
+merge" dropdown.  The Stage 9 merge-confirm screen reads this block
+back so the user can apply the message via GitHub's "Squash and
+merge" without opening the browser.
 
 ### Issue-implementation reconciliation
 
@@ -1259,11 +1261,12 @@ avoiding re-execution of already-completed work within a round.
 
 **Agent:** A\
 **Purpose:** Decide whether the branch is best presented as a
-single squash commit (in which case the agent posts the suggested
-message as a PR comment and lets GitHub's "Squash and merge"
-apply it at merge time) or several meaningful commits (rewrite
-history and force-push).  Skipped automatically if the branch has
-only one commit.
+single squash commit (in which case the agent drafts the suggested
+title and body and agentcoop posts the marker-delimited PR comment,
+letting GitHub's "Squash and merge" apply the message at merge
+time) or several meaningful commits (rewrite history and
+force-push).  Skipped automatically if the branch has only one
+commit.
 
 The single-commit suggestion path was added to avoid wasting an
 extra CI cycle on a force-push that GitHub's "Squash and merge"
@@ -1276,37 +1279,25 @@ The work prompt asks the agent to:
 1. Sync the PR description (standard PR-sync instructions).
 2. Decide whether the work belongs in **one** commit or **several**.
 3. Branch on that decision:
-   - **Single commit appropriate:** do not rewrite history.  Draft
-     the squash title and body, then post them as a PR comment whose
-     body contains the marker block
-     `<!-- agentcoop:squash-suggestion:start -->` …
-     `<!-- agentcoop:squash-suggestion:end -->`.  Inside the marker
-     block, each field is wrapped in its own CommonMark fenced code
-     block under a `**Title**` / `**Body**` label.  GitHub renders a
-     one-click copy icon on a fenced block, and the fence preserves
-     content verbatim so Markdown-active characters (`*`, `` ` ``,
-     `_`, leading `#`, `>`, backslashes) survive a drag-select
-     paste.
-
-     The opening and closing fence length is computed independently
-     for each field as
-     `fence_len = max(longest run of backticks in the content, 2) + 1`
-     (minimum 3).  This lets a body that itself contains a
-     triple-backtick code sample (e.g. a README excerpt) round up
-     to a four-or-more-backtick outer fence so the inner fence does
-     not close the outer block early.  Stage 9 reads the same block
-     via `parseSquashSuggestionBlock`, which mirrors the CommonMark
-     rule (closing fence ≥ opening, same character).  Only the
-     fenced format is accepted — the earlier `**Title:** …` /
-     `**Body:** …` plain-text format was supported for one release
-     cycle and has since been removed; a stale legacy block is
-     treated as missing.
-
-     Post idempotently: if a prior comment with the same start
-     marker exists, edit it via `gh api --method PATCH
-     /repos/{owner}/{repo}/issues/comments/{id}` so the timeline
-     does not accumulate duplicates.  The PR body is left untouched.
-     Do not force-push.
+   - **Single commit appropriate:** do not rewrite history, do not
+     force-push, and do not post or edit any PR comment yourself.
+     Draft the squash title and body, then reply with them wrapped
+     in a `<<<TITLE>>>...<<</TITLE>>>` / `<<<BODY>>>...<<</BODY>>>`
+     envelope.  agentcoop parses the envelope, builds the
+     marker-delimited PR comment from those fields
+     (`<!-- agentcoop:squash-suggestion:start -->` …
+     `<!-- agentcoop:squash-suggestion:end -->`, with each field
+     under a `**Title**` / `**Body**` label inside its own fenced
+     code block), and PATCH/POSTs the comment idempotently.  Fence
+     sizing follows the CommonMark rule
+     `fence_len = max(longest backtick run in content, 2) + 1`
+     (minimum 3) so a body that itself contains triple-backtick
+     samples gets a four-or-more-backtick outer fence and the inner
+     fence cannot close the outer block early.  Stage 9 reads the
+     same block via `parseSquashSuggestionBlock` (closing fence ≥
+     opening, same character) to render the inline preview.  The
+     formatter and parser are pinned in lock-step by a round-trip
+     unit test.
    - **Multiple commits appropriate:** consolidate the branch
      commits — using `git reset --soft {baseSha}` + `git commit` or
      interactive rebase — write clear messages, and force-push
@@ -1321,8 +1312,8 @@ of the following keywords:
 - SQUASHED_MULTI — if you rewrote history into multiple meaningful
   commits and force-pushed
 - SUGGESTED_SINGLE — if a single commit is appropriate and you
-  posted the suggested title/body as a PR comment containing the
-  marker block (no force-push)
+  drafted the suggested title and body in the
+  `<<<TITLE>>>` / `<<<BODY>>>` envelope (no force-push)
 - BLOCKED — if you could not complete either path and need user
   intervention
 
@@ -1345,24 +1336,52 @@ open PR.  Stage 8 cannot reuse Stage 9's `ensurePrStillOpen`
 helper because the Done stage owns the worktree lifecycle —
 cleanup stays in Stage 9.
 
-**Verdict handling:**
+**Envelope-driven SUGGESTED_SINGLE shortcut:** Before running the
+verdict turn, the handler scans the work response for the
+`<<<TITLE>>>` / `<<<BODY>>>` envelope.  Three outcomes:
+
+- **Well-formed envelope** → agentcoop calls
+  `buildSquashSuggestionComment` to render the canonical marker
+  block (asserts round-trip parseability as defense-in-depth),
+  then `postOrUpdateSquashSuggestion` PATCHes the prior comment by
+  id (when one exists) or POSTs a fresh one.  The verdict turn is
+  skipped — the envelope is the SUGGESTED_SINGLE signal — and the
+  handler proceeds directly to the user-choice path.  A
+  `pipeline:verdict` event with keyword `SUGGESTED_SINGLE` is
+  emitted so telemetry consumers see the verdict.
+- **Malformed envelope** (at least one of the four tags present,
+  but the envelope cannot be parsed — missing close tag, empty
+  title, empty body, etc.) → fail closed with `blocked` and an
+  actionable error message.  The agent has signalled intent to
+  take the SUGGESTED_SINGLE branch; falling through to the verdict
+  turn would silently mask the formatting failure.
+- **Envelope absent** → fall through to the existing verdict /
+  clarification chain.  Envelope absence on its own is not a
+  SUGGESTED_SINGLE signal: the agent could be in the
+  SQUASHED_MULTI branch, or BLOCKED, or simply ambiguous.
+
+**Verdict handling** (only reached when the envelope is absent):
 
 - `SQUASHED_MULTI` → poll CI after the force-push (existing
   behaviour, up to 3 internal fix attempts) and finish with
   `squash.completed` when CI passes.
-- `SUGGESTED_SINGLE` → verify a fully parseable suggestion block is
-  present in the squash-suggestion PR comment before asking the
-  user.  "Parseable" means both markers are present **and**
-  `parseSquashSuggestionBlock` succeeds (the block contains a
-  `**Title**` label followed by a well-formed fenced block).  A
-  bare start marker or a block missing the `**Title**` label / the
-  end marker fails closed with `blocked` rather than completing as
-  if the suggestion were valid — Stage 9 reads the same block via
-  `parseSquashSuggestionBlock` to render the inline preview, so a
-  malformed block would leave the merge-confirm screen blank.  Once
-  validated, ask the user via `chooseSquashApplyMode` (skipped when
-  the startup `squashApplyPolicy` is `"auto"`, in which case the
-  handler proceeds as if the user picked `"agent"`):
+- `SUGGESTED_SINGLE` → defense-in-depth check that a fully
+  parseable suggestion block is present in the squash-suggestion
+  PR comment before asking the user.  "Parseable" means both
+  markers are present **and** `parseSquashSuggestionBlock`
+  succeeds (the block contains a `**Title**` label followed by a
+  well-formed fenced block).  A bare start marker or a block
+  missing the `**Title**` label / the end marker fails closed
+  with `blocked` rather than completing as if the suggestion were
+  valid — Stage 9 reads the same block to render the inline
+  preview, so a malformed block would leave the merge-confirm
+  screen blank.  This path runs only when an earlier run (or the
+  legacy agent-authored fallback) left a comment behind; on the
+  primary path, the comment was just authored by agentcoop and
+  has already been asserted parseable.  Once validated, ask the
+  user via `chooseSquashApplyMode` (skipped when the startup
+  `squashApplyPolicy` is `"auto"`, in which case the handler
+  proceeds as if the user picked `"agent"`):
   - **"Agent squashes now"** → send a follow-up prompt on the
     same session telling the agent to perform the squash using
     the message it already drafted, then run the post-squash CI
@@ -1400,12 +1419,14 @@ the fallback chain.
 **`SquashSubStep` state machine:**
 
 ```text
-planning → verdict
-        ├── (SQUASHED_MULTI)   → ci_poll → done
-        ├── (SUGGESTED_SINGLE) → awaiting_user_choice
-        │       ├── (agent)  → squashing → ci_poll → done
-        │       └── (github) → applied_via_github (stage done)
-        └── (BLOCKED)         → user chooses
+planning ──┬── (envelope ok)         → awaiting_user_choice
+           │       ├── (agent)  → squashing → ci_poll → done
+           │       └── (github) → applied_via_github (stage done)
+           ├── (envelope malformed)  → blocked
+           └── (envelope absent)     → verdict
+                ├── (SQUASHED_MULTI)   → ci_poll → done
+                ├── (SUGGESTED_SINGLE) → awaiting_user_choice (as above)
+                └── (BLOCKED)          → user chooses
 ```
 
 `RunState.squashSubStep` persists the current substate so resume

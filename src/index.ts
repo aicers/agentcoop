@@ -883,7 +883,7 @@ try {
               repo,
               prNum,
               SQUASH_SUGGESTION_START_MARKER,
-            )
+            )?.body
           : undefined;
       const suggestion = parseSquashSuggestionBlock(commentBody);
       const prUrl =

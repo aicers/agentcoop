@@ -6,8 +6,11 @@ import { PipelineEventEmitter } from "./pipeline-events.js";
 import {
   buildSquashCompletionCheckPrompt,
   buildSquashPrompt,
+  buildSquashSuggestionComment,
   createSquashStageHandler,
+  parseSquashEnvelope,
   parseSquashSuggestionBlock,
+  postOrUpdateSquashSuggestion,
   SQUASH_SUGGESTION_END_MARKER,
   SQUASH_SUGGESTION_START_MARKER,
   type SquashStageOptions,
@@ -115,13 +118,32 @@ describe("buildSquashPrompt", () => {
     expect(prompt).toContain("The widget is broken.");
   });
 
-  test("includes both squash paths and the marker block contract", () => {
+  test("includes both squash paths and the SUGGESTED_SINGLE envelope contract", () => {
     const prompt = buildSquashPrompt(BASE_CTX, makeOpts());
     expect(prompt).toContain("If a single commit is appropriate");
     expect(prompt).toContain("If multiple commits are appropriate");
     expect(prompt).toContain("Force-push the branch");
-    expect(prompt).toContain("agentcoop:squash-suggestion:start");
-    expect(prompt).toContain("agentcoop:squash-suggestion:end");
+    expect(prompt).toContain("<<<TITLE>>>");
+    expect(prompt).toContain("<<</TITLE>>>");
+    expect(prompt).toContain("<<<BODY>>>");
+    expect(prompt).toContain("<<</BODY>>>");
+  });
+
+  // Negative assertions: the SUGGESTED_SINGLE branch no longer asks the
+  // agent to author the marker-delimited PR comment itself.  Marker
+  // placement, fence-length math, and idempotent PATCH/POST bookkeeping
+  // are now deterministic concerns owned by `buildSquashSuggestionComment`
+  // / `postOrUpdateSquashSuggestion`.  Use `not.toContain` so this test
+  // does not break on copy edits to the surrounding prose.
+  test("SUGGESTED_SINGLE prompt no longer references marker / gh comment / fence math", () => {
+    const prompt = buildSquashPrompt(BASE_CTX, makeOpts());
+    expect(prompt).not.toContain("squash-suggestion:start");
+    expect(prompt).not.toContain("squash-suggestion:end");
+    expect(prompt).not.toContain("gh pr comment");
+    expect(prompt).not.toContain("gh api repos");
+    expect(prompt).not.toContain("--method PATCH");
+    expect(prompt).not.toContain("fence_len");
+    expect(prompt).not.toContain("longest run of backticks");
   });
 
   test("includes PR description sync instructions", () => {
@@ -2047,5 +2069,428 @@ describe("parseSquashSuggestionBlock", () => {
       "more noise",
     ].join("\n");
     expect(parseSquashSuggestionBlock(body)).toBeUndefined();
+  });
+
+  // Combined regression for the screenshot incident on
+  // aicers/aice-web-next#377: the agent-authored comment was missing
+  // both the closing body fence AND the end marker.  Either flaw on its
+  // own is already covered by an earlier case; the combined failure is
+  // the one that actually shipped, so pin it directly.
+  test("returns undefined when the body fence is unterminated AND the end marker is absent", () => {
+    const body = [
+      "noise",
+      SQUASH_SUGGESTION_START_MARKER,
+      "## Suggested squash commit",
+      "",
+      "**Title**",
+      "",
+      "```text",
+      "Fix widget rendering",
+      "```",
+      "",
+      "**Body**",
+      "",
+      "```text",
+      "First line.",
+      "",
+      "Closes #42",
+      // intentionally no closing body fence
+      // intentionally no SQUASH_SUGGESTION_END_MARKER
+      "more noise",
+    ].join("\n");
+    expect(parseSquashSuggestionBlock(body)).toBeUndefined();
+  });
+});
+
+// ---- buildSquashSuggestionComment + round-trip ------------------------------
+
+describe("buildSquashSuggestionComment ↔ parseSquashSuggestionBlock round-trip", () => {
+  // Round-trip is the single strongest guarantee that the formatter and
+  // parser stay in lock-step.  If one is changed without the other, one
+  // of these cases fails — including the malformed-comment regression
+  // class that motivated issue #304.
+  function roundTrip(suggestion: { title: string; body: string }) {
+    const built = buildSquashSuggestionComment(suggestion);
+    const parsed = parseSquashSuggestionBlock(built);
+    expect(parsed).toEqual(suggestion);
+  }
+
+  test("plain title and body", () => {
+    roundTrip({
+      title: "Fix widget rendering",
+      body: "First line.\n\nCloses #42",
+    });
+  });
+
+  test("body containing a triple-backtick fenced code sample", () => {
+    roundTrip({
+      title: "Improve docs",
+      body: "Repro:\n\n```js\nfoo();\n```\n\nCloses #1",
+    });
+  });
+
+  test("body containing a five-backtick run", () => {
+    roundTrip({
+      title: "Handle large fences",
+      body: "Look at this nesting:\n\n`````\ninner\n`````\n\nPart of #9",
+    });
+  });
+
+  test("body containing HTML comments", () => {
+    roundTrip({
+      title: "Preserve HTML comments",
+      body:
+        "<!-- review note: please check edge case -->\n\n" +
+        "Closes #42\n\n<!-- end -->",
+    });
+  });
+
+  test("title containing inline backticks (fence stays at 3)", () => {
+    roundTrip({
+      title: "Rename `foo` to `bar`",
+      body: "See #9",
+    });
+  });
+
+  test("body containing the start marker as a literal string", () => {
+    // Defensive: even if the agent's prose contains the start marker,
+    // the closing end marker still terminates the block correctly
+    // because the parser anchors on the first end-marker occurrence
+    // after the start.
+    roundTrip({
+      title: "Document the marker block",
+      body: `The marker is \`${SQUASH_SUGGESTION_START_MARKER}\`.`,
+    });
+  });
+});
+
+// ---- parseSquashEnvelope ----------------------------------------------------
+
+describe("parseSquashEnvelope", () => {
+  test("returns ok for a well-formed envelope", () => {
+    const text = [
+      "Some prose before.",
+      "",
+      "<<<TITLE>>>",
+      "Fix widget",
+      "<<</TITLE>>>",
+      "",
+      "<<<BODY>>>",
+      "First line.",
+      "",
+      "Closes #1",
+      "<<</BODY>>>",
+    ].join("\n");
+    expect(parseSquashEnvelope(text)).toEqual({
+      kind: "ok",
+      suggestion: { title: "Fix widget", body: "First line.\n\nCloses #1" },
+    });
+  });
+
+  test("returns missing when no envelope tag appears", () => {
+    expect(parseSquashEnvelope("just plain text, no envelope")).toEqual({
+      kind: "missing",
+    });
+  });
+
+  test("returns malformed for missing TITLE close tag", () => {
+    const text = "<<<TITLE>>>\nFix widget\n\n<<<BODY>>>\nB\n<<</BODY>>>";
+    const result = parseSquashEnvelope(text);
+    expect(result.kind).toBe("malformed");
+    if (result.kind === "malformed") {
+      expect(result.reason).toContain("</TITLE>");
+    }
+  });
+
+  test("returns malformed for missing BODY close tag", () => {
+    const text =
+      "<<<TITLE>>>\nFix widget\n<<</TITLE>>>\n\n<<<BODY>>>\nFirst line.";
+    const result = parseSquashEnvelope(text);
+    expect(result.kind).toBe("malformed");
+    if (result.kind === "malformed") {
+      expect(result.reason).toContain("</BODY>");
+    }
+  });
+
+  test("returns malformed for empty title", () => {
+    const text = "<<<TITLE>>>\n   \n<<</TITLE>>>\n\n<<<BODY>>>\nB\n<<</BODY>>>";
+    const result = parseSquashEnvelope(text);
+    expect(result.kind).toBe("malformed");
+    if (result.kind === "malformed") {
+      expect(result.reason).toContain("title");
+    }
+  });
+
+  test("returns malformed for empty body", () => {
+    const text = "<<<TITLE>>>\nT\n<<</TITLE>>>\n\n<<<BODY>>>\n\n\n<<</BODY>>>";
+    const result = parseSquashEnvelope(text);
+    expect(result.kind).toBe("malformed");
+    if (result.kind === "malformed") {
+      expect(result.reason).toContain("body");
+    }
+  });
+
+  test("preserves internal blank lines in body and strips leading/trailing", () => {
+    const text =
+      "<<<TITLE>>>\nT\n<<</TITLE>>>\n\n<<<BODY>>>\n\nfirst\n\nsecond\n\n<<</BODY>>>";
+    expect(parseSquashEnvelope(text)).toEqual({
+      kind: "ok",
+      suggestion: { title: "T", body: "first\n\nsecond" },
+    });
+  });
+});
+
+// ---- postOrUpdateSquashSuggestion -------------------------------------------
+
+describe("postOrUpdateSquashSuggestion", () => {
+  test("PATCHes the existing comment when one with the start marker exists", () => {
+    const findLatest = vi
+      .fn()
+      .mockReturnValue({ id: 555, body: "stale body with marker" });
+    const patch = vi.fn();
+    const post = vi.fn();
+
+    postOrUpdateSquashSuggestion("org", "repo", 42, "new body", {
+      findLatest,
+      patch,
+      post,
+    });
+
+    expect(findLatest).toHaveBeenCalledWith(
+      "org",
+      "repo",
+      42,
+      SQUASH_SUGGESTION_START_MARKER,
+    );
+    expect(patch).toHaveBeenCalledTimes(1);
+    expect(patch).toHaveBeenCalledWith("org", "repo", 555, "new body");
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  test("POSTs a new comment when no prior comment matches", () => {
+    const findLatest = vi.fn().mockReturnValue(undefined);
+    const patch = vi.fn();
+    const post = vi.fn();
+
+    postOrUpdateSquashSuggestion("org", "repo", 42, "fresh body", {
+      findLatest,
+      patch,
+      post,
+    });
+
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith("org", "repo", 42, "fresh body");
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  test("falls back to POST when prior comment lacks an id", () => {
+    // Older fixtures (and stub adapters) may surface a body without
+    // the comment id.  Without an id we cannot PATCH, so the helper
+    // falls back to POST rather than throwing.
+    const findLatest = vi
+      .fn()
+      .mockReturnValue({ id: undefined, body: "stale" });
+    const patch = vi.fn();
+    const post = vi.fn();
+
+    postOrUpdateSquashSuggestion("org", "repo", 42, "new body", {
+      findLatest,
+      patch,
+      post,
+    });
+
+    expect(patch).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledWith("org", "repo", 42, "new body");
+  });
+});
+
+// ---- envelope-driven SUGGESTED_SINGLE in createSquashStageHandler ----------
+
+describe("envelope-driven SUGGESTED_SINGLE flow", () => {
+  function makeEnvelopeAgent(envelope: string): AgentAdapter {
+    return {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-squash",
+            responseText: envelope,
+          }),
+        ),
+      ),
+      // Follow-up resume for the agent-squash branch.
+      resume: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-followup",
+            responseText: "Squashed and pushed.",
+          }),
+        ),
+      ),
+    };
+  }
+
+  test("agent returns envelope → code authors comment, skips verdict turn, asks user", async () => {
+    const envelopeText = [
+      "Looking at the branch...",
+      "",
+      "<<<TITLE>>>",
+      "Fix the widget",
+      "<<</TITLE>>>",
+      "",
+      "<<<BODY>>>",
+      "Refactor renderer.",
+      "",
+      "Closes #42",
+      "<<</BODY>>>",
+    ].join("\n");
+    const agent = makeEnvelopeAgent(envelopeText);
+    const postSuggestionComment = vi.fn();
+    const chooseSquashApplyMode = vi.fn().mockResolvedValue("github");
+    const onSquashSubStep = vi.fn();
+    const opts = makeOpts({
+      agent,
+      chooseSquashApplyMode,
+      postSuggestionComment,
+      onSquashSubStep,
+    });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    // Verdict turn was skipped because the envelope was present.
+    expect(agent.resume).not.toHaveBeenCalled();
+    // The code authored the comment and posted it via the injectable.
+    expect(postSuggestionComment).toHaveBeenCalledTimes(1);
+    const [postedOwner, postedRepo, postedPr, postedBody] =
+      postSuggestionComment.mock.calls[0];
+    expect(postedOwner).toBe("org");
+    expect(postedRepo).toBe("repo");
+    expect(postedPr).toBe(42);
+    // Round-trip: the parser must agree with what the formatter wrote.
+    expect(parseSquashSuggestionBlock(postedBody)).toEqual({
+      title: "Fix the widget",
+      body: "Refactor renderer.\n\nCloses #42",
+    });
+    expect(chooseSquashApplyMode).toHaveBeenCalledTimes(1);
+    const states = onSquashSubStep.mock.calls.map((c) => c[0]);
+    expect(states).toContain("planning");
+    expect(states).toContain("awaiting_user_choice");
+    expect(states[states.length - 1]).toBe("applied_via_github");
+  });
+
+  test("agent returns envelope + user picks agent → follow-up resumes the planning session", async () => {
+    const envelopeText =
+      "<<<TITLE>>>\nT\n<<</TITLE>>>\n\n<<<BODY>>>\nB\n<<</BODY>>>";
+    const agent = makeEnvelopeAgent(envelopeText);
+    const postSuggestionComment = vi.fn();
+    const chooseSquashApplyMode = vi.fn().mockResolvedValue("agent");
+    const opts = makeOpts({
+      agent,
+      chooseSquashApplyMode,
+      postSuggestionComment,
+    });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(result.message).toContain("CI passed");
+    // No verdict turn — only the agent-squash follow-up resume.
+    expect(agent.resume).toHaveBeenCalledTimes(1);
+    expect((agent.resume as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe(
+      "sess-squash",
+    );
+    expect(postSuggestionComment).toHaveBeenCalledTimes(1);
+  });
+
+  test("envelope present + pipeline:verdict event surfaces SUGGESTED_SINGLE", async () => {
+    const envelopeText =
+      "<<<TITLE>>>\nT\n<<</TITLE>>>\n\n<<<BODY>>>\nB\n<<</BODY>>>";
+    const agent = makeEnvelopeAgent(envelopeText);
+    const events = new PipelineEventEmitter();
+    const handler = vi.fn();
+    events.on("pipeline:verdict", handler);
+    const opts = makeOpts({
+      agent,
+      postSuggestionComment: vi.fn(),
+      chooseSquashApplyMode: vi.fn().mockResolvedValue("github"),
+    });
+    const stage = createSquashStageHandler(opts);
+    await stage.handler({ ...BASE_CTX, events });
+
+    const keywords = handler.mock.calls.map((c) => c[0].keyword);
+    expect(keywords).toContain("SUGGESTED_SINGLE");
+  });
+
+  // Malformed envelope → blocked with an actionable message.  Cover the
+  // three categories the issue calls out: missing close tag, empty title,
+  // empty body.
+  test.each([
+    {
+      name: "missing TITLE close tag",
+      envelope: "<<<TITLE>>>\nFix widget\n\n<<<BODY>>>\nB\n<<</BODY>>>",
+      expectedFragment: "</TITLE>",
+    },
+    {
+      name: "empty title",
+      envelope: "<<<TITLE>>>\n   \n<<</TITLE>>>\n\n<<<BODY>>>\nB\n<<</BODY>>>",
+      expectedFragment: "title",
+    },
+    {
+      name: "empty body",
+      envelope: "<<<TITLE>>>\nT\n<<</TITLE>>>\n\n<<<BODY>>>\n\n<<</BODY>>>",
+      expectedFragment: "body",
+    },
+  ])("malformed envelope ($name) → blocked, no comment posted, no user choice", async ({
+    envelope,
+    expectedFragment,
+  }) => {
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-squash",
+            responseText: envelope,
+          }),
+        ),
+      ),
+      resume: vi.fn(),
+    };
+    const postSuggestionComment = vi.fn();
+    const chooseSquashApplyMode = vi.fn();
+    const onSquashSubStep = vi.fn();
+    const opts = makeOpts({
+      agent,
+      postSuggestionComment,
+      chooseSquashApplyMode,
+      onSquashSubStep,
+    });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.message).toContain("envelope malformed");
+    expect(result.message).toContain(expectedFragment);
+    // The verdict turn must NOT have run — the malformed envelope
+    // already declares intent to take the SUGGESTED_SINGLE branch.
+    expect(agent.resume).not.toHaveBeenCalled();
+    expect(postSuggestionComment).not.toHaveBeenCalled();
+    expect(chooseSquashApplyMode).not.toHaveBeenCalled();
+    const states = onSquashSubStep.mock.calls.map((c) => c[0]);
+    expect(states).not.toContain("awaiting_user_choice");
+    expect(states).not.toContain("applied_via_github");
+    expect(states[states.length - 1]).toBe(undefined);
+  });
+
+  test("envelope absent → falls through to existing verdict flow", async () => {
+    // Plain "Plan." response with no envelope tags should not trigger
+    // the new envelope-driven shortcut.  The verdict turn runs as
+    // before and the SQUASHED_MULTI branch proceeds to CI poll.
+    const opts = makeOpts({ postSuggestionComment: vi.fn() });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(opts.agent.resume).toHaveBeenCalled();
+    expect(opts.postSuggestionComment).not.toHaveBeenCalled();
   });
 });

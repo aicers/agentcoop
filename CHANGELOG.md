@@ -4,6 +4,25 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Stage 8 (Squash) no longer asks the agent to author the
+  marker-delimited squash-suggestion PR comment.  The agent now
+  drafts the title and body inside a `<<<TITLE>>>` / `<<<BODY>>>`
+  envelope, and agentcoop builds the marker block (with correct
+  fence sizing) and PATCH/POSTs the comment idempotently.  The
+  formatter and parser are pinned in lock-step by a round-trip
+  unit test.  This eliminates a class of malformed-comment
+  failures where a missing end marker or unterminated fence in the
+  agent-authored comment would silently flip the stage to
+  `blocked` after the verdict cleanly returned `SUGGESTED_SINGLE`.
+- `findLatestCommentWithMarker` now returns `{ id, body }` instead
+  of just the body so callers that need to PATCH an existing
+  comment can do so without a second lookup.  Read-only callers
+  destructure `.body`.
+
 ## [0.2.0] - 2026-04-29
 
 ### Added
@@ -263,5 +282,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial public release of AgentCoop.
 
+[Unreleased]: https://github.com/aicers/agentcoop/compare/0.2.0...HEAD
 [0.2.0]: https://github.com/aicers/agentcoop/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/aicers/agentcoop/tree/0.1.0

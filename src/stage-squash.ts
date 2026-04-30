@@ -37,7 +37,11 @@ import {
   queryPrState as defaultQueryPrState,
   type PrLifecycleState,
 } from "./pr.js";
-import { findLatestCommentWithMarker as defaultFindLatestCommentWithMarker } from "./pr-comments.js";
+import {
+  findLatestCommentWithMarker as defaultFindLatestCommentWithMarker,
+  patchPrComment as defaultPatchPrComment,
+  postPrComment as defaultPostPrComment,
+} from "./pr-comments.js";
 import type { SquashSubStep } from "./run-state.js";
 import {
   invokeOrResume,
@@ -92,9 +96,10 @@ export interface SquashStageOptions {
   countBranchCommits?: (cwd: string, baseBranch: string) => number;
   /**
    * Look up the squash-suggestion PR comment body containing `marker`.
-   * Injected for testability.  Defaults to
-   * `pr-comments.findLatestCommentWithMarker`, which shells out to
-   * `gh api` to list PR comments.
+   * Injected for testability.  Returns just the body — the read-side
+   * never needs the comment id, so this stays string-returning even
+   * after the underlying `findLatestCommentWithMarker` was widened to
+   * `{ id, body }`.  The default adapts the widened helper.
    */
   findSuggestionCommentBody?: (
     owner: string,
@@ -102,6 +107,19 @@ export interface SquashStageOptions {
     prNumber: number,
     marker: string,
   ) => string | undefined;
+  /**
+   * Post or update the squash-suggestion PR comment idempotently.
+   * Single entry point for the write side: the implementation looks
+   * up any existing comment with the start marker and either PATCHes
+   * it or POSTs a new one.  Injected for testability — the default
+   * shells out to `gh` via {@link postOrUpdateSquashSuggestion}.
+   */
+  postSuggestionComment?: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+    body: string,
+  ) => void;
   /**
    * Resolve the PR number for the current branch.  Injected for
    * testability.  Defaults to `pr.findPrNumber`.
@@ -203,82 +221,31 @@ export function buildSquashPrompt(
     ``,
     `   **If a single commit is appropriate:**`,
     `   - Do NOT rewrite history.  Do NOT force-push.`,
+    `   - Do NOT post or edit any PR comment yourself — agentcoop will`,
+    `     author the squash-suggestion comment from your reply below.`,
     `   - Draft the commit title and body that should be used when the`,
     `     PR is squash-merged.  The title must not include issue or PR`,
     `     numbers; reference the issue in the body using \`Closes #N\``,
     `     or \`Part of #N\`.`,
-    `   - Post the suggestion as a **PR comment** (not in the PR body).`,
-    `     The comment body must contain a marker-delimited block with`,
-    `     this exact structure:`,
-    ``,
-    `     \`\`\`\`text`,
-    `     ${SQUASH_SUGGESTION_START_MARKER}`,
-    `     ## Suggested squash commit`,
-    ``,
-    `     **Title**`,
+    `   - Reply with the title and body wrapped in this exact envelope`,
+    `     (no fences, no surrounding code blocks, no extra commentary`,
+    `     between the tags):`,
     ``,
     `     \`\`\`text`,
-    `     <your title>`,
+    `     <<<TITLE>>>`,
+    `     <your title on a single line>`,
+    `     <<</TITLE>>>`,
+    ``,
+    `     <<<BODY>>>`,
+    `     <your body, multi-line allowed,`,
+    `     may include \`Closes #N\` / \`Part of #N\`>`,
+    `     <<</BODY>>>`,
     `     \`\`\``,
     ``,
-    `     **Body**`,
-    ``,
-    `     \`\`\`text`,
-    `     <your body — may include \`Closes #N\` / \`Part of #N\`>`,
-    `     \`\`\``,
-    `     ${SQUASH_SUGGESTION_END_MARKER}`,
-    `     \`\`\`\``,
-    ``,
-    `     **Choose each fence length dynamically.**  Per CommonMark, a`,
-    `     fenced code block closes only on a line containing a run of`,
-    `     the same character that is **as long or longer** than the`,
-    `     opening fence.  Commit bodies may legitimately contain code`,
-    `     samples with their own triple-backtick fences, so a fixed`,
-    `     three-backtick outer fence would close early at the first`,
-    `     \`\`\`\` line inside the content.  Compute:`,
-    ``,
-    `       fence_len = max(longest run of backticks in the content, 2) + 1`,
-    ``,
-    `     (minimum 3).  Calculate the title fence length from the`,
-    `     title string and the body fence length from the body string,`,
-    `     independently.  Use the same character (backtick) for both`,
-    `     the opening and closing line of a given block.`,
-    ``,
-    `     Worked example — if the body contains a line of triple`,
-    `     backticks anywhere (e.g. a README excerpt), open and close`,
-    `     the body with **four** backticks; a run of five backticks in`,
-    `     the content requires six on the fence; and so on.  The title`,
-    `     fence typically stays at three.`,
-    ``,
-    `     Do not add a blank line between the opening fence and the`,
-    `     first line of content, or between the last line of content`,
-    `     and the closing fence.  Do not indent the fences.`,
-    ``,
-    `     **Update idempotently.**  This prompt may run more than once`,
-    `     on the same PR.  Before posting, list existing PR comments`,
-    `     and look for a previous squash-suggestion comment — one`,
-    `     whose body contains \`${SQUASH_SUGGESTION_START_MARKER}\`.`,
-    `     If found, edit that comment via`,
-    `     \`gh api --method PATCH /repos/{owner}/{repo}/issues/comments/{id} --field body="..."\``,
-    `     so its body becomes the new suggestion.  If no prior comment`,
-    `     exists, create a fresh one with`,
-    `     \`gh pr comment <pr> --repo <owner>/<repo> --body "..."\`.`,
-    `     Locate any prior comment with:`,
-    ``,
-    `     \`\`\`text`,
-    `     gh api repos/{owner}/{repo}/issues/{pr}/comments --paginate --slurp \\`,
-    `       --jq '[.[] | .[] | select(.body | contains("${SQUASH_SUGGESTION_START_MARKER}"))] | last'`,
-    `     \`\`\``,
-    ``,
-    `     \`--paginate --slurp\` is required: \`--paginate\` alone applies`,
-    `     the \`--jq\` filter page-by-page, so on a long PR timeline`,
-    `     \`| last\` would return the last match within each page rather`,
-    `     than the latest match overall.  \`--slurp\` wraps all pages in`,
-    `     an outer array (\`[[page1...], [page2...]]\`); the \`.[] | .[]\``,
-    `     prefix flattens that before filtering.`,
-    ``,
-    `     Do not write the suggestion into the PR body.  Leave the`,
-    `     PR body untouched.`,
+    `     Both envelopes are required.  Do not nest fenced code blocks`,
+    `     around the envelope.  agentcoop parses the text between the`,
+    `     tags verbatim — leading and trailing blank lines are stripped,`,
+    `     internal blank lines are preserved.`,
     ``,
     `   **If multiple commits are appropriate:**`,
     ...(ctx.baseSha
@@ -331,8 +298,8 @@ export function buildSquashCompletionCheckPrompt(): string {
     `- SQUASHED_MULTI — if you rewrote history into multiple meaningful`,
     `  commits and force-pushed`,
     `- SUGGESTED_SINGLE — if a single commit is appropriate and you`,
-    `  posted the suggested title/body as a PR comment containing`,
-    `  the marker block (no force-push)`,
+    `  drafted the suggested title and body in the <<<TITLE>>>/`,
+    `  <<<BODY>>> envelope (no force-push)`,
     `- BLOCKED — if you could not complete either path and need user`,
     `  intervention`,
     ``,
@@ -343,17 +310,21 @@ export function buildSquashCompletionCheckPrompt(): string {
 /**
  * Follow-up prompt sent on the same session when the user picks
  * "agent squashes now" after a SUGGESTED_SINGLE verdict.  The agent
- * already drafted the message in a PR comment, so this just asks it
- * to perform the squash with the same message.
+ * already drafted the title and body (either as a `<<<TITLE>>>` /
+ * `<<<BODY>>>` envelope on the new path, or as a marker-delimited PR
+ * comment on the legacy fallback path), so this just asks it to
+ * perform the squash with the same message.
  */
 export function buildAgentSquashFollowupPrompt(): string {
   return [
     `The user chose to have you perform the squash now using the title`,
-    `and body you posted in the squash-suggestion PR comment.`,
+    `and body you drafted earlier in this conversation (either via the`,
+    `<<<TITLE>>> / <<<BODY>>> envelope or via the squash-suggestion PR`,
+    `comment).`,
     ``,
     `Squash the branch into a single commit using that exact title and`,
     `body, then force-push (\`git push --force-with-lease\`).  You may`,
-    `leave the squash-suggestion comment on the PR — it does not`,
+    `leave the squash-suggestion PR comment in place — it does not`,
     `interfere with merging.`,
   ].join("\n");
 }
@@ -479,16 +450,217 @@ function readFencedBlock(
  * label followed by a well-formed fenced block that
  * `parseSquashSuggestionBlock` can extract).
  *
- * Stage 8 must use this strict check rather than a marker-presence
- * check because Stage 9 reads the same block via
- * `parseSquashSuggestionBlock` to render the inline preview.  If
- * Stage 8 accepted a malformed block (e.g. only the start marker, or
- * a block missing the `**Title**` label / the end marker), the
- * SUGGESTED_SINGLE path could complete with `applied_via_github`
- * while leaving Stage 9 with nothing to show.
+ * Used as a defense-in-depth assertion immediately after Stage 8
+ * authored the comment itself, and as the gate when the handler
+ * resumes from `awaiting_user_choice` against a comment it did not
+ * just write.  Stage 9 reads the same block via
+ * `parseSquashSuggestionBlock` to render the inline preview, so a
+ * malformed block must not be allowed to flow into
+ * `applied_via_github`.
  */
 function hasValidSuggestionBlock(source: string | undefined): boolean {
   return parseSquashSuggestionBlock(source) !== undefined;
+}
+
+// ---- canonical comment formatter --------------------------------------------
+
+/**
+ * Longest run of backtick characters in `s`.  Used to size CommonMark
+ * fences so a body that itself contains triple-backtick code samples
+ * does not close the outer fence early.
+ */
+function longestBacktickRun(s: string): number {
+  let max = 0;
+  let current = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s.charCodeAt(i) === 0x60 /* ` */) {
+      current++;
+      if (current > max) max = current;
+    } else {
+      current = 0;
+    }
+  }
+  return max;
+}
+
+/**
+ * Build the canonical squash-suggestion PR comment body for
+ * `suggestion`.  The output is:
+ *
+ * - Wrapped in {@link SQUASH_SUGGESTION_START_MARKER} /
+ *   {@link SQUASH_SUGGESTION_END_MARKER}.
+ * - Title and body each appear under their `**Title**` / `**Body**`
+ *   label inside a CommonMark fenced code block.
+ * - Each fence is sized via `max(longest backtick run, 2) + 1`,
+ *   computed independently for title and body, so commit content
+ *   containing triple-backtick samples does not close the outer
+ *   block early.
+ *
+ * The result round-trips through {@link parseSquashSuggestionBlock}.
+ */
+export function buildSquashSuggestionComment(
+  suggestion: SquashSuggestion,
+): string {
+  const titleFenceLen = Math.max(longestBacktickRun(suggestion.title), 2) + 1;
+  const bodyFenceLen = Math.max(longestBacktickRun(suggestion.body), 2) + 1;
+  const titleFence = "`".repeat(titleFenceLen);
+  const bodyFence = "`".repeat(bodyFenceLen);
+  return [
+    SQUASH_SUGGESTION_START_MARKER,
+    "## Suggested squash commit",
+    "",
+    "**Title**",
+    "",
+    `${titleFence}text`,
+    suggestion.title,
+    titleFence,
+    "",
+    "**Body**",
+    "",
+    `${bodyFence}text`,
+    suggestion.body,
+    bodyFence,
+    SQUASH_SUGGESTION_END_MARKER,
+  ].join("\n");
+}
+
+// ---- envelope parser --------------------------------------------------------
+
+/** Result of parsing the `<<<TITLE>>>` / `<<<BODY>>>` agent envelope. */
+export type SquashEnvelopeResult =
+  | { kind: "missing" }
+  | { kind: "malformed"; reason: string }
+  | { kind: "ok"; suggestion: SquashSuggestion };
+
+const ENVELOPE_TITLE_OPEN = "<<<TITLE>>>";
+const ENVELOPE_TITLE_CLOSE = "<<</TITLE>>>";
+const ENVELOPE_BODY_OPEN = "<<<BODY>>>";
+const ENVELOPE_BODY_CLOSE = "<<</BODY>>>";
+
+/**
+ * Parse the agent's `<<<TITLE>>>...<<</TITLE>>> / <<<BODY>>>...<<</BODY>>>`
+ * envelope from a free-form response.
+ *
+ * Returns:
+ *   - `{ kind: "missing" }` when none of the four envelope tags are
+ *     present.  The caller should fall through to the verdict flow:
+ *     envelope absence on its own is not a SUGGESTED_SINGLE signal.
+ *   - `{ kind: "malformed", reason }` when at least one tag is present
+ *     but the envelope is unparseable (missing close tag, empty title,
+ *     etc.).  The caller should funnel into the blocked path with the
+ *     reason surfaced for diagnostics.
+ *   - `{ kind: "ok", suggestion }` on a well-formed envelope.
+ */
+export function parseSquashEnvelope(text: string): SquashEnvelopeResult {
+  const titleOpen = text.indexOf(ENVELOPE_TITLE_OPEN);
+  const titleClose = text.indexOf(ENVELOPE_TITLE_CLOSE);
+  const bodyOpen = text.indexOf(ENVELOPE_BODY_OPEN);
+  const bodyClose = text.indexOf(ENVELOPE_BODY_CLOSE);
+
+  const anyTag =
+    titleOpen !== -1 ||
+    titleClose !== -1 ||
+    bodyOpen !== -1 ||
+    bodyClose !== -1;
+  if (!anyTag) return { kind: "missing" };
+
+  if (titleOpen === -1) {
+    return { kind: "malformed", reason: "missing <<<TITLE>>> open tag" };
+  }
+  if (titleClose === -1) {
+    return { kind: "malformed", reason: "missing <<</TITLE>>> close tag" };
+  }
+  if (titleClose < titleOpen) {
+    return {
+      kind: "malformed",
+      reason: "<<</TITLE>>> appears before <<<TITLE>>>",
+    };
+  }
+  if (bodyOpen === -1) {
+    return { kind: "malformed", reason: "missing <<<BODY>>> open tag" };
+  }
+  if (bodyClose === -1) {
+    return { kind: "malformed", reason: "missing <<</BODY>>> close tag" };
+  }
+  if (bodyClose < bodyOpen) {
+    return {
+      kind: "malformed",
+      reason: "<<</BODY>>> appears before <<<BODY>>>",
+    };
+  }
+
+  const title = text
+    .slice(titleOpen + ENVELOPE_TITLE_OPEN.length, titleClose)
+    .replace(/^\n+|\n+$/g, "")
+    .trim();
+  const body = text
+    .slice(bodyOpen + ENVELOPE_BODY_OPEN.length, bodyClose)
+    .replace(/^\n+|\n+$/g, "");
+
+  if (title === "") {
+    return { kind: "malformed", reason: "title envelope is empty" };
+  }
+  if (body === "") {
+    return { kind: "malformed", reason: "body envelope is empty" };
+  }
+  return { kind: "ok", suggestion: { title, body } };
+}
+
+// ---- post-or-update helper --------------------------------------------------
+
+/**
+ * Dependencies for {@link postOrUpdateSquashSuggestion}.  Exposed so
+ * unit tests can substitute stub gh adapters without monkey-patching
+ * the module-level imports.
+ */
+export interface PostOrUpdateSquashSuggestionDeps {
+  findLatest?: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+    marker: string,
+  ) => { id: number | undefined; body: string } | undefined;
+  patch?: (owner: string, repo: string, id: number, body: string) => void;
+  post?: (owner: string, repo: string, prNumber: number, body: string) => void;
+}
+
+/**
+ * Idempotent write entry point for the squash-suggestion PR comment.
+ *
+ * Looks up any existing comment whose body contains
+ * {@link SQUASH_SUGGESTION_START_MARKER}.  When a prior comment
+ * exists and exposes its id, edit it via PATCH so the PR timeline
+ * does not accumulate duplicate suggestion comments.  Otherwise,
+ * post a fresh comment.
+ *
+ * If the prior-comment lookup returns a body without an id (older
+ * fixtures, manual stubs), this falls back to POST — the caller will
+ * end up with two comments on the PR but the most recent one wins
+ * for display purposes.  The default lookup always populates id from
+ * the GitHub API response.
+ */
+export function postOrUpdateSquashSuggestion(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  body: string,
+  deps: PostOrUpdateSquashSuggestionDeps = {},
+): void {
+  const findLatest = deps.findLatest ?? defaultFindLatestCommentWithMarker;
+  const patch = deps.patch ?? defaultPatchPrComment;
+  const post = deps.post ?? defaultPostPrComment;
+
+  const existing = findLatest(
+    owner,
+    repo,
+    prNumber,
+    SQUASH_SUGGESTION_START_MARKER,
+  );
+  if (existing && existing.id !== undefined) {
+    patch(owner, repo, existing.id, body);
+    return;
+  }
+  post(owner, repo, prNumber, body);
 }
 
 // ---- handler -----------------------------------------------------------------
@@ -619,8 +791,13 @@ export function createSquashStageHandler(
     handler: async (ctx: StageContext): Promise<StageResult> => {
       const countCommits = opts.countBranchCommits ?? defaultCountBranchCommits;
       const findSuggestionCommentBody =
-        opts.findSuggestionCommentBody ?? defaultFindLatestCommentWithMarker;
+        opts.findSuggestionCommentBody ??
+        ((owner, repo, prNumber, marker) =>
+          defaultFindLatestCommentWithMarker(owner, repo, prNumber, marker)
+            ?.body);
       const findPrNumber = opts.findPrNumber ?? defaultFindPrNumber;
+      const postSuggestionComment =
+        opts.postSuggestionComment ?? postOrUpdateSquashSuggestion;
 
       /**
        * Resolve and fetch the squash-suggestion comment body for the
@@ -778,11 +955,68 @@ export function createSquashStageHandler(
         return mapAgentError(squashResult, "during squash");
       }
 
-      // ---- verdict --------------------------------------------------------
       const verdictCtx: VerdictContext | undefined = ctx.events
         ? { events: ctx.events, agent: "a" }
         : undefined;
 
+      // ---- envelope-driven SUGGESTED_SINGLE shortcut ----------------------
+      //
+      // The agent now hands back a `<<<TITLE>>>...<<</TITLE>>>` /
+      // `<<<BODY>>>...<<</BODY>>>` envelope when it judges a single
+      // commit appropriate, and agentcoop authors the marker-delimited
+      // PR comment from those fields.  This replaces the prior
+      // contract where the agent posted the comment itself and the
+      // verdict turn carried "I posted it" semantics.
+      //
+      // Envelope absence is NOT a SUGGESTED_SINGLE signal — the
+      // agent could be in the SQUASHED_MULTI branch, or BLOCKED, or
+      // simply ambiguous.  Only an `ok` envelope short-circuits to
+      // the user-choice flow; everything else falls through to the
+      // existing verdict / clarification chain so SQUASHED_MULTI and
+      // BLOCKED keep their behaviour.
+      const envelope = parseSquashEnvelope(squashResult.responseText);
+      if (envelope.kind === "malformed") {
+        opts.onSquashSubStep?.(undefined);
+        return {
+          outcome: "blocked",
+          message: `${squashResult.responseText}\n\n---\n\nSquash-suggestion envelope malformed: ${envelope.reason}.  The agent appears to have taken the SUGGESTED_SINGLE branch but the <<<TITLE>>> / <<<BODY>>> envelope could not be parsed.`,
+        };
+      }
+      if (envelope.kind === "ok") {
+        const prNumber = findPrNumber(ctx.owner, ctx.repo, ctx.branch);
+        if (prNumber === undefined) {
+          // No open PR — likely a concurrent merge or a missing PR.
+          // The merged guard would have short-circuited if the PR is
+          // merged; otherwise this is genuinely blocked because the
+          // suggestion cannot be persisted anywhere.
+          const merged = guardIfPrMerged(ctx, opts);
+          if (merged) return merged;
+          opts.onSquashSubStep?.(undefined);
+          return {
+            outcome: "blocked",
+            message: `${squashResult.responseText}\n\n---\n\nSquash-suggestion envelope parsed but no open PR was found for branch ${ctx.branch}; cannot post the suggestion comment.`,
+          };
+        }
+        const commentBody = buildSquashSuggestionComment(envelope.suggestion);
+        // Defense-in-depth: confirm the comment we just authored is
+        // round-trip parseable before publishing it.  The formatter is
+        // unit-tested for this property; the assertion guards against
+        // a future regression sneaking a malformed block into Stage 9.
+        if (!hasValidSuggestionBlock(commentBody)) {
+          throw new Error(
+            "buildSquashSuggestionComment produced an unparseable block — formatter / parser are out of sync",
+          );
+        }
+        postSuggestionComment(ctx.owner, ctx.repo, prNumber, commentBody);
+        verdictCtx?.events.emit("pipeline:verdict", {
+          agent: verdictCtx.agent,
+          keyword: "SUGGESTED_SINGLE",
+          raw: squashResult.responseText,
+        });
+        return askUserAndApply(ctx, opts, squashResult.sessionId);
+      }
+
+      // ---- verdict --------------------------------------------------------
       const handle = await resolveVerdict(
         opts.agent,
         squashResult.sessionId,
