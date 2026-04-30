@@ -538,63 +538,75 @@ const ENVELOPE_BODY_OPEN = "<<<BODY>>>";
 const ENVELOPE_BODY_CLOSE = "<<</BODY>>>";
 
 /**
+ * Find the first line index at or after `start` whose trimmed
+ * contents exactly match `tag`.  Returns -1 when not found.  Used
+ * for envelope tag detection — the trimmed-equality check rejects
+ * inline mentions like a backtick-quoted `<<<TITLE>>>` in prose.
+ */
+function findOwnLineTag(lines: string[], tag: string, start: number): number {
+  for (let i = start; i < lines.length; i++) {
+    if (lines[i].trim() === tag) return i;
+  }
+  return -1;
+}
+
+/**
  * Parse the agent's `<<<TITLE>>>...<<</TITLE>>> / <<<BODY>>>...<<</BODY>>>`
  * envelope from a free-form response.
  *
+ * Detection is strict by design: each of the four tags must appear
+ * as a line by itself, in the order
+ * TITLE_OPEN → TITLE_CLOSE → BODY_OPEN → BODY_CLOSE, before the
+ * response is treated as an envelope attempt at all.  This rejects
+ * stray prose mentions like "I did not use the `<<<TITLE>>>` envelope"
+ * — those classify as `missing` and the caller falls through to the
+ * verdict flow rather than hard-blocking on a multi-commit reply that
+ * happens to quote the tags.
+ *
  * Returns:
- *   - `{ kind: "missing" }` when none of the four envelope tags are
- *     present.  The caller should fall through to the verdict flow:
- *     envelope absence on its own is not a SUGGESTED_SINGLE signal.
- *   - `{ kind: "malformed", reason }` when at least one tag is present
- *     but the envelope is unparseable (missing close tag, empty title,
- *     etc.).  The caller should funnel into the blocked path with the
- *     reason surfaced for diagnostics.
+ *   - `{ kind: "missing" }` when the strict shape is not present
+ *     (tags inline in prose, any tag absent, or out-of-order).  The
+ *     caller should fall through to the verdict flow: envelope
+ *     absence on its own is not a SUGGESTED_SINGLE signal.
+ *   - `{ kind: "malformed", reason }` when the four tags are present
+ *     on their own lines and in order but the content between them
+ *     is unusable (empty title or body).  The caller should send a
+ *     focused clarification rather than blocking outright — the agent
+ *     declared intent to use the envelope, so a missed line is
+ *     usually recoverable on retry.
  *   - `{ kind: "ok", suggestion }` on a well-formed envelope.
  */
 export function parseSquashEnvelope(text: string): SquashEnvelopeResult {
-  const titleOpen = text.indexOf(ENVELOPE_TITLE_OPEN);
-  const titleClose = text.indexOf(ENVELOPE_TITLE_CLOSE);
-  const bodyOpen = text.indexOf(ENVELOPE_BODY_OPEN);
-  const bodyClose = text.indexOf(ENVELOPE_BODY_CLOSE);
+  const lines = text.split("\n");
+  const titleOpenIdx = findOwnLineTag(lines, ENVELOPE_TITLE_OPEN, 0);
+  if (titleOpenIdx === -1) return { kind: "missing" };
+  const titleCloseIdx = findOwnLineTag(
+    lines,
+    ENVELOPE_TITLE_CLOSE,
+    titleOpenIdx + 1,
+  );
+  if (titleCloseIdx === -1) return { kind: "missing" };
+  const bodyOpenIdx = findOwnLineTag(
+    lines,
+    ENVELOPE_BODY_OPEN,
+    titleCloseIdx + 1,
+  );
+  if (bodyOpenIdx === -1) return { kind: "missing" };
+  const bodyCloseIdx = findOwnLineTag(
+    lines,
+    ENVELOPE_BODY_CLOSE,
+    bodyOpenIdx + 1,
+  );
+  if (bodyCloseIdx === -1) return { kind: "missing" };
 
-  const anyTag =
-    titleOpen !== -1 ||
-    titleClose !== -1 ||
-    bodyOpen !== -1 ||
-    bodyClose !== -1;
-  if (!anyTag) return { kind: "missing" };
-
-  if (titleOpen === -1) {
-    return { kind: "malformed", reason: "missing <<<TITLE>>> open tag" };
-  }
-  if (titleClose === -1) {
-    return { kind: "malformed", reason: "missing <<</TITLE>>> close tag" };
-  }
-  if (titleClose < titleOpen) {
-    return {
-      kind: "malformed",
-      reason: "<<</TITLE>>> appears before <<<TITLE>>>",
-    };
-  }
-  if (bodyOpen === -1) {
-    return { kind: "malformed", reason: "missing <<<BODY>>> open tag" };
-  }
-  if (bodyClose === -1) {
-    return { kind: "malformed", reason: "missing <<</BODY>>> close tag" };
-  }
-  if (bodyClose < bodyOpen) {
-    return {
-      kind: "malformed",
-      reason: "<<</BODY>>> appears before <<<BODY>>>",
-    };
-  }
-
-  const title = text
-    .slice(titleOpen + ENVELOPE_TITLE_OPEN.length, titleClose)
+  const title = lines
+    .slice(titleOpenIdx + 1, titleCloseIdx)
+    .join("\n")
     .replace(/^\n+|\n+$/g, "")
     .trim();
-  const body = text
-    .slice(bodyOpen + ENVELOPE_BODY_OPEN.length, bodyClose)
+  const body = lines
+    .slice(bodyOpenIdx + 1, bodyCloseIdx)
+    .join("\n")
     .replace(/^\n+|\n+$/g, "");
 
   if (title === "") {
@@ -604,6 +616,43 @@ export function parseSquashEnvelope(text: string): SquashEnvelopeResult {
     return { kind: "malformed", reason: "body envelope is empty" };
   }
   return { kind: "ok", suggestion: { title, body } };
+}
+
+/**
+ * Build the focused clarification prompt sent when the work response
+ * had the envelope shape but unusable content (empty title or body).
+ *
+ * Asks the agent to either (a) re-send a valid envelope or (b) emit
+ * one of the non-SUGGESTED_SINGLE verdict keywords.  The
+ * SUGGESTED_SINGLE keyword on its own is intentionally NOT offered:
+ * without an envelope we have no content to author the comment from,
+ * so accepting it would just defer the same blocked outcome.
+ */
+export function buildSquashEnvelopeClarificationPrompt(reason: string): string {
+  return [
+    `Your previous reply contained the <<<TITLE>>> / <<<BODY>>>`,
+    `envelope tags but it could not be parsed: ${reason}.`,
+    ``,
+    `Please respond again with EITHER a valid envelope OR one of the`,
+    `non-suggestion verdict keywords below — no other commentary.`,
+    ``,
+    `Option 1 — valid envelope (each tag on its own line, non-empty`,
+    `title and body):`,
+    ``,
+    `<<<TITLE>>>`,
+    `<your title on a single line>`,
+    `<<</TITLE>>>`,
+    ``,
+    `<<<BODY>>>`,
+    `<your body, multi-line allowed>`,
+    `<<</BODY>>>`,
+    ``,
+    `Option 2 — a single keyword on its own line:`,
+    `- SQUASHED_MULTI — if you actually rewrote history into multiple`,
+    `  commits and force-pushed`,
+    `- BLOCKED — if you cannot complete either path and need user`,
+    `  intervention`,
+  ].join("\n");
 }
 
 // ---- post-or-update helper --------------------------------------------------
@@ -968,36 +1017,43 @@ export function createSquashStageHandler(
       // contract where the agent posted the comment itself and the
       // verdict turn carried "I posted it" semantics.
       //
-      // Envelope absence is NOT a SUGGESTED_SINGLE signal — the
-      // agent could be in the SQUASHED_MULTI branch, or BLOCKED, or
-      // simply ambiguous.  Only an `ok` envelope short-circuits to
-      // the user-choice flow; everything else falls through to the
-      // existing verdict / clarification chain so SQUASHED_MULTI and
-      // BLOCKED keep their behaviour.
-      const envelope = parseSquashEnvelope(squashResult.responseText);
-      if (envelope.kind === "malformed") {
-        opts.onSquashSubStep?.(undefined);
-        return {
-          outcome: "blocked",
-          message: `${squashResult.responseText}\n\n---\n\nSquash-suggestion envelope malformed: ${envelope.reason}.  The agent appears to have taken the SUGGESTED_SINGLE branch but the <<<TITLE>>> / <<<BODY>>> envelope could not be parsed.`,
-        };
-      }
-      if (envelope.kind === "ok") {
+      // The detection in `parseSquashEnvelope` is strict — it requires
+      // all four tags on their own lines, in order — so prose that
+      // merely mentions the tag names (e.g. "I did not use the
+      // `<<<TITLE>>>` envelope" in a multi-commit reply) classifies as
+      // `missing` and falls through to the existing verdict flow.
+      // SQUASHED_MULTI and BLOCKED keep their behaviour.
+      //
+      // When the shape is present but content is empty (the only
+      // remaining `malformed` case), send a focused clarification
+      // before giving up so the agent has a chance to repair a
+      // formatting-only mistake — issue #304 reviewer round 1
+      // explicitly preserves that recovery path.
+
+      /**
+       * Author the marker-delimited PR comment from a parsed envelope
+       * and dispatch to the user-choice flow.  Shared by the work-turn
+       * envelope path and the clarification-retry envelope path so the
+       * round-trip assertion, PR resolution, and verdict event stay in
+       * one place.
+       */
+      const applyOkEnvelope = async (
+        suggestion: SquashSuggestion,
+        rawResponseText: string,
+        sessionId: string | undefined,
+      ): Promise<StageResult> => {
         const prNumber = findPrNumber(ctx.owner, ctx.repo, ctx.branch);
         if (prNumber === undefined) {
           // No open PR — likely a concurrent merge or a missing PR.
-          // The merged guard would have short-circuited if the PR is
-          // merged; otherwise this is genuinely blocked because the
-          // suggestion cannot be persisted anywhere.
           const merged = guardIfPrMerged(ctx, opts);
           if (merged) return merged;
           opts.onSquashSubStep?.(undefined);
           return {
             outcome: "blocked",
-            message: `${squashResult.responseText}\n\n---\n\nSquash-suggestion envelope parsed but no open PR was found for branch ${ctx.branch}; cannot post the suggestion comment.`,
+            message: `${rawResponseText}\n\n---\n\nSquash-suggestion envelope parsed but no open PR was found for branch ${ctx.branch}; cannot post the suggestion comment.`,
           };
         }
-        const commentBody = buildSquashSuggestionComment(envelope.suggestion);
+        const commentBody = buildSquashSuggestionComment(suggestion);
         // Defense-in-depth: confirm the comment we just authored is
         // round-trip parseable before publishing it.  The formatter is
         // unit-tested for this property; the assertion guards against
@@ -1011,9 +1067,97 @@ export function createSquashStageHandler(
         verdictCtx?.events.emit("pipeline:verdict", {
           agent: verdictCtx.agent,
           keyword: "SUGGESTED_SINGLE",
-          raw: squashResult.responseText,
+          raw: rawResponseText,
         });
-        return askUserAndApply(ctx, opts, squashResult.sessionId);
+        return askUserAndApply(ctx, opts, sessionId);
+      };
+
+      const envelope = parseSquashEnvelope(squashResult.responseText);
+      if (envelope.kind === "ok") {
+        return applyOkEnvelope(
+          envelope.suggestion,
+          squashResult.responseText,
+          squashResult.sessionId,
+        );
+      }
+      if (envelope.kind === "malformed") {
+        // Shape detected but unusable — give the agent one focused
+        // chance to repair the envelope (or to redeclare a non-
+        // SUGGESTED_SINGLE verdict) before blocking.  Mirrors the
+        // existing verdict-clarification round so a recoverable agent
+        // mistake does not dump the user into "Give instruction /
+        // Halt" with no context.
+        const clarifyPrompt = buildSquashEnvelopeClarificationPrompt(
+          envelope.reason,
+        );
+        ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup", {
+          resume: true,
+        });
+        const retry = await sendFollowUp(
+          opts.agent,
+          squashResult.sessionId,
+          clarifyPrompt,
+          ctx.worktreePath,
+          ctx.streamSinks?.a,
+          undefined,
+          ctx.usageSinks?.a,
+        );
+        if (retry.sessionId) {
+          ctx.onSessionId?.("a", retry.sessionId);
+        }
+        if (retry.status === "error") {
+          return mapAgentError(retry, "during squash envelope clarification");
+        }
+
+        const retrySessionId = retry.sessionId ?? squashResult.sessionId;
+        const retryEnvelope = parseSquashEnvelope(retry.responseText);
+        if (retryEnvelope.kind === "ok") {
+          return applyOkEnvelope(
+            retryEnvelope.suggestion,
+            retry.responseText,
+            retrySessionId,
+          );
+        }
+
+        const retryKeyword = parseVerdictKeyword(
+          retry.responseText,
+          SQUASH_CHECK_KEYWORDS,
+        ).keyword as SquashVerdict | undefined;
+
+        if (retryKeyword === "SQUASHED_MULTI") {
+          verdictCtx?.events.emit("pipeline:verdict", {
+            agent: verdictCtx.agent,
+            keyword: "SQUASHED_MULTI",
+            raw: retry.responseText,
+          });
+          return runCiPollAndFinish(ctx, opts);
+        }
+        if (retryKeyword === "BLOCKED") {
+          verdictCtx?.events.emit("pipeline:verdict", {
+            agent: verdictCtx.agent,
+            keyword: "BLOCKED",
+            raw: retry.responseText,
+          });
+          opts.onSquashSubStep?.(undefined);
+          return {
+            outcome: "blocked",
+            message: `${squashResult.responseText}\n\n---\n\n${retry.responseText}`,
+          };
+        }
+
+        // Either still malformed, missing, or returned the
+        // SUGGESTED_SINGLE keyword without a usable envelope.  None of
+        // these give us content to author the comment from, so block
+        // with the original parse reason surfaced for diagnostics.
+        const finalReason =
+          retryEnvelope.kind === "malformed"
+            ? retryEnvelope.reason
+            : envelope.reason;
+        opts.onSquashSubStep?.(undefined);
+        return {
+          outcome: "blocked",
+          message: `${squashResult.responseText}\n\n---\n\n${retry.responseText}\n\n---\n\nSquash-suggestion envelope still unrecoverable after clarification: ${finalReason}.  Expected a valid <<<TITLE>>> / <<<BODY>>> envelope or a SQUASHED_MULTI / BLOCKED keyword.`,
+        };
       }
 
       // ---- verdict --------------------------------------------------------

@@ -1338,7 +1338,12 @@ cleanup stays in Stage 9.
 
 **Envelope-driven SUGGESTED_SINGLE shortcut:** Before running the
 verdict turn, the handler scans the work response for the
-`<<<TITLE>>>` / `<<<BODY>>>` envelope.  Three outcomes:
+`<<<TITLE>>>` / `<<<BODY>>>` envelope.  Detection is **strict** —
+all four tags must appear on their own lines, in the order
+TITLE_OPEN → TITLE_CLOSE → BODY_OPEN → BODY_CLOSE — so that prose
+which merely mentions the tag names (e.g. backtick-quoted in a
+multi-commit reply explaining why the envelope was not used) is
+not mistaken for an envelope attempt.  Three outcomes:
 
 - **Well-formed envelope** → agentcoop calls
   `buildSquashSuggestionComment` to render the canonical marker
@@ -1349,12 +1354,22 @@ verdict turn, the handler scans the work response for the
   handler proceeds directly to the user-choice path.  A
   `pipeline:verdict` event with keyword `SUGGESTED_SINGLE` is
   emitted so telemetry consumers see the verdict.
-- **Malformed envelope** (at least one of the four tags present,
-  but the envelope cannot be parsed — missing close tag, empty
-  title, empty body, etc.) → fail closed with `blocked` and an
-  actionable error message.  The agent has signalled intent to
-  take the SUGGESTED_SINGLE branch; falling through to the verdict
-  turn would silently mask the formatting failure.
+- **Malformed envelope** (all four tags on their own lines and in
+  order, but content is empty — empty title or empty body) → send
+  one focused **clarification turn** asking the agent to reply
+  with either a valid envelope or a `SQUASHED_MULTI` /
+  `BLOCKED` keyword (no other commentary).  Re-parse the retry:
+  - Valid envelope → author and post the comment, proceed to the
+    user-choice path.
+  - `SQUASHED_MULTI` keyword → run the CI poll path.
+  - `BLOCKED` keyword → existing blocked flow.
+  - Anything else (still malformed, missing, or a bare
+    `SUGGESTED_SINGLE` keyword without an envelope) → fail closed
+    with `blocked` and surface both responses for diagnostics.
+  The clarification preserves the recoverable-mistake path the
+  verdict-clarification round already provides, so a single
+  formatting slip does not dump the user into "Give instruction /
+  Halt" with no context.
 - **Envelope absent** → fall through to the existing verdict /
   clarification chain.  Envelope absence on its own is not a
   SUGGESTED_SINGLE signal: the agent could be in the
@@ -1422,7 +1437,11 @@ the fallback chain.
 planning ──┬── (envelope ok)         → awaiting_user_choice
            │       ├── (agent)  → squashing → ci_poll → done
            │       └── (github) → applied_via_github (stage done)
-           ├── (envelope malformed)  → blocked
+           ├── (envelope malformed)  → clarify
+           │       ├── (envelope ok)        → awaiting_user_choice (as above)
+           │       ├── (SQUASHED_MULTI)     → ci_poll → done
+           │       ├── (BLOCKED)            → blocked
+           │       └── (still unrecoverable) → blocked
            └── (envelope absent)     → verdict
                 ├── (SQUASHED_MULTI)   → ci_poll → done
                 ├── (SUGGESTED_SINGLE) → awaiting_user_choice (as above)

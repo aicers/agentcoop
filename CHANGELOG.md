@@ -18,6 +18,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   failures where a missing end marker or unterminated fence in the
   agent-authored comment would silently flip the stage to
   `blocked` after the verdict cleanly returned `SUGGESTED_SINGLE`.
+  Envelope detection is strict — all four tags must appear on
+  their own lines, in order — so a multi-commit reply that merely
+  mentions the tag names in prose still falls through to the
+  existing verdict flow instead of pre-empting it with a
+  malformed-envelope block.  When the shape is detected but
+  content is empty, the stage sends one focused clarification turn
+  asking for either a valid envelope or a SQUASHED_MULTI / BLOCKED
+  keyword before blocking, preserving the recoverable-mistake path
+  that the verdict-clarification round already provides.
 - `findLatestCommentWithMarker` now returns `{ id, body }` instead
   of just the body so callers that need to PATCH an existing
   comment can do so without a second lookup.  Read-only callers

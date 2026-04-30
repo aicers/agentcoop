@@ -2193,23 +2193,38 @@ describe("parseSquashEnvelope", () => {
     });
   });
 
-  test("returns malformed for missing TITLE close tag", () => {
-    const text = "<<<TITLE>>>\nFix widget\n\n<<<BODY>>>\nB\n<<</BODY>>>";
-    const result = parseSquashEnvelope(text);
-    expect(result.kind).toBe("malformed");
-    if (result.kind === "malformed") {
-      expect(result.reason).toContain("</TITLE>");
-    }
+  // Strict shape detection: the envelope is only "attempted" when
+  // all four tags appear on their own lines in order.  A response
+  // that merely mentions a tag inline in prose (single-backtick
+  // quote, embedded in a sentence) must classify as `missing` so
+  // the SUGGESTED_SINGLE shortcut does not pre-empt a perfectly
+  // valid SQUASHED_MULTI / BLOCKED reply that happens to quote the
+  // tag names.  Issue #304 reviewer round 1 false-negative case.
+  test("returns missing for prose mentioning a tag inline in backticks", () => {
+    const text =
+      "I took the multi-commit path, so I did not use the `<<<TITLE>>>` / `<<<BODY>>>` envelope.";
+    expect(parseSquashEnvelope(text)).toEqual({ kind: "missing" });
   });
 
-  test("returns malformed for missing BODY close tag", () => {
+  test("returns missing for prose mentioning a tag inline mid-sentence", () => {
+    const text =
+      "Multi-commit branch — see the <<<TITLE>>> envelope contract for SUGGESTED_SINGLE only.";
+    expect(parseSquashEnvelope(text)).toEqual({ kind: "missing" });
+  });
+
+  test("returns missing when TITLE close tag is absent (treated as not-an-envelope)", () => {
+    // Under strict shape detection, an absent close tag is
+    // indistinguishable from "the agent did not use the envelope".
+    // The caller falls through to the verdict flow rather than
+    // hard-blocking.
+    const text = "<<<TITLE>>>\nFix widget\n\n<<<BODY>>>\nB\n<<</BODY>>>";
+    expect(parseSquashEnvelope(text)).toEqual({ kind: "missing" });
+  });
+
+  test("returns missing when BODY close tag is absent (treated as not-an-envelope)", () => {
     const text =
       "<<<TITLE>>>\nFix widget\n<<</TITLE>>>\n\n<<<BODY>>>\nFirst line.";
-    const result = parseSquashEnvelope(text);
-    expect(result.kind).toBe("malformed");
-    if (result.kind === "malformed") {
-      expect(result.reason).toContain("</BODY>");
-    }
+    expect(parseSquashEnvelope(text)).toEqual({ kind: "missing" });
   });
 
   test("returns malformed for empty title", () => {
@@ -2421,15 +2436,13 @@ describe("envelope-driven SUGGESTED_SINGLE flow", () => {
     expect(keywords).toContain("SUGGESTED_SINGLE");
   });
 
-  // Malformed envelope → blocked with an actionable message.  Cover the
-  // three categories the issue calls out: missing close tag, empty title,
-  // empty body.
+  // Malformed envelope → focused clarification round.  After the
+  // reviewer round-1 feedback, the strict shape detection narrows
+  // `malformed` to "all four tags on own lines but content empty".
+  // Both empty-title and empty-body should still survive a single
+  // clarification turn before blocking, so the agent has a chance to
+  // repair the formatting-only mistake.
   test.each([
-    {
-      name: "missing TITLE close tag",
-      envelope: "<<<TITLE>>>\nFix widget\n\n<<<BODY>>>\nB\n<<</BODY>>>",
-      expectedFragment: "</TITLE>",
-    },
     {
       name: "empty title",
       envelope: "<<<TITLE>>>\n   \n<<</TITLE>>>\n\n<<<BODY>>>\nB\n<<</BODY>>>",
@@ -2440,7 +2453,7 @@ describe("envelope-driven SUGGESTED_SINGLE flow", () => {
       envelope: "<<<TITLE>>>\nT\n<<</TITLE>>>\n\n<<<BODY>>>\n\n<<</BODY>>>",
       expectedFragment: "body",
     },
-  ])("malformed envelope ($name) → blocked, no comment posted, no user choice", async ({
+  ])("malformed envelope ($name) → clarification asked, then blocked when retry is also unrecoverable", async ({
     envelope,
     expectedFragment,
   }) => {
@@ -2453,7 +2466,14 @@ describe("envelope-driven SUGGESTED_SINGLE flow", () => {
           }),
         ),
       ),
-      resume: vi.fn(),
+      // Retry is also malformed → no recovery → block.
+      resume: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            responseText: "still no envelope, just prose",
+          }),
+        ),
+      ),
     };
     const postSuggestionComment = vi.fn();
     const chooseSquashApplyMode = vi.fn();
@@ -2468,17 +2488,146 @@ describe("envelope-driven SUGGESTED_SINGLE flow", () => {
     const result = await stage.handler(BASE_CTX);
 
     expect(result.outcome).toBe("blocked");
-    expect(result.message).toContain("envelope malformed");
+    expect(result.message).toContain("envelope still unrecoverable");
     expect(result.message).toContain(expectedFragment);
-    // The verdict turn must NOT have run — the malformed envelope
-    // already declares intent to take the SUGGESTED_SINGLE branch.
-    expect(agent.resume).not.toHaveBeenCalled();
+    // Clarification turn must have been sent.
+    expect(agent.resume).toHaveBeenCalledTimes(1);
     expect(postSuggestionComment).not.toHaveBeenCalled();
     expect(chooseSquashApplyMode).not.toHaveBeenCalled();
     const states = onSquashSubStep.mock.calls.map((c) => c[0]);
     expect(states).not.toContain("awaiting_user_choice");
     expect(states).not.toContain("applied_via_github");
     expect(states[states.length - 1]).toBe(undefined);
+  });
+
+  test("malformed envelope + clarification yields valid envelope → comment authored, user-choice runs", async () => {
+    const malformed =
+      "<<<TITLE>>>\n   \n<<</TITLE>>>\n\n<<<BODY>>>\nbody\n<<</BODY>>>";
+    const repaired =
+      "<<<TITLE>>>\nFix widget\n<<</TITLE>>>\n\n<<<BODY>>>\nbody\n<<</BODY>>>";
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-squash",
+            responseText: malformed,
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: repaired }))),
+    };
+    const postSuggestionComment = vi.fn();
+    const chooseSquashApplyMode = vi.fn().mockResolvedValue("github");
+    const opts = makeOpts({
+      agent,
+      postSuggestionComment,
+      chooseSquashApplyMode,
+    });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(agent.resume).toHaveBeenCalledTimes(1);
+    expect(postSuggestionComment).toHaveBeenCalledTimes(1);
+    expect(chooseSquashApplyMode).toHaveBeenCalled();
+    const postedBody = postSuggestionComment.mock.calls[0][3] as string;
+    expect(postedBody).toContain("Fix widget");
+  });
+
+  test("malformed envelope + clarification yields SQUASHED_MULTI → CI poll runs, no comment posted", async () => {
+    const malformed =
+      "<<<TITLE>>>\nT\n<<</TITLE>>>\n\n<<<BODY>>>\n\n<<</BODY>>>";
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-squash",
+            responseText: malformed,
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "SQUASHED_MULTI" })),
+        ),
+    };
+    const postSuggestionComment = vi.fn();
+    const opts = makeOpts({ agent, postSuggestionComment });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(postSuggestionComment).not.toHaveBeenCalled();
+  });
+
+  test("malformed envelope + clarification yields BLOCKED → blocked", async () => {
+    const malformed =
+      "<<<TITLE>>>\n   \n<<</TITLE>>>\n\n<<<BODY>>>\nB\n<<</BODY>>>";
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-squash",
+            responseText: malformed,
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValue(makeStream(makeResult({ responseText: "BLOCKED" }))),
+    };
+    const postSuggestionComment = vi.fn();
+    const opts = makeOpts({ agent, postSuggestionComment });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("blocked");
+    expect(postSuggestionComment).not.toHaveBeenCalled();
+  });
+
+  // Reviewer round 1 false-negative regression: a multi-commit reply
+  // that mentions the envelope tag names inline in prose (e.g. "I did
+  // not use the `<<<TITLE>>>` envelope") must NOT pre-empt the
+  // verdict turn with a malformed-envelope block.
+  test("prose mentioning envelope tags inline → falls through to verdict flow (no shortcut, no block)", async () => {
+    const proseResponse =
+      "I rewrote history into multiple commits and force-pushed. " +
+      "I did not use the `<<<TITLE>>>` / `<<<BODY>>>` envelope because this " +
+      "branch warrants SQUASHED_MULTI.";
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-squash",
+            responseText: proseResponse,
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValue(
+          makeStream(makeResult({ responseText: "SQUASHED_MULTI" })),
+        ),
+    };
+    const postSuggestionComment = vi.fn();
+    const chooseSquashApplyMode = vi.fn();
+    const opts = makeOpts({
+      agent,
+      postSuggestionComment,
+      chooseSquashApplyMode,
+    });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    // Verdict turn ran.
+    expect(agent.resume).toHaveBeenCalled();
+    // No SUGGESTED_SINGLE shortcut fired.
+    expect(postSuggestionComment).not.toHaveBeenCalled();
+    expect(chooseSquashApplyMode).not.toHaveBeenCalled();
   });
 
   test("envelope absent → falls through to existing verdict flow", async () => {
