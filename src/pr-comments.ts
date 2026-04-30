@@ -13,6 +13,7 @@ import type { ReviewSubStep, RunState } from "./run-state.js";
 // ---- types ---------------------------------------------------------------
 
 export interface PrComment {
+  id?: number;
   body: string;
   user: { login: string };
 }
@@ -110,33 +111,68 @@ export function postPrComment(
   );
 }
 
+/**
+ * Edit an existing issue/PR comment by id.
+ *
+ * The body is sent via stdin as a JSON request payload so that
+ * arbitrary multi-line content (including leading `@`, fences, and
+ * other characters that confuse `gh api`'s `-f key=value` parsing)
+ * is preserved verbatim.
+ */
+export function patchPrComment(
+  owner: string,
+  repo: string,
+  commentId: number,
+  body: string,
+): void {
+  execFileSync(
+    "gh",
+    [
+      "api",
+      "--method",
+      "PATCH",
+      `/repos/${owner}/${repo}/issues/comments/${commentId}`,
+      "--input",
+      "-",
+    ],
+    { encoding: "utf-8", input: JSON.stringify({ body }) },
+  );
+}
+
 // ---- marker-lookup helper ------------------------------------------------
 
 /**
  * Find the most recent PR comment whose body contains `marker`.
  *
- * Returns the body of the latest matching comment (the last one in
- * chronological order returned by `gh`), or `undefined` when no
- * comment matches, the PR cannot be resolved, or the API call fails.
+ * Returns `{ id, body }` for the latest matching comment (the last one
+ * in chronological order returned by `gh`), or `undefined` only when
+ * the lookup succeeded and no comment matched.
  *
- * Callers that need the suggestion text parsed should wrap the
- * returned body with a parser (e.g. `parseSquashSuggestionBlock`).
+ * Errors from the underlying `gh api` call (network, auth, rate
+ * limit) propagate to the caller — they are NOT swallowed into
+ * `undefined`.  Write-side callers like
+ * `postOrUpdateSquashSuggestion` must distinguish "no matching
+ * comment" from "lookup failed" so a transient failure does not turn
+ * an idempotent PATCH into a duplicate POST.  Read-only callers that
+ * prefer to silently degrade should wrap this with `try`/`catch`
+ * themselves.
+ *
+ * The id is required by callers that want to PATCH the comment
+ * idempotently rather than posting a new one; read-only callers can
+ * destructure `.body`.  When the upstream API response omits the id
+ * (older fixtures, manual stubs), id is `undefined` and PATCH callers
+ * must fall back to POST.
  */
 export function findLatestCommentWithMarker(
   owner: string,
   repo: string,
   prNumber: number,
   marker: string,
-): string | undefined {
-  let comments: PrComment[];
-  try {
-    comments = fetchPrComments(owner, repo, prNumber);
-  } catch {
-    return undefined;
-  }
-  let latest: string | undefined;
+): { id: number | undefined; body: string } | undefined {
+  const comments = fetchPrComments(owner, repo, prNumber);
+  let latest: { id: number | undefined; body: string } | undefined;
   for (const c of comments) {
-    if (c.body.includes(marker)) latest = c.body;
+    if (c.body.includes(marker)) latest = { id: c.id, body: c.body };
   }
   return latest;
 }

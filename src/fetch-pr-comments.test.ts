@@ -72,26 +72,40 @@ describe("findLatestCommentWithMarker", () => {
     ).toBeUndefined();
   });
 
-  test("returns the body of the latest matching comment", () => {
+  test("returns the id and body of the latest matching comment", () => {
     // Older matching comment followed by a newer matching comment —
     // the newer one wins.
     const page = [
-      { body: `older ${MARKER} v1`, user: { login: "a" } },
-      { body: "noise", user: { login: "b" } },
-      { body: `newer ${MARKER} v2`, user: { login: "a" } },
+      { id: 11, body: `older ${MARKER} v1`, user: { login: "a" } },
+      { id: 12, body: "noise", user: { login: "b" } },
+      { id: 13, body: `newer ${MARKER} v2`, user: { login: "a" } },
     ];
     mockExecFileSync.mockReturnValue(JSON.stringify([page]));
-    expect(findLatestCommentWithMarker("org", "repo", 1, MARKER)).toBe(
-      `newer ${MARKER} v2`,
-    );
+    expect(findLatestCommentWithMarker("org", "repo", 1, MARKER)).toEqual({
+      id: 13,
+      body: `newer ${MARKER} v2`,
+    });
   });
 
-  test("returns undefined when the gh call throws", () => {
+  test("returns id undefined when API response omits id", () => {
+    const page = [{ body: `body ${MARKER}`, user: { login: "a" } }];
+    mockExecFileSync.mockReturnValue(JSON.stringify([page]));
+    expect(findLatestCommentWithMarker("org", "repo", 1, MARKER)).toEqual({
+      id: undefined,
+      body: `body ${MARKER}`,
+    });
+  });
+
+  test("propagates errors when the gh call throws", () => {
+    // Issue #304 reviewer round 2: lookup failures must surface to the
+    // caller so the write side can distinguish "no matching comment"
+    // from "lookup failed" and refuse to POST a duplicate suggestion
+    // comment on a transient API blip.
     mockExecFileSync.mockImplementation(() => {
       throw new Error("boom");
     });
-    expect(
-      findLatestCommentWithMarker("org", "repo", 1, MARKER),
-    ).toBeUndefined();
+    expect(() => findLatestCommentWithMarker("org", "repo", 1, MARKER)).toThrow(
+      "boom",
+    );
   });
 });

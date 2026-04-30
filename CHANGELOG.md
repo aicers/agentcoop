@@ -4,6 +4,91 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Stage 8 (Squash) no longer asks the agent to author the
+  marker-delimited squash-suggestion PR comment.  The agent now
+  drafts the title and body inside a `<<<TITLE>>>` / `<<<BODY>>>`
+  envelope, and agentcoop builds the marker block (with correct
+  fence sizing) and PATCH/POSTs the comment idempotently.  The
+  formatter and parser are pinned in lock-step by a round-trip
+  unit test.  This eliminates a class of malformed-comment
+  failures where a missing end marker or unterminated fence in the
+  agent-authored comment would silently flip the stage to
+  `blocked` after the verdict cleanly returned `SUGGESTED_SINGLE`.
+  Envelope detection keys off a `<<<TITLE>>>` open tag on its own
+  line — prose that merely mentions the tag names mid-sentence or
+  in backticks never produces a tag on a line by itself, so a
+  multi-commit reply that quotes the tags still falls through to
+  the existing verdict flow instead of pre-empting it with a
+  malformed-envelope block.  Once envelope intent is declared, any
+  structural break (a missing close tag, an absent body section,
+  empty title, or empty / whitespace-only body content) classifies
+  as malformed and routes into a focused clarification turn that
+  asks for either a valid envelope or a SQUASHED_MULTI / BLOCKED
+  keyword.  This preserves
+  the recoverable-mistake path the verdict-clarification round
+  already provides — a dropped close tag is exactly the kind of
+  formatting-only mistake the clarification turn was meant to
+  repair.  The body's structural close tag is anchored to the LAST
+  own-line `<<</BODY>>>` after BODY_OPEN, so a body that
+  legitimately documents the envelope contract (plausible for
+  issue #304 itself) is not truncated at an in-body literal close
+  marker; in-body literal tags are absorbed as content and only
+  the final own-line `<<</BODY>>>` terminates the envelope.  The
+  structural close tag must additionally be the last non-blank
+  line of the response, so an envelope where the agent forgot the
+  real close tag while including an example `<<</BODY>>>` line in
+  body content classifies as malformed (and routes into the
+  clarification turn) instead of being silently accepted with a
+  truncated body.
+- `findLatestCommentWithMarker` now returns `{ id, body }` instead
+  of just the body so callers that need to PATCH an existing
+  comment can do so without a second lookup.  Read-only callers
+  destructure `.body`.  Errors from the underlying `gh api` call
+  propagate to the caller — they are no longer swallowed into
+  `undefined`.  Write-side callers like `postOrUpdateSquashSuggestion`
+  must distinguish "no matching comment" from "lookup failed" so a
+  transient auth / network / rate-limit failure does not turn an
+  idempotent PATCH into a duplicate POST; the squash stage converts
+  any thrown lookup error into a `blocked` outcome instead.
+  `getSquashMergeHint` in `index.ts` wraps the call in `try`/`catch`
+  to silently degrade — the hint is purely cosmetic.  The squash
+  handler's read-side `findSuggestionCommentBody` adapter no longer
+  silently degrades: errors propagate to the caller, and the
+  `awaiting_user_choice` resume path now blocks on a lookup failure
+  instead of falling through to a fresh planning run.  Falling
+  through on this stateful path could re-invoke the agent and
+  re-author the suggestion or change the branch decision after the
+  user had already been presented with one; blocking leaves
+  `squashSubStep` at `awaiting_user_choice` so a retry once `gh`
+  recovers re-presents the existing choice.
+- `parseSquashSuggestionBlock` now anchors both markers to whole
+  lines and requires the end-marker line to appear at or after the
+  body's closing fence.  This prevents a literal end marker
+  embedded inside the body fenced block from truncating the parse:
+  the body fence absorbs that occurrence as content, and only a
+  free-standing end-marker line — emitted by the formatter after
+  the body fence closes — counts as the delimiter.  A round-trip
+  test pins the property for body content that mentions the end
+  marker.
+- The post-verdict path no longer promotes a historical
+  squash-suggestion comment on the PR to a SUGGESTED_SINGLE
+  outcome.  A SUGGESTED_SINGLE outcome must be backed by a current
+  `<<<TITLE>>> / <<<BODY>>>` envelope from this run.  When the
+  verdict resolves to SUGGESTED_SINGLE without an envelope, the
+  same focused clarification turn used for the malformed case
+  fires (asking for either a valid envelope or SQUASHED_MULTI /
+  BLOCKED).  The deterministic fallback chain similarly drops the
+  "valid marker block on PR → SUGGESTED_SINGLE" rule; without an
+  envelope from this run, the only deterministic signals are
+  commit-count collapse (SQUASHED_MULTI) or BLOCKED.  This closes
+  the stale-suggestion propagation problem issue #304 was meant to
+  fix, which an earlier revision still permitted via the verdict
+  path.
+
 ## [0.2.0] - 2026-04-29
 
 ### Added
@@ -263,5 +348,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial public release of AgentCoop.
 
+[Unreleased]: https://github.com/aicers/agentcoop/compare/0.2.0...HEAD
 [0.2.0]: https://github.com/aicers/agentcoop/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/aicers/agentcoop/tree/0.1.0
