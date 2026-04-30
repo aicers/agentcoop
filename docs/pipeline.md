@@ -1393,31 +1393,22 @@ and classifies the response as one of three outcomes:
 - `SQUASHED_MULTI` → poll CI after the force-push (existing
   behaviour, up to 3 internal fix attempts) and finish with
   `squash.completed` when CI passes.
-- `SUGGESTED_SINGLE` → defense-in-depth check that a fully
-  parseable suggestion block is present in the squash-suggestion
-  PR comment before asking the user.  "Parseable" means both
-  markers are present **and** `parseSquashSuggestionBlock`
-  succeeds (the block contains a `**Title**` label followed by a
-  well-formed fenced block).  A bare start marker or a block
-  missing the `**Title**` label / the end marker fails closed
-  with `blocked` rather than completing as if the suggestion were
-  valid — Stage 9 reads the same block to render the inline
-  preview, so a malformed block would leave the merge-confirm
-  screen blank.  This path runs only when an earlier run (or the
-  legacy agent-authored fallback) left a comment behind; on the
-  primary path, the comment was just authored by agentcoop and
-  has already been asserted parseable.  Once validated, ask the
-  user via `chooseSquashApplyMode` (skipped when the startup
-  `squashApplyPolicy` is `"auto"`, in which case the handler
-  proceeds as if the user picked `"agent"`):
-  - **"Agent squashes now"** → send a follow-up prompt on the
-    same session telling the agent to perform the squash using
-    the message it already drafted, then run the post-squash CI
-    poll loop.
-  - **"Apply via GitHub"** → finish the stage with
-    `squash.messageAppended` and persist
-    `squashSubStep === "applied_via_github"` so Stage 9 surfaces
-    the suggestion in the merge-confirm screen.  No CI rerun.
+- `SUGGESTED_SINGLE` → the agent declared SUGGESTED_SINGLE in the
+  verdict turn but never provided a `<<<TITLE>>> / <<<BODY>>>`
+  envelope in any earlier response.  Agentcoop does **not**
+  consume a historical squash-suggestion comment from an earlier
+  run as evidence here — that would propagate the stale-suggestion
+  problem this stage was redesigned to fix (issue #304).  Instead,
+  the same focused envelope clarification turn used for the
+  malformed case fires, asking for either a valid envelope or a
+  `SQUASHED_MULTI` / `BLOCKED` keyword.  On retry: a valid
+  envelope → author and post the comment + ask the user;
+  `SQUASHED_MULTI` → CI poll; `BLOCKED` → blocked; anything else
+  → blocked with both responses surfaced.  Before sending the
+  clarification, the PR-merged guard fires so a concurrent merge
+  during the verdict round short-circuits to `alreadyMerged`
+  instead of asking the agent to draft a suggestion for a closed
+  branch.
 - `BLOCKED` → existing blocked flow.
 
 **Ambiguous response handling:** Same internal clarification
@@ -1428,16 +1419,18 @@ fails, the handler runs a **deterministic fallback chain**:
    snapshot taken at stage entry, treat as `SQUASHED_MULTI` (the
    force-push has already happened — that hard-to-undo side
    effect must be detected first).
-2. Else, fetch the squash-suggestion PR comment and check for a
-   fully parseable suggestion block (markers present **and**
-   `parseSquashSuggestionBlock` returns a value).  If present,
-   treat as `SUGGESTED_SINGLE`; a malformed block (e.g. only the
-   start marker) is treated as missing.
+2. Else, run the PR-merged guard.  If the PR was concurrently
+   merged on GitHub, return `alreadyMerged` instead of falling
+   through to BLOCKED.
 3. Else, treat as `BLOCKED`.
 
-The order matters: checking the commit count first prevents a
-completed squash from being misclassified as a SINGLE suggestion
-when an earlier run left a stale marker comment on the PR.
+The fallback chain deliberately does **not** promote a historical
+squash-suggestion comment on the PR to a `SUGGESTED_SINGLE`
+verdict.  Without an envelope from this run, the only
+deterministic signals are commit-count collapse (`SQUASHED_MULTI`)
+or `BLOCKED`.  Promoting a stale marker block here would
+re-introduce the stale-suggestion propagation issue #304 was
+written to fix.
 
 The derived verdict is emitted as a `pipeline:verdict` event just
 like a parsed-keyword verdict, so telemetry consumers see every
@@ -1457,8 +1450,13 @@ planning ──┬── (envelope ok)         → awaiting_user_choice
            │       └── (still unrecoverable) → blocked
            └── (envelope absent)     → verdict
                 ├── (SQUASHED_MULTI)   → ci_poll → done
-                ├── (SUGGESTED_SINGLE) → awaiting_user_choice (as above)
-                └── (BLOCKED)          → user chooses
+                ├── (SUGGESTED_SINGLE) → clarify  (no stale-comment promotion;
+                │                        a current envelope is required)
+                │       ├── (envelope ok)        → awaiting_user_choice
+                │       ├── (SQUASHED_MULTI)     → ci_poll → done
+                │       ├── (BLOCKED)            → blocked
+                │       └── (still unrecoverable) → blocked
+                └── (BLOCKED)          → blocked
 ```
 
 `RunState.squashSubStep` persists the current substate so resume

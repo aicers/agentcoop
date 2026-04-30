@@ -337,6 +337,15 @@ export function buildAgentSquashFollowupPrompt(): string {
  * markers are missing or the block does not contain a parseable
  * title.
  *
+ * Markers are anchored to whole lines (their trimmed contents must
+ * equal the marker string).  The end marker is required to appear on
+ * its own line on or after the body's closing fence, so a literal end
+ * marker that the agent embedded inside the body fenced block does not
+ * truncate the parse: the body fence absorbs that occurrence as
+ * content, and only a free-standing end-marker line — emitted by
+ * {@link buildSquashSuggestionComment} after the body fence closes —
+ * counts as the delimiter.
+ *
  * The block uses `**Title**` and `**Body**` labels each followed by a
  * CommonMark-style fenced code block.  The fence length is chosen
  * dynamically by the agent so the block can survive commit bodies
@@ -349,16 +358,26 @@ export function parseSquashSuggestionBlock(
   source: string | undefined,
 ): SquashSuggestion | undefined {
   if (!source) return undefined;
-  const startIdx = source.indexOf(SQUASH_SUGGESTION_START_MARKER);
-  const endIdx = source.indexOf(SQUASH_SUGGESTION_END_MARKER);
-  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) return undefined;
+  const lines = source.split("\n");
 
-  const inner = source.slice(
-    startIdx + SQUASH_SUGGESTION_START_MARKER.length,
-    endIdx,
+  const startLineIdx = lines.findIndex(
+    (l) => l.trim() === SQUASH_SUGGESTION_START_MARKER,
   );
+  if (startLineIdx === -1) return undefined;
 
-  return parseFencedSuggestion(inner);
+  const parsed = parseFencedSuggestion(lines, startLineIdx + 1);
+  if (!parsed) return undefined;
+
+  // Require a free-standing end-marker line at or after the body's
+  // closing fence.  Scanning from there (rather than `indexOf` over
+  // the whole source) ignores literal end-marker text embedded inside
+  // the body fenced block, which the formatter writes verbatim.
+  for (let i = parsed.endLineIdx + 1; i < lines.length; i++) {
+    if (lines[i].trim() === SQUASH_SUGGESTION_END_MARKER) {
+      return parsed.suggestion;
+    }
+  }
+  return undefined;
 }
 
 /** Label-line regex for the fenced format (`**Title**` / `**Body**`). */
@@ -367,15 +386,18 @@ function labelLineRe(label: "Title" | "Body"): RegExp {
 }
 
 /**
- * Parse the fenced format.  Returns `undefined` when either label is
+ * Parse the fenced format from `lines` starting at index `start`.
+ * Returns the parsed suggestion plus `endLineIdx` (the line index of
+ * the body fence's closing line), or `undefined` when either label is
  * missing, when the fenced block that should follow the label is
- * malformed (missing opening fence, unterminated), or when the
- * blocks appear in the wrong order.
+ * malformed (missing opening fence, unterminated), or when the blocks
+ * appear in the wrong order.
  */
-function parseFencedSuggestion(inner: string): SquashSuggestion | undefined {
-  const lines = inner.split("\n");
-
-  const titleLabelIdx = findLabelLine(lines, 0, "Title");
+function parseFencedSuggestion(
+  lines: string[],
+  start: number,
+): { suggestion: SquashSuggestion; endLineIdx: number } | undefined {
+  const titleLabelIdx = findLabelLine(lines, start, "Title");
   if (titleLabelIdx === -1) return undefined;
 
   const titleBlock = readFencedBlock(lines, titleLabelIdx + 1);
@@ -388,8 +410,11 @@ function parseFencedSuggestion(inner: string): SquashSuggestion | undefined {
   if (!bodyBlock) return undefined;
 
   return {
-    title: titleBlock.content.replace(/^\n+|\n+$/g, "").trim(),
-    body: bodyBlock.content.replace(/^\n+|\n+$/g, ""),
+    suggestion: {
+      title: titleBlock.content.replace(/^\n+|\n+$/g, "").trim(),
+      body: bodyBlock.content.replace(/^\n+|\n+$/g, ""),
+    },
+    endLineIdx: bodyBlock.endIdx,
   };
 }
 
@@ -1079,6 +1104,18 @@ export function createSquashStageHandler(
       // meant to repair, and falling through to the verdict path
       // instead either hard-blocks opaquely or reuses a stale prior
       // suggestion comment.
+      //
+      // Issue #304 reviewer round 3: a SUGGESTED_SINGLE outcome MUST be
+      // backed by a current title/body envelope from this run.  A
+      // historical PR comment from an earlier run is not evidence that
+      // the agent intends a single-commit suggestion this time, so the
+      // post-verdict path no longer reads `findSuggestionCommentBody`
+      // to infer SUGGESTED_SINGLE — that would propagate the stale
+      // suggestion problem the issue called out into the new design.
+      // Instead, when verdict resolves to SUGGESTED_SINGLE without an
+      // envelope this run, the same focused clarification turn used for
+      // the malformed case fires (asking for either a valid envelope or
+      // SQUASHED_MULTI / BLOCKED).
 
       /**
        * Author the marker-delimited PR comment from a parsed envelope
@@ -1138,30 +1175,31 @@ export function createSquashStageHandler(
         return askUserAndApply(ctx, opts, sessionId);
       };
 
-      const envelope = parseSquashEnvelope(squashResult.responseText);
-      if (envelope.kind === "ok") {
-        return applyOkEnvelope(
-          envelope.suggestion,
-          squashResult.responseText,
-          squashResult.sessionId,
-        );
-      }
-      if (envelope.kind === "malformed") {
-        // Shape detected but unusable — give the agent one focused
-        // chance to repair the envelope (or to redeclare a non-
-        // SUGGESTED_SINGLE verdict) before blocking.  Mirrors the
-        // existing verdict-clarification round so a recoverable agent
-        // mistake does not dump the user into "Give instruction /
-        // Halt" with no context.
-        const clarifyPrompt = buildSquashEnvelopeClarificationPrompt(
-          envelope.reason,
-        );
+      /**
+       * Send the focused envelope clarification turn and route on the
+       * retry response.  Shared by the malformed-envelope path (work
+       * response had envelope intent but unusable structure) and by
+       * the post-verdict "SUGGESTED_SINGLE without envelope" path
+       * (agent declared SUGGESTED_SINGLE in the verdict turn but never
+       * provided a `<<<TITLE>>> / <<<BODY>>>` envelope in any earlier
+       * response, so we have no content to author the comment from).
+       *
+       * `messagePrefix` is everything that should appear before the
+       * retry response in any user-facing blocked message — typically
+       * the work response, optionally followed by the verdict response.
+       */
+      const runEnvelopeClarification = async (
+        messagePrefix: string,
+        prevSessionId: string | undefined,
+        reason: string,
+      ): Promise<StageResult> => {
+        const clarifyPrompt = buildSquashEnvelopeClarificationPrompt(reason);
         ctx.promptSinks?.a?.(clarifyPrompt, "verdict-followup", {
           resume: true,
         });
         const retry = await sendFollowUp(
           opts.agent,
-          squashResult.sessionId,
+          prevSessionId,
           clarifyPrompt,
           ctx.worktreePath,
           ctx.streamSinks?.a,
@@ -1175,7 +1213,7 @@ export function createSquashStageHandler(
           return mapAgentError(retry, "during squash envelope clarification");
         }
 
-        const retrySessionId = retry.sessionId ?? squashResult.sessionId;
+        const retrySessionId = retry.sessionId ?? prevSessionId;
         const retryEnvelope = parseSquashEnvelope(retry.responseText);
         if (retryEnvelope.kind === "ok") {
           return applyOkEnvelope(
@@ -1207,7 +1245,7 @@ export function createSquashStageHandler(
           opts.onSquashSubStep?.(undefined);
           return {
             outcome: "blocked",
-            message: `${squashResult.responseText}\n\n---\n\n${retry.responseText}`,
+            message: `${messagePrefix}\n\n---\n\n${retry.responseText}`,
           };
         }
 
@@ -1216,14 +1254,34 @@ export function createSquashStageHandler(
         // these give us content to author the comment from, so block
         // with the original parse reason surfaced for diagnostics.
         const finalReason =
-          retryEnvelope.kind === "malformed"
-            ? retryEnvelope.reason
-            : envelope.reason;
+          retryEnvelope.kind === "malformed" ? retryEnvelope.reason : reason;
         opts.onSquashSubStep?.(undefined);
         return {
           outcome: "blocked",
-          message: `${squashResult.responseText}\n\n---\n\n${retry.responseText}\n\n---\n\nSquash-suggestion envelope still unrecoverable after clarification: ${finalReason}.  Expected a valid <<<TITLE>>> / <<<BODY>>> envelope or a SQUASHED_MULTI / BLOCKED keyword.`,
+          message: `${messagePrefix}\n\n---\n\n${retry.responseText}\n\n---\n\nSquash-suggestion envelope still unrecoverable after clarification: ${finalReason}.  Expected a valid <<<TITLE>>> / <<<BODY>>> envelope or a SQUASHED_MULTI / BLOCKED keyword.`,
         };
+      };
+
+      const envelope = parseSquashEnvelope(squashResult.responseText);
+      if (envelope.kind === "ok") {
+        return applyOkEnvelope(
+          envelope.suggestion,
+          squashResult.responseText,
+          squashResult.sessionId,
+        );
+      }
+      if (envelope.kind === "malformed") {
+        // Shape detected but unusable — give the agent one focused
+        // chance to repair the envelope (or to redeclare a non-
+        // SUGGESTED_SINGLE verdict) before blocking.  Mirrors the
+        // existing verdict-clarification round so a recoverable agent
+        // mistake does not dump the user into "Give instruction /
+        // Halt" with no context.
+        return runEnvelopeClarification(
+          squashResult.responseText,
+          squashResult.sessionId,
+          envelope.reason,
+        );
       }
 
       // ---- verdict --------------------------------------------------------
@@ -1259,31 +1317,26 @@ export function createSquashStageHandler(
 
       // ---- post-clarification deterministic fallback chain -----------------
       // Order matters: a completed force-push is the hard-to-undo side
-      // effect, so detect it first.  Only then check the suggestion
-      // comment, because an earlier run may have left a stale comment
-      // on the PR that would otherwise be misclassified.  The block
-      // must be fully parseable (markers + `**Title**` label) — a malformed
-      // block is treated as missing because Stage 9 cannot render a
-      // preview from it.
+      // effect, so detect it first.  We deliberately do NOT promote a
+      // historical squash-suggestion comment on the PR to a
+      // SUGGESTED_SINGLE verdict here: issue #304 reviewer round 3
+      // called this stale-comment propagation out as a regression.  A
+      // SUGGESTED_SINGLE outcome must be backed by a current envelope
+      // from this run; without one, the only deterministic signals
+      // are commit-count collapse (SQUASHED_MULTI) or BLOCKED.
       if (verdict === undefined) {
         const postCount = countCommits(ctx.worktreePath, opts.defaultBranch);
         if (postCount < initialCount) {
           verdict = "SQUASHED_MULTI";
         } else {
-          // Check the PR lifecycle BEFORE the comment lookup:
-          // `findPrNumber` uses `gh pr list` (open PRs only), so a
-          // concurrent merge between the clarification turn and this
-          // fallback would make the lookup return `undefined` and flip
-          // the verdict to `BLOCKED` instead of taking the existing
-          // merged short-circuit.
+          // Before falling back to BLOCKED, check whether the PR was
+          // concurrently merged on GitHub.  Returning "alreadyMerged"
+          // is a more accurate outcome than BLOCKED when the merge
+          // already happened — the user did not need agentcoop to
+          // finish the squash decision.
           const merged = guardIfPrMerged(ctx, opts);
           if (merged) return merged;
-          const commentBody = readSuggestionCommentBody();
-          if (hasValidSuggestionBlock(commentBody)) {
-            verdict = "SUGGESTED_SINGLE";
-          } else {
-            verdict = "BLOCKED";
-          }
+          verdict = "BLOCKED";
         }
         // The verdict was derived deterministically rather than parsed
         // from the agent response, but telemetry consumers still need
@@ -1308,29 +1361,28 @@ export function createSquashStageHandler(
       }
 
       if (verdict === "SUGGESTED_SINGLE") {
-        // Check the PR lifecycle BEFORE reading the suggestion
-        // comment: a concurrent merge on GitHub would make the
-        // `findPrNumber` lookup (which uses `gh pr list`, open PRs
-        // only) return `undefined`, and the verdict would flip to
-        // `BLOCKED` instead of taking the existing merged
-        // short-circuit.
+        // Check the PR lifecycle BEFORE running the clarification turn:
+        // a concurrent merge on GitHub during the verdict round means
+        // there is no point asking the agent to produce an envelope
+        // for a closed branch.  `findPrNumber` uses `gh pr list` (open
+        // PRs only), so a merged PR would otherwise let the
+        // clarification fire on a dead branch.
         const merged = guardIfPrMerged(ctx, opts);
         if (merged) return merged;
-        // Verify the PR comment holds a fully parseable suggestion
-        // block before asking the user.  A bare start marker or a
-        // block missing the `**Title**` label / the end marker would
-        // let the stage complete with `applied_via_github` but leave
-        // Stage 9 unable to render the inline preview, so fail closed
-        // instead.
-        const commentBody = readSuggestionCommentBody();
-        if (!hasValidSuggestionBlock(commentBody)) {
-          opts.onSquashSubStep?.(undefined);
-          return {
-            outcome: "blocked",
-            message: `${squashResult.responseText}\n\n---\n\n${verdictResponseText}`,
-          };
-        }
-        return askUserAndApply(ctx, opts, verdictSessionId);
+        // The agent declared SUGGESTED_SINGLE in the verdict turn but
+        // never provided a `<<<TITLE>>> / <<<BODY>>>` envelope in any
+        // earlier response (envelope was `missing` at the work-turn
+        // shortcut).  Issue #304 reviewer round 3: agentcoop must NOT
+        // consume a historical PR comment as evidence here — that is
+        // exactly the stale-suggestion propagation the issue motivated.
+        // Fire the focused envelope clarification turn instead, which
+        // either recovers a usable envelope or routes into
+        // SQUASHED_MULTI / BLOCKED via the agent's keyword.
+        return runEnvelopeClarification(
+          `${squashResult.responseText}\n\n---\n\n${verdictResponseText}`,
+          verdictSessionId,
+          "the squash verdict was SUGGESTED_SINGLE but no <<<TITLE>>> / <<<BODY>>> envelope was provided in the work response",
+        );
       }
 
       // SQUASHED_MULTI — proceed with the existing CI poll path.

@@ -744,35 +744,37 @@ describe("createSquashStageHandler", () => {
 
   // -- SUGGESTED_SINGLE: user picks "agent" ----------------------------------
 
-  test("SUGGESTED_SINGLE + user picks agent → follow-up + CI poll runs", async () => {
-    const prBodyWithMarker = `Hello\n${SQUASH_SUGGESTION_START_MARKER}\n## Suggested squash commit\n\n**Title**\n\n\`\`\`text\nMy title\n\`\`\`\n\n**Body**\n\n\`\`\`text\nLine\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
-    let resumeCall = 0;
-    const resumeResults = [
-      makeStream(makeResult({ responseText: "SUGGESTED_SINGLE" })),
-      makeStream(
-        makeResult({
-          sessionId: "sess-followup",
-          responseText: "Squashed and pushed.",
-        }),
-      ),
-    ];
+  test("SUGGESTED_SINGLE envelope + user picks agent → follow-up + CI poll runs", async () => {
+    // Envelope-driven SUGGESTED_SINGLE shortcut: agent returns the
+    // title/body envelope on the work turn, agentcoop authors and posts
+    // the comment, asks the user, and on "agent" sends one follow-up
+    // squash prompt before polling CI.  No verdict turn fires.
+    const envelopeText =
+      "<<<TITLE>>>\nMy title\n<<</TITLE>>>\n\n<<<BODY>>>\nLine\n<<</BODY>>>";
     const agent: AgentAdapter = {
-      invoke: vi
-        .fn()
-        .mockReturnValue(
-          makeStream(
-            makeResult({ sessionId: "sess-squash", responseText: "Plan." }),
-          ),
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-squash",
+            responseText: envelopeText,
+          }),
         ),
-      resume: vi.fn().mockImplementation(() => resumeResults[resumeCall++]),
+      ),
+      resume: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-followup",
+            responseText: "Squashed and pushed.",
+          }),
+        ),
+      ),
     };
     const chooseSquashApplyMode = vi.fn().mockResolvedValue("agent");
-    const findSuggestionCommentBody = vi.fn().mockReturnValue(prBodyWithMarker);
     const onSquashSubStep = vi.fn();
     const opts = makeOpts({
       agent,
       chooseSquashApplyMode,
-      findSuggestionCommentBody,
+      postSuggestionComment: vi.fn(),
       onSquashSubStep,
     });
     const stage = createSquashStageHandler(opts);
@@ -781,7 +783,8 @@ describe("createSquashStageHandler", () => {
     expect(result.outcome).toBe("completed");
     expect(result.message).toContain("CI passed");
     expect(chooseSquashApplyMode).toHaveBeenCalledTimes(1);
-    expect(agent.resume).toHaveBeenCalledTimes(2); // verdict + follow-up
+    // No verdict turn — only the agent-squash follow-up resume.
+    expect(agent.resume).toHaveBeenCalledTimes(1);
     expect(opts.getCiStatus).toHaveBeenCalled();
     const states = onSquashSubStep.mock.calls.map((c) => c[0]);
     expect(states).toContain("planning");
@@ -792,30 +795,27 @@ describe("createSquashStageHandler", () => {
 
   // -- SUGGESTED_SINGLE: user picks "github" ---------------------------------
 
-  test("SUGGESTED_SINGLE + user picks github → no CI poll, applied_via_github", async () => {
-    const prBodyWithMarker = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nT\n\`\`\`\n\n**Body**\n\n\`\`\`text\nB\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
+  test("SUGGESTED_SINGLE envelope + user picks github → no CI poll, applied_via_github", async () => {
+    const envelopeText =
+      "<<<TITLE>>>\nT\n<<</TITLE>>>\n\n<<<BODY>>>\nB\n<<</BODY>>>";
     const agent: AgentAdapter = {
-      invoke: vi
-        .fn()
-        .mockReturnValue(
-          makeStream(
-            makeResult({ sessionId: "sess-squash", responseText: "Plan." }),
-          ),
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-squash",
+            responseText: envelopeText,
+          }),
         ),
-      resume: vi
-        .fn()
-        .mockReturnValue(
-          makeStream(makeResult({ responseText: "SUGGESTED_SINGLE" })),
-        ),
+      ),
+      resume: vi.fn(),
     };
     const chooseSquashApplyMode = vi.fn().mockResolvedValue("github");
-    const findSuggestionCommentBody = vi.fn().mockReturnValue(prBodyWithMarker);
     const onSquashSubStep = vi.fn();
     const getCiStatus = vi.fn();
     const opts = makeOpts({
       agent,
       chooseSquashApplyMode,
-      findSuggestionCommentBody,
+      postSuggestionComment: vi.fn(),
       onSquashSubStep,
       getCiStatus,
     });
@@ -829,9 +829,28 @@ describe("createSquashStageHandler", () => {
     expect(states[states.length - 1]).toBe("applied_via_github");
   });
 
-  // -- SUGGESTED_SINGLE missing marker → BLOCKED -----------------------------
-
-  test("SUGGESTED_SINGLE with missing marker block → blocked", async () => {
+  // -- verdict SUGGESTED_SINGLE without envelope → clarification, then BLOCKED
+  //
+  // Issue #304 reviewer round 3: a SUGGESTED_SINGLE outcome must be
+  // backed by a current title/body envelope from this run.  The agent
+  // never returned an envelope on the work turn, then the verdict turn
+  // emitted SUGGESTED_SINGLE without one.  Agentcoop must NOT consume a
+  // historical PR comment — instead it sends the envelope clarification
+  // turn.  When the retry also fails to produce an envelope (and is not
+  // SQUASHED_MULTI / BLOCKED), the stage blocks with an explanation.
+  test("verdict SUGGESTED_SINGLE without envelope → clarification asked, blocked when retry still has no envelope", async () => {
+    const findSuggestionCommentBody = vi.fn().mockReturnValue(
+      // Stale historical comment (from a prior run) on the PR.  The
+      // post-verdict path must NOT consume this as evidence.
+      `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nstale\n\`\`\`\n\n**Body**\n\n\`\`\`text\nstale body\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`,
+    );
+    let resumeCall = 0;
+    const resumeResults = [
+      // Verdict turn → SUGGESTED_SINGLE without an envelope.
+      makeStream(makeResult({ responseText: "SUGGESTED_SINGLE" })),
+      // Envelope clarification retry → still no envelope, just prose.
+      makeStream(makeResult({ responseText: "still no envelope" })),
+    ];
     const agent: AgentAdapter = {
       invoke: vi
         .fn()
@@ -840,28 +859,47 @@ describe("createSquashStageHandler", () => {
             makeResult({ sessionId: "sess-squash", responseText: "Plan." }),
           ),
         ),
-      resume: vi
-        .fn()
-        .mockReturnValue(
-          makeStream(makeResult({ responseText: "SUGGESTED_SINGLE" })),
-        ),
+      resume: vi.fn().mockImplementation(() => resumeResults[resumeCall++]),
     };
+    const chooseSquashApplyMode = vi.fn();
+    const postSuggestionComment = vi.fn();
     const opts = makeOpts({
       agent,
-      findSuggestionCommentBody: vi
-        .fn()
-        .mockReturnValue("body without any marker"),
+      findSuggestionCommentBody,
+      chooseSquashApplyMode,
+      postSuggestionComment,
     });
     const stage = createSquashStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
 
     expect(result.outcome).toBe("blocked");
+    expect(result.message).toContain("envelope still unrecoverable");
+    // The stale historical comment must NOT have been consumed.
+    expect(chooseSquashApplyMode).not.toHaveBeenCalled();
+    expect(postSuggestionComment).not.toHaveBeenCalled();
+    // Verdict turn + clarification turn = 2 resume calls.
+    expect(agent.resume).toHaveBeenCalledTimes(2);
   });
 
-  // -- PR already merged short-circuit ---------------------------------------
-
-  test("SUGGESTED_SINGLE + PR already merged before user prompt → alreadyMerged, no chooseSquashApplyMode call", async () => {
-    const prBodyWithMarker = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nT\n\`\`\`\n\n**Body**\n\n\`\`\`text\nB\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
+  // Companion: when the verdict-SUGGESTED_SINGLE clarification retry
+  // produces a valid envelope, the stage authors and posts the comment
+  // from the FRESH envelope (not the stale historical comment).
+  test("verdict SUGGESTED_SINGLE without envelope → clarification recovers via valid envelope retry", async () => {
+    const findSuggestionCommentBody = vi
+      .fn()
+      .mockReturnValue(
+        `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nstale\n\`\`\`\n\n**Body**\n\n\`\`\`text\nstale body\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`,
+      );
+    let resumeCall = 0;
+    const resumeResults = [
+      makeStream(makeResult({ responseText: "SUGGESTED_SINGLE" })),
+      makeStream(
+        makeResult({
+          responseText:
+            "<<<TITLE>>>\nFresh title\n<<</TITLE>>>\n\n<<<BODY>>>\nFresh body\n<<</BODY>>>",
+        }),
+      ),
+    ];
     const agent: AgentAdapter = {
       invoke: vi
         .fn()
@@ -870,21 +908,58 @@ describe("createSquashStageHandler", () => {
             makeResult({ sessionId: "sess-squash", responseText: "Plan." }),
           ),
         ),
-      resume: vi
-        .fn()
-        .mockReturnValue(
-          makeStream(makeResult({ responseText: "SUGGESTED_SINGLE" })),
+      resume: vi.fn().mockImplementation(() => resumeResults[resumeCall++]),
+    };
+    const chooseSquashApplyMode = vi.fn().mockResolvedValue("github");
+    const postSuggestionComment = vi.fn();
+    const opts = makeOpts({
+      agent,
+      findSuggestionCommentBody,
+      chooseSquashApplyMode,
+      postSuggestionComment,
+    });
+    const stage = createSquashStageHandler(opts);
+    const result = await stage.handler(BASE_CTX);
+
+    expect(result.outcome).toBe("completed");
+    expect(postSuggestionComment).toHaveBeenCalledTimes(1);
+    // The posted body comes from the FRESH retry envelope, not the
+    // stale historical comment.
+    const postedBody = postSuggestionComment.mock.calls[0][3] as string;
+    expect(postedBody).toContain("Fresh title");
+    expect(postedBody).toContain("Fresh body");
+    expect(postedBody).not.toContain("stale");
+  });
+
+  // -- PR already merged short-circuit ---------------------------------------
+
+  test("envelope SUGGESTED_SINGLE + PR already merged before user prompt → alreadyMerged, no chooseSquashApplyMode call", async () => {
+    const envelopeText =
+      "<<<TITLE>>>\nT\n<<</TITLE>>>\n\n<<<BODY>>>\nB\n<<</BODY>>>";
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-squash",
+            responseText: envelopeText,
+          }),
         ),
+      ),
+      resume: vi.fn(),
     };
     const chooseSquashApplyMode = vi.fn().mockResolvedValue("agent");
-    const findSuggestionCommentBody = vi.fn().mockReturnValue(prBodyWithMarker);
+    const postSuggestionComment = vi.fn();
+    // `findPrNumber` returns `undefined` once the PR is merged because
+    // `gh pr list` filters to open PRs by default.
+    const findPrNumber = vi.fn().mockReturnValue(undefined);
     const queryPrState = vi.fn().mockReturnValue("MERGED");
     const onSquashSubStep = vi.fn();
     const getCiStatus = vi.fn();
     const opts = makeOpts({
       agent,
       chooseSquashApplyMode,
-      findSuggestionCommentBody,
+      postSuggestionComment,
+      findPrNumber,
       queryPrState,
       onSquashSubStep,
       getCiStatus,
@@ -895,44 +970,40 @@ describe("createSquashStageHandler", () => {
     expect(result.outcome).toBe("completed");
     expect(result.message).toContain("already merged");
     expect(chooseSquashApplyMode).not.toHaveBeenCalled();
+    expect(postSuggestionComment).not.toHaveBeenCalled();
     expect(getCiStatus).not.toHaveBeenCalled();
     expect(queryPrState).toHaveBeenCalledWith("org", "repo", "issue-42");
     // Sub-step must be cleared so a resume does not re-enter the dead choice.
     expect(onSquashSubStep).toHaveBeenLastCalledWith(undefined);
   });
 
-  // Regression for issue #274 reviewer round 1: on the immediate
-  // SUGGESTED_SINGLE branch, the PR-merged guard must also run
-  // BEFORE the suggestion-comment lookup.  `findPrNumber` uses
-  // `gh pr list` (open PRs only), so a concurrent merge would make
-  // the comment lookup return `undefined` and the stage would flip
-  // to `BLOCKED` instead of short-circuiting to `alreadyMerged`.
-  test("SUGGESTED_SINGLE + concurrent merge hides the PR from findPrNumber → alreadyMerged, not blocked", async () => {
+  // Regression for issue #274 reviewer round 1, retained for the
+  // envelope path: when the PR is merged concurrently and `findPrNumber`
+  // returns `undefined`, the SUGGESTED_SINGLE branch must short-circuit
+  // to `alreadyMerged` rather than blocking on the missing PR number.
+  test("envelope SUGGESTED_SINGLE + concurrent merge hides the PR from findPrNumber → alreadyMerged, not blocked", async () => {
+    const envelopeText =
+      "<<<TITLE>>>\nT\n<<</TITLE>>>\n\n<<<BODY>>>\nB\n<<</BODY>>>";
     const agent: AgentAdapter = {
-      invoke: vi
-        .fn()
-        .mockReturnValue(
-          makeStream(
-            makeResult({ sessionId: "sess-squash", responseText: "Plan." }),
-          ),
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-squash",
+            responseText: envelopeText,
+          }),
         ),
-      resume: vi
-        .fn()
-        .mockReturnValue(
-          makeStream(makeResult({ responseText: "SUGGESTED_SINGLE" })),
-        ),
+      ),
+      resume: vi.fn(),
     };
-    // `findPrNumber` returns `undefined` once the PR is merged
-    // because `gh pr list` filters to open PRs by default.
     const findPrNumber = vi.fn().mockReturnValue(undefined);
-    const findSuggestionCommentBody = vi.fn();
+    const postSuggestionComment = vi.fn();
     const chooseSquashApplyMode = vi.fn();
     const queryPrState = vi.fn().mockReturnValue("MERGED");
     const onSquashSubStep = vi.fn();
     const opts = makeOpts({
       agent,
       findPrNumber,
-      findSuggestionCommentBody,
+      postSuggestionComment,
       chooseSquashApplyMode,
       queryPrState,
       onSquashSubStep,
@@ -942,45 +1013,38 @@ describe("createSquashStageHandler", () => {
 
     expect(result.outcome).toBe("completed");
     expect(result.message).toContain("already merged");
-    // Guard runs before the comment lookup.
-    expect(findPrNumber).not.toHaveBeenCalled();
-    expect(findSuggestionCommentBody).not.toHaveBeenCalled();
+    expect(postSuggestionComment).not.toHaveBeenCalled();
     expect(chooseSquashApplyMode).not.toHaveBeenCalled();
     expect(queryPrState).toHaveBeenCalledWith("org", "repo", "issue-42");
     expect(onSquashSubStep).toHaveBeenLastCalledWith(undefined);
   });
 
-  test("user picks agent, but PR merges between query and follow-up → alreadyMerged, no sendFollowUp call", async () => {
-    const prBodyWithMarker = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nT\n\`\`\`\n\n**Body**\n\n\`\`\`text\nB\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
+  test("envelope + user picks agent, but PR merges between user choice and follow-up → alreadyMerged, no follow-up resume", async () => {
+    const envelopeText =
+      "<<<TITLE>>>\nT\n<<</TITLE>>>\n\n<<<BODY>>>\nB\n<<</BODY>>>";
     const agent: AgentAdapter = {
-      invoke: vi
-        .fn()
-        .mockReturnValue(
-          makeStream(
-            makeResult({ sessionId: "sess-squash", responseText: "Plan." }),
-          ),
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-squash",
+            responseText: envelopeText,
+          }),
         ),
-      resume: vi
-        .fn()
-        .mockReturnValue(
-          makeStream(makeResult({ responseText: "SUGGESTED_SINGLE" })),
-        ),
+      ),
+      resume: vi.fn(),
     };
-    // First guardIfPrMerged call (before askUserAndApply) returns OPEN so
-    // the user prompt runs; the second guard call (inside askUserAndApply
-    // before the "agent" branch) returns MERGED.
-    const queryPrState = vi
-      .fn()
-      .mockReturnValueOnce("OPEN")
-      .mockReturnValueOnce("MERGED");
+    // First guard call (askUserAndApply, before "agent" follow-up)
+    // returns MERGED — by that point the user has already picked
+    // "agent" in `chooseSquashApplyMode`.
+    const queryPrState = vi.fn().mockReturnValue("MERGED");
     const chooseSquashApplyMode = vi.fn().mockResolvedValue("agent");
-    const findSuggestionCommentBody = vi.fn().mockReturnValue(prBodyWithMarker);
+    const postSuggestionComment = vi.fn();
     const onSquashSubStep = vi.fn();
     const getCiStatus = vi.fn();
     const opts = makeOpts({
       agent,
       chooseSquashApplyMode,
-      findSuggestionCommentBody,
+      postSuggestionComment,
       queryPrState,
       onSquashSubStep,
       getCiStatus,
@@ -991,8 +1055,9 @@ describe("createSquashStageHandler", () => {
     expect(result.outcome).toBe("completed");
     expect(result.message).toContain("already merged");
     expect(chooseSquashApplyMode).toHaveBeenCalledTimes(1);
-    // Only the verdict resume happened — no follow-up squash resume.
-    expect(agent.resume).toHaveBeenCalledTimes(1);
+    // No resume — the merged guard fired before sending the follow-up
+    // squash prompt.
+    expect(agent.resume).not.toHaveBeenCalled();
     expect(getCiStatus).not.toHaveBeenCalled();
     const states = onSquashSubStep.mock.calls.map((c) => c[0]);
     // Never transitioned to "squashing".
@@ -1043,19 +1108,27 @@ describe("createSquashStageHandler", () => {
       expect(result.message).toContain("CI passed");
     });
 
-    test("count unchanged AND marker present → SUGGESTED_SINGLE", async () => {
-      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nsuggested\n\`\`\`\n\n**Body**\n\n\`\`\`text\nsuggested body\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
-      const chooseSquashApplyMode = vi.fn().mockResolvedValue("github");
+    // Issue #304 reviewer round 3: a historical squash-suggestion
+    // comment on the PR must NOT be promoted to a SUGGESTED_SINGLE
+    // verdict by the deterministic fallback chain.  Without an
+    // envelope from this run, the only deterministic signals are
+    // commit-count collapse (SQUASHED_MULTI) or BLOCKED.
+    test("count unchanged AND stale marker present → BLOCKED (no stale-comment promotion)", async () => {
+      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nstale\n\`\`\`\n\n**Body**\n\n\`\`\`text\nstale body\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
+      const chooseSquashApplyMode = vi.fn();
+      const postSuggestionComment = vi.fn();
       const opts = makeOpts({
         agent: makeAmbiguousAgent(),
         countBranchCommits: vi.fn().mockReturnValue(2),
         findSuggestionCommentBody: vi.fn().mockReturnValue(prBody),
         chooseSquashApplyMode,
+        postSuggestionComment,
       });
       const stage = createSquashStageHandler(opts);
       const result = await stage.handler(BASE_CTX);
-      expect(result.outcome).toBe("completed");
-      expect(chooseSquashApplyMode).toHaveBeenCalled();
+      expect(result.outcome).toBe("blocked");
+      expect(chooseSquashApplyMode).not.toHaveBeenCalled();
+      expect(postSuggestionComment).not.toHaveBeenCalled();
     });
 
     test("neither → BLOCKED", async () => {
@@ -1427,52 +1500,43 @@ describe("createSquashStageHandler", () => {
     });
   });
 
-  // -- verdict session id persistence (issue #252 review round 5) -----------
+  // -- session id persistence (issue #252 review round 5) ------------------
   //
-  // `resolveVerdict()` may surface a session id that differs from the
-  // planning turn's (adapters can update the id on follow-up turns).
-  // Stage 8 must persist the latest verdict session id via
+  // The envelope-driven shortcut posts the comment from the work-turn
+  // session id, then the user-choice flow resumes that same session for
+  // the agent-squash follow-up.  The session id from the planning turn
+  // (where the agent emitted the envelope) MUST be persisted via
   // `ctx.onSessionId` BEFORE entering `awaiting_user_choice`, so that a
-  // resume + user "agent" choice continues the exact conversation that
-  // drafted the squash-suggestion comment — not the older planning session.
-  describe("verdict session id persistence", () => {
-    test("SUGGESTED_SINGLE persists verdict session (distinct from planning) before awaiting choice", async () => {
-      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nT\n\`\`\`\n\n**Body**\n\n\`\`\`text\nB\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
+  // resume + user "agent" choice continues the same conversation that
+  // drafted the squash-suggestion comment.
+  describe("session id persistence", () => {
+    test("envelope shortcut persists planning session before awaiting choice", async () => {
+      const envelopeText =
+        "<<<TITLE>>>\nT\n<<</TITLE>>>\n\n<<<BODY>>>\nB\n<<</BODY>>>";
       const invoke = vi.fn().mockReturnValue(
         makeStream(
           makeResult({
             sessionId: "sess-planning",
-            responseText: "Drafted suggestion.",
+            responseText: envelopeText,
           }),
         ),
       );
-      // Verdict turn surfaces a different session id.
-      const resume = vi
-        .fn()
-        .mockReturnValueOnce(
-          makeStream(
-            makeResult({
-              sessionId: "sess-verdict",
-              responseText: "SUGGESTED_SINGLE",
-            }),
-          ),
-        )
-        // Later follow-up for the agent squash path.
-        .mockReturnValueOnce(
-          makeStream(
-            makeResult({
-              sessionId: "sess-followup",
-              responseText: "Squashed and pushed.",
-            }),
-          ),
-        );
+      // Follow-up resume for the agent-squash path.
+      const resume = vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-followup",
+            responseText: "Squashed and pushed.",
+          }),
+        ),
+      );
       const agent: AgentAdapter = { invoke, resume };
 
       const sessionCalls: Array<[string, string]> = [];
       const chooseSquashApplyMode = vi.fn().mockResolvedValue("agent");
       const opts = makeOpts({
         agent,
-        findSuggestionCommentBody: vi.fn().mockReturnValue(prBody),
+        postSuggestionComment: vi.fn(),
         chooseSquashApplyMode,
       });
       const stage = createSquashStageHandler(opts);
@@ -1482,17 +1546,14 @@ describe("createSquashStageHandler", () => {
       });
 
       const persisted = sessionCalls.map(([, sid]) => sid);
-      // The verdict session id must have been persisted before the
-      // user-choice prompt.  It must also precede the follow-up turn,
-      // so a resume after that point would pick the correct session.
-      const verdictIndex = persisted.indexOf("sess-verdict");
-      expect(verdictIndex).toBeGreaterThanOrEqual(0);
+      // Planning session must have been persisted before the
+      // user-choice prompt — so a resume after that point would pick
+      // the conversation that drafted the suggestion.
+      expect(persisted).toContain("sess-planning");
 
-      // chooseSquashApplyMode was called exactly once, and for "agent"
-      // the follow-up resume was sent on the verdict session id.
       expect(chooseSquashApplyMode).toHaveBeenCalledTimes(1);
-      // resume calls: 0 = verdict check, 1 = agent squash follow-up.
-      expect(resume.mock.calls[1][0]).toBe("sess-verdict");
+      // The follow-up resume goes to the planning session.
+      expect(resume.mock.calls[0][0]).toBe("sess-planning");
     });
 
     test("resume from awaiting_user_choice + user picks agent resumes the verdict session id via getSavedAgentSessionId", async () => {
@@ -1581,8 +1642,11 @@ describe("createSquashStageHandler", () => {
       expect(keywords).toContain("SQUASHED_MULTI");
     });
 
-    test("emits SUGGESTED_SINGLE when marker block is present", async () => {
-      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\ns\n\`\`\`\n\n**Body**\n\n\`\`\`text\ns body\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
+    // Issue #304 reviewer round 3: a stale historical comment must NOT
+    // promote the deterministic fallback to SUGGESTED_SINGLE.  Without
+    // an envelope from this run, the fallback emits BLOCKED.
+    test("emits BLOCKED when only a stale marker block is present (no current envelope)", async () => {
+      const prBody = `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nstale\n\`\`\`\n\n**Body**\n\n\`\`\`text\nstale body\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
       const events = new PipelineEventEmitter();
       const handler = vi.fn();
       events.on("pipeline:verdict", handler);
@@ -1590,13 +1654,13 @@ describe("createSquashStageHandler", () => {
         agent: makeAmbiguousAgent(),
         countBranchCommits: vi.fn().mockReturnValue(2),
         findSuggestionCommentBody: vi.fn().mockReturnValue(prBody),
-        chooseSquashApplyMode: vi.fn().mockResolvedValue("github"),
       });
       const stage = createSquashStageHandler(opts);
       await stage.handler({ ...BASE_CTX, events });
 
       const keywords = handler.mock.calls.map((c) => c[0].keyword);
-      expect(keywords).toContain("SUGGESTED_SINGLE");
+      expect(keywords).toContain("BLOCKED");
+      expect(keywords).not.toContain("SUGGESTED_SINGLE");
     });
 
     test("emits BLOCKED when neither signal is present", async () => {
@@ -1741,38 +1805,39 @@ describe("createSquashStageHandler", () => {
   // -- squashApplyPolicy: auto vs ask --------------------------------------
 
   describe("squashApplyPolicy", () => {
+    const ENVELOPE_TEXT =
+      "<<<TITLE>>>\nT\n<<</TITLE>>>\n\n<<<BODY>>>\nB\n<<</BODY>>>";
+
     function makePrCommentBody(): string {
       return `${SQUASH_SUGGESTION_START_MARKER}\n**Title**\n\n\`\`\`text\nT\n\`\`\`\n\n**Body**\n\n\`\`\`text\nB\n\`\`\`\n${SQUASH_SUGGESTION_END_MARKER}`;
     }
 
     test("policy=auto skips chooseSquashApplyMode and proceeds as agent", async () => {
-      const prBody = makePrCommentBody();
-      const resumeResults = [
-        makeStream(makeResult({ responseText: "SUGGESTED_SINGLE" })),
-        makeStream(
-          makeResult({
-            sessionId: "sess-followup",
-            responseText: "Squashed and pushed.",
-          }),
-        ),
-      ];
-      let resumeCall = 0;
       const agent: AgentAdapter = {
-        invoke: vi
-          .fn()
-          .mockReturnValue(
-            makeStream(
-              makeResult({ sessionId: "sess-squash", responseText: "Plan." }),
-            ),
+        invoke: vi.fn().mockReturnValue(
+          makeStream(
+            makeResult({
+              sessionId: "sess-squash",
+              responseText: ENVELOPE_TEXT,
+            }),
           ),
-        resume: vi.fn().mockImplementation(() => resumeResults[resumeCall++]),
+        ),
+        // Single follow-up resume for the agent-squash branch.
+        resume: vi.fn().mockReturnValue(
+          makeStream(
+            makeResult({
+              sessionId: "sess-followup",
+              responseText: "Squashed and pushed.",
+            }),
+          ),
+        ),
       };
       const chooseSquashApplyMode = vi.fn();
       const onSquashSubStep = vi.fn();
       const opts = makeOpts({
         agent,
         chooseSquashApplyMode,
-        findSuggestionCommentBody: vi.fn().mockReturnValue(prBody),
+        postSuggestionComment: vi.fn(),
         onSquashSubStep,
         squashApplyPolicy: "auto",
       });
@@ -1783,8 +1848,9 @@ describe("createSquashStageHandler", () => {
       expect(result.message).toContain("CI passed");
       // Policy prompt never fired.
       expect(chooseSquashApplyMode).not.toHaveBeenCalled();
-      // Followed the "agent" branch: verdict resume + follow-up resume.
-      expect(agent.resume).toHaveBeenCalledTimes(2);
+      // No verdict turn under the envelope shortcut — only the
+      // agent-squash follow-up resume.
+      expect(agent.resume).toHaveBeenCalledTimes(1);
       expect(opts.getCiStatus).toHaveBeenCalled();
       const states = onSquashSubStep.mock.calls.map((c) => c[0]);
       expect(states).toContain("squashing");
@@ -1793,20 +1859,16 @@ describe("createSquashStageHandler", () => {
     });
 
     test("policy=ask still calls chooseSquashApplyMode and honors the user choice", async () => {
-      const prBody = makePrCommentBody();
       const agent: AgentAdapter = {
-        invoke: vi
-          .fn()
-          .mockReturnValue(
-            makeStream(
-              makeResult({ sessionId: "sess-squash", responseText: "Plan." }),
-            ),
+        invoke: vi.fn().mockReturnValue(
+          makeStream(
+            makeResult({
+              sessionId: "sess-squash",
+              responseText: ENVELOPE_TEXT,
+            }),
           ),
-        resume: vi
-          .fn()
-          .mockReturnValue(
-            makeStream(makeResult({ responseText: "SUGGESTED_SINGLE" })),
-          ),
+        ),
+        resume: vi.fn(),
       };
       const chooseSquashApplyMode = vi.fn().mockResolvedValue("github");
       const onSquashSubStep = vi.fn();
@@ -1814,7 +1876,7 @@ describe("createSquashStageHandler", () => {
       const opts = makeOpts({
         agent,
         chooseSquashApplyMode,
-        findSuggestionCommentBody: vi.fn().mockReturnValue(prBody),
+        postSuggestionComment: vi.fn(),
         onSquashSubStep,
         getCiStatus,
         squashApplyPolicy: "ask",
@@ -2160,6 +2222,27 @@ describe("buildSquashSuggestionComment ↔ parseSquashSuggestionBlock round-trip
     roundTrip({
       title: "Document the marker block",
       body: `The marker is \`${SQUASH_SUGGESTION_START_MARKER}\`.`,
+    });
+  });
+
+  // Issue #304 reviewer round 3 #2: a literal end marker inside the
+  // body must not truncate the parse.  The formatter writes body
+  // content verbatim inside a CommonMark fenced block, so a literal
+  // end-marker line lives INSIDE that fence.  The parser has to
+  // require a free-standing end-marker line at or after the body's
+  // closing fence — `indexOf` over the whole comment body would stop
+  // at the in-fence occurrence and break the round-trip.
+  test("body containing the end marker as a literal string on its own line", () => {
+    roundTrip({
+      title: "Document both markers",
+      body: `Markers used by Stage 8:\n\n${SQUASH_SUGGESTION_START_MARKER}\n${SQUASH_SUGGESTION_END_MARKER}`,
+    });
+  });
+
+  test("body containing both start and end markers as literal strings", () => {
+    roundTrip({
+      title: "Reference the marker block in commit",
+      body: `Stage 8 wraps the suggestion in:\n\n${SQUASH_SUGGESTION_START_MARKER}\n...\n${SQUASH_SUGGESTION_END_MARKER}\n\nCloses #304`,
     });
   });
 });

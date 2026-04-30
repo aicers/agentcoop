@@ -45,6 +45,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Read-only callers (`getSquashMergeHint` in `index.ts`, the
   in-handler `findSuggestionCommentBody` adapter) wrap the call in
   `try`/`catch` to silently degrade to "no matching comment".
+- `parseSquashSuggestionBlock` now anchors both markers to whole
+  lines and requires the end-marker line to appear at or after the
+  body's closing fence.  This prevents a literal end marker
+  embedded inside the body fenced block from truncating the parse:
+  the body fence absorbs that occurrence as content, and only a
+  free-standing end-marker line — emitted by the formatter after
+  the body fence closes — counts as the delimiter.  A round-trip
+  test pins the property for body content that mentions the end
+  marker.
+- The post-verdict path no longer promotes a historical
+  squash-suggestion comment on the PR to a SUGGESTED_SINGLE
+  outcome.  A SUGGESTED_SINGLE outcome must be backed by a current
+  `<<<TITLE>>> / <<<BODY>>>` envelope from this run.  When the
+  verdict resolves to SUGGESTED_SINGLE without an envelope, the
+  same focused clarification turn used for the malformed case
+  fires (asking for either a valid envelope or SQUASHED_MULTI /
+  BLOCKED).  The deterministic fallback chain similarly drops the
+  "valid marker block on PR → SUGGESTED_SINGLE" rule; without an
+  envelope from this run, the only deterministic signals are
+  commit-count collapse (SQUASHED_MULTI) or BLOCKED.  This closes
+  the stale-suggestion propagation problem issue #304 was meant to
+  fix, which an earlier revision still permitted via the verdict
+  path.
 
 ## [0.2.0] - 2026-04-29
 
