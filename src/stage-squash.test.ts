@@ -2413,6 +2413,97 @@ describe("parseSquashEnvelope", () => {
       suggestion: { title: "T", body: "first\n\nsecond" },
     });
   });
+
+  // Issue #304 reviewer round 5: a commit body that legitimately
+  // documents the envelope contract — plausible for issue #304 itself
+  // — must not be truncated at the first own-line `<<</BODY>>>`.  The
+  // parser anchors BODY_CLOSE to the LAST own-line occurrence after
+  // BODY_OPEN, so in-body literal close tags are absorbed as content
+  // and only the final own-line tag terminates the envelope.
+  test("body may contain a literal <<</BODY>>> line as content", () => {
+    const text = [
+      "<<<TITLE>>>",
+      "Document the envelope",
+      "<<</TITLE>>>",
+      "",
+      "<<<BODY>>>",
+      "The envelope close tag is:",
+      "<<</BODY>>>",
+      "That ends the example.",
+      "<<</BODY>>>",
+    ].join("\n");
+    expect(parseSquashEnvelope(text)).toEqual({
+      kind: "ok",
+      suggestion: {
+        title: "Document the envelope",
+        body: "The envelope close tag is:\n<<</BODY>>>\nThat ends the example.",
+      },
+    });
+  });
+
+  test("body may quote the full envelope contract verbatim", () => {
+    // The exact failure mode the round 5 reviewer flagged: a body
+    // that documents all four envelope tags inline.  With FIRST-match
+    // BODY_CLOSE this would have been truncated at the example's
+    // closing `<<</BODY>>>` line; with LAST-match it round-trips.
+    const documentedBody = [
+      "Issue #304 introduces the envelope:",
+      "",
+      "<<<TITLE>>>",
+      "...",
+      "<<</TITLE>>>",
+      "",
+      "<<<BODY>>>",
+      "...",
+      "<<</BODY>>>",
+      "",
+      "Closes #304",
+    ].join("\n");
+    const text = [
+      "<<<TITLE>>>",
+      "Document envelope",
+      "<<</TITLE>>>",
+      "",
+      "<<<BODY>>>",
+      documentedBody,
+      "<<</BODY>>>",
+    ].join("\n");
+    expect(parseSquashEnvelope(text)).toEqual({
+      kind: "ok",
+      suggestion: { title: "Document envelope", body: documentedBody },
+    });
+  });
+
+  test("body may contain literal envelope tags including <<</TITLE>>>", () => {
+    // The other envelope tags (start tags, TITLE close) are not
+    // structural close markers for the body; they just live as
+    // content inside the body region between BODY_OPEN and the LAST
+    // BODY_CLOSE.  Verifies the parser does not get confused by them.
+    const documentedBody = [
+      "Tags reference:",
+      "<<<TITLE>>>",
+      "<<</TITLE>>>",
+      "<<<BODY>>>",
+      "<<</BODY>>>",
+      "End of reference.",
+    ].join("\n");
+    const text = [
+      "<<<TITLE>>>",
+      "Reference all envelope tags",
+      "<<</TITLE>>>",
+      "",
+      "<<<BODY>>>",
+      documentedBody,
+      "<<</BODY>>>",
+    ].join("\n");
+    expect(parseSquashEnvelope(text)).toEqual({
+      kind: "ok",
+      suggestion: {
+        title: "Reference all envelope tags",
+        body: documentedBody,
+      },
+    });
+  });
 });
 
 // ---- postOrUpdateSquashSuggestion -------------------------------------------

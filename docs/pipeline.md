@@ -1351,6 +1351,11 @@ and classifies the response as one of three outcomes:
   non-empty content) → agentcoop calls
   `buildSquashSuggestionComment` to render the canonical marker
   block (asserts round-trip parseability as defense-in-depth),
+  BODY_CLOSE is anchored to the LAST own-line `<<</BODY>>>` after
+  BODY_OPEN so a body that legitimately documents the envelope
+  contract (plausible for issue #304 itself) is not truncated at
+  an in-body literal close tag — only the final own-line
+  `<<</BODY>>>` terminates the envelope,
   then `postOrUpdateSquashSuggestion` PATCHes the prior comment by
   id (when one exists) or POSTs a fresh one.  A transient lookup
   failure inside the write helper (auth, network, rate-limit) is

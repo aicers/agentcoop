@@ -245,7 +245,11 @@ export function buildSquashPrompt(
     `     Both envelopes are required.  Do not nest fenced code blocks`,
     `     around the envelope.  agentcoop parses the text between the`,
     `     tags verbatim — leading and trailing blank lines are stripped,`,
-    `     internal blank lines are preserved.`,
+    `     internal blank lines are preserved.  The body may include a`,
+    `     literal \`<<</BODY>>>\` line as content (e.g. when documenting`,
+    `     this envelope contract); agentcoop anchors the structural`,
+    `     close to the LAST own-line \`<<</BODY>>>\`, so put your final`,
+    `     close tag on its own line as the last line of the envelope.`,
     ``,
     `   **If multiple commits are appropriate:**`,
     ...(ctx.baseSha
@@ -576,6 +580,30 @@ function findOwnLineTag(lines: string[], tag: string, start: number): number {
 }
 
 /**
+ * Find the last line index strictly before `end` (and at or after
+ * `start`) whose trimmed contents exactly match `tag`.  Returns -1
+ * when not found.
+ *
+ * Used for envelope close-tag detection so the body may legitimately
+ * contain a literal `<<</BODY>>>` line as content (e.g. a commit
+ * message that documents the envelope contract itself, plausible for
+ * issue #304 where the body discusses the marker block).  Anchoring
+ * to the LAST own-line occurrence absorbs in-body literals as content
+ * and only treats the final own-line tag as the structural close.
+ */
+function findLastOwnLineTag(
+  lines: string[],
+  tag: string,
+  start: number,
+  end: number,
+): number {
+  for (let i = end - 1; i >= start; i--) {
+    if (lines[i].trim() === tag) return i;
+  }
+  return -1;
+}
+
+/**
  * Parse the agent's `<<<TITLE>>>...<<</TITLE>>> / <<<BODY>>>...<<</BODY>>>`
  * envelope from a free-form response.
  *
@@ -589,6 +617,13 @@ function findOwnLineTag(lines: string[], tag: string, start: number): number {
  * `malformed` so the caller's focused clarification turn can fire —
  * a dropped line is exactly the recoverable formatting mistake
  * issue #304 wants the agent to be able to repair.
+ *
+ * BODY_CLOSE is anchored to the LAST own-line `<<</BODY>>>` after
+ * BODY_OPEN (vs. FIRST for the other tags) so a body documenting
+ * the envelope contract — plausible for issue #304 itself — does
+ * not get truncated at the first own-line close marker.  Title is
+ * conventionally one line per the prompt, so TITLE_CLOSE keeps the
+ * simpler FIRST rule.
  *
  * Returns:
  *   - `{ kind: "missing" }` when no `<<<TITLE>>>` tag appears on its
@@ -634,10 +669,16 @@ export function parseSquashEnvelope(text: string): SquashEnvelopeResult {
       reason: "missing <<<BODY>>> open tag after the title envelope",
     };
   }
-  const bodyCloseIdx = findOwnLineTag(
+  // Anchor BODY_CLOSE to the LAST own-line occurrence so the body
+  // may legitimately contain a literal `<<</BODY>>>` line as content
+  // (e.g. a commit message documenting the envelope contract — see
+  // issue #304 round 5 review).  In-body literals are absorbed as
+  // content; only the final own-line tag is the structural close.
+  const bodyCloseIdx = findLastOwnLineTag(
     lines,
     ENVELOPE_BODY_CLOSE,
     bodyOpenIdx + 1,
+    lines.length,
   );
   if (bodyCloseIdx === -1) {
     return {
@@ -693,6 +734,11 @@ export function buildSquashEnvelopeClarificationPrompt(reason: string): string {
     `<<<BODY>>>`,
     `<your body, multi-line allowed>`,
     `<<</BODY>>>`,
+    ``,
+    `The body may legitimately contain a literal \`<<</BODY>>>\` line`,
+    `as content; agentcoop anchors the structural close to the LAST`,
+    `own-line \`<<</BODY>>>\`, so place your final close tag on its`,
+    `own line as the last line of the envelope.`,
     ``,
     `Option 2 — a single keyword on its own line:`,
     `- SQUASHED_MULTI — if you actually rewrote history into multiple`,

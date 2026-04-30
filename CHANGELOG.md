@@ -32,7 +32,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the recoverable-mistake path the verdict-clarification round
   already provides — a dropped close tag is exactly the kind of
   formatting-only mistake the clarification turn was meant to
-  repair.
+  repair.  The body's structural close tag is anchored to the LAST
+  own-line `<<</BODY>>>` after BODY_OPEN, so a body that
+  legitimately documents the envelope contract (plausible for
+  issue #304 itself) is not truncated at an in-body literal close
+  marker; in-body literal tags are absorbed as content and only
+  the final own-line `<<</BODY>>>` terminates the envelope.
 - `findLatestCommentWithMarker` now returns `{ id, body }` instead
   of just the body so callers that need to PATCH an existing
   comment can do so without a second lookup.  Read-only callers
