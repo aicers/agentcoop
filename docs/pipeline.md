@@ -1355,7 +1355,10 @@ and classifies the response as one of three outcomes:
   BODY_OPEN so a body that legitimately documents the envelope
   contract (plausible for issue #304 itself) is not truncated at
   an in-body literal close tag — only the final own-line
-  `<<</BODY>>>` terminates the envelope,
+  `<<</BODY>>>` terminates the envelope, and that close tag must
+  be the last non-blank line of the response so a forgotten real
+  close tag (with an in-body example present) classifies as
+  malformed instead of silently truncating the body,
   then `postOrUpdateSquashSuggestion` PATCHes the prior comment by
   id (when one exists) or POSTs a fresh one.  A transient lookup
   failure inside the write helper (auth, network, rate-limit) is

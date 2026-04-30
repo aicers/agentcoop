@@ -2504,6 +2504,56 @@ describe("parseSquashEnvelope", () => {
       },
     });
   });
+
+  // Issue #304 reviewer round 6: LAST-match BODY_CLOSE alone still
+  // silently accepts a truncated body when the agent forgets the real
+  // structural close tag but the body itself contains an example
+  // `<<</BODY>>>` line.  In that case LAST-match would pick the
+  // in-body example and trailing content (the omitted-close-tag
+  // proof) would be ignored.  The parser additionally requires the
+  // structural BODY_CLOSE to be the last non-blank line of the
+  // response, so this case classifies as malformed and routes into
+  // the focused clarification turn.
+  test("returns malformed when body quotes <<</BODY>>> but the final close tag is missing", () => {
+    const text = [
+      "<<<TITLE>>>",
+      "Document the envelope",
+      "<<</TITLE>>>",
+      "",
+      "<<<BODY>>>",
+      "The envelope close tag is:",
+      "<<</BODY>>>",
+      "That ends the example.",
+    ].join("\n");
+    const result = parseSquashEnvelope(text);
+    expect(result.kind).toBe("malformed");
+    if (result.kind === "malformed") {
+      expect(result.reason).toContain("<<</BODY>>>");
+      expect(result.reason).toContain("last non-blank line");
+    }
+  });
+
+  // Trailing blank lines after the structural close tag are fine —
+  // only non-blank trailing content makes the structural close
+  // ambiguous.  Verifies the round 6 anchor does not over-reject.
+  test("allows trailing blank lines after the structural close tag", () => {
+    const text = [
+      "<<<TITLE>>>",
+      "T",
+      "<<</TITLE>>>",
+      "",
+      "<<<BODY>>>",
+      "B",
+      "<<</BODY>>>",
+      "",
+      "   ",
+      "",
+    ].join("\n");
+    expect(parseSquashEnvelope(text)).toEqual({
+      kind: "ok",
+      suggestion: { title: "T", body: "B" },
+    });
+  });
 });
 
 // ---- postOrUpdateSquashSuggestion -------------------------------------------

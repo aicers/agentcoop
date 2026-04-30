@@ -37,7 +37,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   legitimately documents the envelope contract (plausible for
   issue #304 itself) is not truncated at an in-body literal close
   marker; in-body literal tags are absorbed as content and only
-  the final own-line `<<</BODY>>>` terminates the envelope.
+  the final own-line `<<</BODY>>>` terminates the envelope.  The
+  structural close tag must additionally be the last non-blank
+  line of the response, so an envelope where the agent forgot the
+  real close tag while including an example `<<</BODY>>>` line in
+  body content classifies as malformed (and routes into the
+  clarification turn) instead of being silently accepted with a
+  truncated body.
 - `findLatestCommentWithMarker` now returns `{ id, body }` instead
   of just the body so callers that need to PATCH an existing
   comment can do so without a second lookup.  Read-only callers

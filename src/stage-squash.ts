@@ -248,8 +248,10 @@ export function buildSquashPrompt(
     `     internal blank lines are preserved.  The body may include a`,
     `     literal \`<<</BODY>>>\` line as content (e.g. when documenting`,
     `     this envelope contract); agentcoop anchors the structural`,
-    `     close to the LAST own-line \`<<</BODY>>>\`, so put your final`,
-    `     close tag on its own line as the last line of the envelope.`,
+    `     close to the LAST own-line \`<<</BODY>>>\`, AND that close tag`,
+    `     must be the last non-blank line of your response.  Do not add`,
+    `     any prose after the closing \`<<</BODY>>>\` — only blank lines`,
+    `     may follow it.`,
     ``,
     `   **If multiple commits are appropriate:**`,
     ...(ctx.baseSha
@@ -625,6 +627,13 @@ function findLastOwnLineTag(
  * conventionally one line per the prompt, so TITLE_CLOSE keeps the
  * simpler FIRST rule.
  *
+ * The structural BODY_CLOSE must additionally be the last non-blank
+ * line of the response.  Without that anchor a forgotten real close
+ * tag would still parse silently when the body contained an example
+ * `<<</BODY>>>` line: LAST-match would pick the in-body example and
+ * truncate the body.  Requiring no non-blank trailing content makes
+ * that case classify as `malformed` so the clarification turn fires.
+ *
  * Returns:
  *   - `{ kind: "missing" }` when no `<<<TITLE>>>` tag appears on its
  *     own line.  The caller falls through to the verdict flow:
@@ -686,6 +695,23 @@ export function parseSquashEnvelope(text: string): SquashEnvelopeResult {
       reason: "missing <<</BODY>>> close tag after <<<BODY>>>",
     };
   }
+  // Round 6 reviewer: LAST-match alone still silently accepts a
+  // truncated body when the agent forgets the structural close tag
+  // but the body itself contains an example `<<</BODY>>>` line — the
+  // in-body example would be picked as the structural close.  Require
+  // the structural close tag to be the last non-blank line of the
+  // response so a missing real close tag classifies as malformed and
+  // routes into the focused clarification turn instead of being
+  // silently accepted.
+  for (let i = bodyCloseIdx + 1; i < lines.length; i++) {
+    if (lines[i].trim() !== "") {
+      return {
+        kind: "malformed",
+        reason:
+          "<<</BODY>>> close tag must be the last non-blank line of the response",
+      };
+    }
+  }
 
   const title = lines
     .slice(titleOpenIdx + 1, titleCloseIdx)
@@ -737,8 +763,9 @@ export function buildSquashEnvelopeClarificationPrompt(reason: string): string {
     ``,
     `The body may legitimately contain a literal \`<<</BODY>>>\` line`,
     `as content; agentcoop anchors the structural close to the LAST`,
-    `own-line \`<<</BODY>>>\`, so place your final close tag on its`,
-    `own line as the last line of the envelope.`,
+    `own-line \`<<</BODY>>>\`, AND that close tag must be the last`,
+    `non-blank line of your response.  Do not add prose after the`,
+    `closing \`<<</BODY>>>\` — only blank lines may follow it.`,
     ``,
     `Option 2 — a single keyword on its own line:`,
     `- SQUASHED_MULTI — if you actually rewrote history into multiple`,
