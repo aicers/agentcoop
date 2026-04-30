@@ -25,9 +25,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the existing verdict flow instead of pre-empting it with a
   malformed-envelope block.  Once envelope intent is declared, any
   structural break (a missing close tag, an absent body section,
-  empty title or body content) classifies as malformed and routes
-  into a focused clarification turn that asks for either a valid
-  envelope or a SQUASHED_MULTI / BLOCKED keyword.  This preserves
+  empty title, or empty / whitespace-only body content) classifies
+  as malformed and routes into a focused clarification turn that
+  asks for either a valid envelope or a SQUASHED_MULTI / BLOCKED
+  keyword.  This preserves
   the recoverable-mistake path the verdict-clarification round
   already provides — a dropped close tag is exactly the kind of
   formatting-only mistake the clarification turn was meant to
@@ -42,9 +43,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   transient auth / network / rate-limit failure does not turn an
   idempotent PATCH into a duplicate POST; the squash stage converts
   any thrown lookup error into a `blocked` outcome instead.
-  Read-only callers (`getSquashMergeHint` in `index.ts`, the
-  in-handler `findSuggestionCommentBody` adapter) wrap the call in
-  `try`/`catch` to silently degrade to "no matching comment".
+  `getSquashMergeHint` in `index.ts` wraps the call in `try`/`catch`
+  to silently degrade — the hint is purely cosmetic.  The squash
+  handler's read-side `findSuggestionCommentBody` adapter no longer
+  silently degrades: errors propagate to the caller, and the
+  `awaiting_user_choice` resume path now blocks on a lookup failure
+  instead of falling through to a fresh planning run.  Falling
+  through on this stateful path could re-invoke the agent and
+  re-author the suggestion or change the branch decision after the
+  user had already been presented with one; blocking leaves
+  `squashSubStep` at `awaiting_user_choice` so a retry once `gh`
+  recovers re-presents the existing choice.
 - `parseSquashSuggestionBlock` now anchors both markers to whole
   lines and requires the end-marker line to appear at or after the
   body's closing fence.  This prevents a literal end marker

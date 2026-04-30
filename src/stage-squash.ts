@@ -659,7 +659,7 @@ export function parseSquashEnvelope(text: string): SquashEnvelopeResult {
   if (title === "") {
     return { kind: "malformed", reason: "title envelope is empty" };
   }
-  if (body === "") {
+  if (body.trim() === "") {
     return { kind: "malformed", reason: "body envelope is empty" };
   }
   return { kind: "ok", suggestion: { title, body } };
@@ -898,21 +898,23 @@ export function createSquashStageHandler(
       const findSuggestionCommentBody =
         opts.findSuggestionCommentBody ??
         ((owner, repo, prNumber, marker) => {
-          // Read-side: a transient lookup failure here only affects
-          // resume/fallback decisions, so silently degrading to "no
-          // matching comment" is acceptable.  The write side, by
-          // contrast, must let the error propagate so it does not
-          // turn into a duplicate POST.
-          try {
-            return defaultFindLatestCommentWithMarker(
-              owner,
-              repo,
-              prNumber,
-              marker,
-            )?.body;
-          } catch {
-            return undefined;
-          }
+          // Errors propagate to the caller; each call site decides
+          // whether to silently degrade ("no matching comment") or
+          // surface the failure.  The two read-side call sites in
+          // this handler differ on that point: the resume path from
+          // `awaiting_user_choice` blocks on lookup failure (it is
+          // stateful — silently degrading would re-invoke the agent
+          // and could change the branch decision after the user has
+          // already been presented with one), while a transient
+          // failure during a non-stateful read is harmless.  The
+          // write side, by contrast, must always let the error
+          // propagate so it does not turn into a duplicate POST.
+          return defaultFindLatestCommentWithMarker(
+            owner,
+            repo,
+            prNumber,
+            marker,
+          )?.body;
         });
       const findPrNumber = opts.findPrNumber ?? defaultFindPrNumber;
       const postSuggestionComment =
@@ -1032,7 +1034,24 @@ export function createSquashStageHandler(
         // `squash.alreadyMerged`.
         const merged = guardIfPrMerged(ctx, opts);
         if (merged) return merged;
-        const commentBody = readSuggestionCommentBody();
+        // A transient `gh api` failure on this stateful resume path
+        // must NOT silently degrade to "no matching comment": doing
+        // so falls through to a fresh planning run, which would
+        // re-invoke the agent and could re-author the suggestion or
+        // change the branch decision after the stage had already
+        // reached `awaiting_user_choice`.  Block instead, leaving
+        // `squashSubStep` at `awaiting_user_choice` so a retry once
+        // `gh` recovers re-presents the existing choice.
+        let commentBody: string | undefined;
+        try {
+          commentBody = readSuggestionCommentBody();
+        } catch (e) {
+          const detail = e instanceof Error ? e.message : String(e);
+          return {
+            outcome: "blocked",
+            message: `Could not read the squash-suggestion PR comment while resuming the user choice: ${detail}.  Resolve the underlying gh / GitHub error and retry — agentcoop refused to fall back to a fresh planning run to avoid changing a decision the user has already been asked about.`,
+          };
+        }
         if (hasValidSuggestionBlock(commentBody)) {
           return askUserAndApply(ctx, opts, undefined);
         }

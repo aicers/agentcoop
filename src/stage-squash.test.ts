@@ -1256,6 +1256,44 @@ describe("createSquashStageHandler", () => {
       expect(opts.agent.invoke).toHaveBeenCalled();
     });
 
+    // Regression for issue #304 reviewer round 4: a transient
+    // `gh api` failure on this stateful resume path must NOT silently
+    // degrade to "no matching comment" — that would fall through to a
+    // fresh planning run, re-invoke the agent, and could re-author
+    // the suggestion or change the branch decision after the user has
+    // already been asked about one.  Block instead, leaving the
+    // sub-step at `awaiting_user_choice` so retry once `gh` recovers
+    // re-presents the existing choice.
+    test("awaiting_user_choice with lookup error → blocked, no fresh planning, no user choice", async () => {
+      const findSuggestionCommentBody = vi.fn(() => {
+        throw new Error("gh api: 503 Service Unavailable");
+      });
+      const findPrNumber = vi.fn().mockReturnValue(42);
+      const chooseSquashApplyMode = vi.fn();
+      const onSquashSubStep = vi.fn();
+      const opts = makeOpts({
+        savedSquashSubStep: "awaiting_user_choice",
+        findSuggestionCommentBody,
+        findPrNumber,
+        chooseSquashApplyMode,
+        onSquashSubStep,
+      });
+      const stage = createSquashStageHandler(opts);
+      const result = await stage.handler(BASE_CTX);
+
+      expect(result.outcome).toBe("blocked");
+      expect(result.message).toContain("503 Service Unavailable");
+      expect(findSuggestionCommentBody).toHaveBeenCalledTimes(1);
+      expect(chooseSquashApplyMode).not.toHaveBeenCalled();
+      expect(opts.agent.invoke).not.toHaveBeenCalled();
+      // Sub-step must remain `awaiting_user_choice` so a retry once
+      // `gh` recovers re-presents the choice.  The handler does not
+      // emit any sub-step transition on this error path.
+      const states = onSquashSubStep.mock.calls.map((c) => c[0]);
+      expect(states).not.toContain(undefined);
+      expect(states).not.toContain("planning");
+    });
+
     // Regression for issue #274 reviewer round 1: resuming from
     // `awaiting_user_choice` must check the PR lifecycle BEFORE
     // reading the suggestion comment.  `findPrNumber` uses
@@ -2342,6 +2380,24 @@ describe("parseSquashEnvelope", () => {
 
   test("returns malformed for empty body", () => {
     const text = "<<<TITLE>>>\nT\n<<</TITLE>>>\n\n<<<BODY>>>\n\n\n<<</BODY>>>";
+    const result = parseSquashEnvelope(text);
+    expect(result.kind).toBe("malformed");
+    if (result.kind === "malformed") {
+      expect(result.reason).toContain("body");
+    }
+  });
+
+  // Regression for issue #304 reviewer round 4: a body that contains
+  // only whitespace (spaces, tabs, blank lines) must classify as
+  // malformed, not ok.  The previous emptiness check `body === ""`
+  // missed this case because the body parser preserves internal
+  // indentation by design — it only strips leading and trailing
+  // newlines.  Without this check, a whitespace-only payload would
+  // be authored as a "valid" squash suggestion, exactly the class of
+  // mechanical formatting failure that #304 was meant to remove.
+  test("returns malformed for whitespace-only body", () => {
+    const text =
+      "<<<TITLE>>>\nT\n<<</TITLE>>>\n\n<<<BODY>>>\n   \n\t\n  \t  \n<<</BODY>>>";
     const result = parseSquashEnvelope(text);
     expect(result.kind).toBe("malformed");
     if (result.kind === "malformed") {

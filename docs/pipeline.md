@@ -1362,7 +1362,8 @@ and classifies the response as one of three outcomes:
   consumers see the verdict.
 - **Malformed envelope** (envelope intent declared but the
   structure is broken: a missing close tag, an absent body
-  section, or empty title / body content) → send one focused
+  section, or empty / whitespace-only title or body content) →
+  send one focused
   **clarification turn** asking the agent to reply with either a
   valid envelope or a `SQUASHED_MULTI` / `BLOCKED` keyword (no
   other commentary).  Re-parse the retry:
@@ -1468,7 +1469,14 @@ re-enters at the correct point:
   the verdict path); if present, re-present the user choice without
   re-invoking the agent.  If absent or malformed, fall back to
   `planning` rather than re-presenting a choice the user could not
-  act on.  If
+  act on.  If the comment lookup itself **throws** (a transient
+  `gh api` failure: auth, network, rate limit), the stage fails
+  closed with `blocked` and leaves `squashSubStep` at
+  `awaiting_user_choice` so a retry once `gh` recovers re-presents
+  the existing choice — silently degrading to "no matching comment"
+  here would fall through to a fresh planning run, re-invoke the
+  agent, and could re-author the suggestion or change the branch
+  decision after the user had already been asked about one.  If
   the user then picks "agent squashes now" but no agent session is
   available (neither the saved run state nor the current verdict
   produced a session ID), the stage fails closed with `blocked`
