@@ -245,8 +245,8 @@ Do not include any other commentary — just the keyword.
 ### Stage 1: Bootstrap
 
 **Agent:** none (orchestrator-managed)\
-**Purpose:** Prepare the repository, default branch, and worktree so
-later stages can run against a known-good local checkout.
+**Purpose:** Prepare the repository, default branch, and author
+worktree so later stages can run against a known-good local checkout.
 
 Stage 1 runs synchronously before the ink TUI mounts.  It performs:
 
@@ -257,10 +257,15 @@ Stage 1 runs synchronously before the ink TUI mounts.  It performs:
 - **Default branch detection:** Query via
   `gh repo view {owner}/{repo} --json defaultBranchRef` instead of
   assuming `main`.
-- **Worktree creation:** Create a git worktree from the latest remote
-  default branch at
+- **Author worktree creation:** Create a git worktree from the latest
+  remote default branch at
   `~/.agentcoop/worktrees/{owner}/{repo}/issue-{number}`, outside the
   repository to avoid pollution.
+- **Reviewer worktree path:** Record the deterministic detached
+  reviewer worktree path at
+  `~/.agentcoop/worktrees/{owner}/{repo}/issue-{number}-review`.
+  The reviewer worktree is created or refreshed later, immediately
+  before Agent B reviewer activity.
 - **Resume pre-flight:** On resume, if `startFromStage === 4` and a PR
   already exists, promote the starting stage to 5 (CI check) so the
   side-effectful `gh pr create` is not replayed.
@@ -880,6 +885,12 @@ addressing feedback. Multi-round until approval.
 Since both agents operate under the same GitHub account, comments
 are distinguished by prefix and round number.
 
+Agent A and Agent B use separate worktrees during review. Agent B
+reviewer turns run from the detached reviewer worktree, refreshed
+from `origin/{branch}` before reviewer activity. Agent A author
+substeps, including PR finalization and review fixes, continue to run
+from the author worktree.
+
 #### Review prompt — Agent B (round 1)
 
 ```text
@@ -889,7 +900,7 @@ You are reviewing a pull request for the following GitHub issue.
 - Owner: {owner}
 - Repo: {repo}
 - Branch: {branch}
-- Worktree: {worktree_path}
+- Worktree: {reviewer_worktree_path}
 
 ## Issue #{number}: {title}
 
@@ -1026,7 +1037,7 @@ You are addressing review feedback for the following GitHub issue.
 - Owner: {owner}
 - Repo: {repo}
 - Branch: {branch}
-- Worktree: {worktree_path}
+- Worktree: {author_worktree_path}
 
 ## Issue #{number}: {title}
 
@@ -1141,7 +1152,7 @@ state of the implementation.
 - Owner: {owner}
 - Repo: {repo}
 - Branch: {branch}
-- Worktree: {worktree_path}
+- Worktree: {author_worktree_path}
 
 ## Issue #{number}: {title}
 
@@ -1217,6 +1228,10 @@ actual PR comment history and corrects:
   authoritative for post-approval progress.
 - **`lastVerdict`** — always corrected to the verdict derived from
   the comment history, even when sub-step reconciliation is skipped.
+- **`reviewerWorktreePath`** — persisted with run state so resumed
+  review stages continue to know the detached reviewer checkout path.
+  The worktree itself is still refreshed from `origin/{branch}`
+  before reviewer activity.
 - **Agent session invalidation** — if any field diverged from the
   persisted value, all agent sessions are invalidated so they
   start fresh with corrected state.
@@ -1645,8 +1660,9 @@ Cleanup
 
 3. **Merge confirmation** — the user chooses:
    - **Merged** — the user has merged the PR externally. Stop
-     running services (e.g., Docker Compose), clean up the git
-     worktree and branch, and report completion.
+     running services (e.g., Docker Compose), clean up the author
+     worktree and branch plus the detached reviewer worktree, and
+     report completion.
    - **Check conflicts** — run the mergeable check again without
      leaving this screen. This lets the user verify the state
      right before merging. If `MERGEABLE` comes back, the inner
@@ -1661,8 +1677,8 @@ Cleanup
      merge confirmation is re-presented.
    - **Exit** — stop the pipeline without merging. The
      orchestrator offers cleanup options: stop running services,
-     delete the worktree, delete the remote branch, and close
-     the PR. Each action is individually selectable.
+     delete the author and reviewer worktrees, delete the remote
+     branch, and close the PR. Each action is individually selectable.
 
    **Prompt viewport cap.** Stage 9's prompts must always leave the
    choice / text-input line visible.  Ink renders in-place without
