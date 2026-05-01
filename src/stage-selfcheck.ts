@@ -60,7 +60,6 @@ export function buildSelfCheckPrompt(
     `- Owner: ${ctx.owner}`,
     `- Repo: ${ctx.repo}`,
     `- Branch: ${ctx.branch}`,
-    `- Worktree: ${ctx.worktreePath}`,
     ``,
     `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
     ``,
@@ -106,6 +105,53 @@ export function buildSelfCheckPrompt(
   return lines.join("\n");
 }
 
+/**
+ * Compact resume-form prompt for stage 3 — sent when the agent
+ * already has the repository / issue context from a prior stage's
+ * session.  Re-states the 8 review items because the self-check
+ * substep itself is what changes between iterations; only the repo
+ * header and full issue body are dropped.
+ */
+export function buildSelfCheckResumePrompt(ctx: StageContext): string {
+  const lines = [
+    `Run a self-check pass on issue #${ctx.issueNumber}.`,
+    ``,
+    `Review the current implementation against all 8 items below.  For each`,
+    `item, briefly note whether it passes or needs attention.`,
+    ``,
+    `1. **Correctness** — Does the implementation fully address the issue?`,
+    `2. **Tests** — Are there thorough tests covering happy paths,`,
+    `   edge cases, and error scenarios, including E2E tests where`,
+    `   applicable?  If any meaningful scenario is untested, write`,
+    `   the missing tests.  Then run the full test suite and verify all tests pass.`,
+    `   If tests require services (databases, message brokers, dev`,
+    `   servers, etc.), start them using whatever tools the project`,
+    `   provides (Docker Compose, \`pnpm dev\`, setup scripts, etc.).`,
+    `   If a port conflict occurs, change the port rather than skipping`,
+    `   the service.`,
+    `3. **Error handling** — Are errors handled gracefully?`,
+    `4. **External services** — Are API calls, network requests, or external`,
+    `   service integrations correct and resilient?  Start all required`,
+    `   services and run integration tests against them rather than skipping`,
+    `   tests that need external services.`,
+    `5. **Documentation consistency** — Are all forms of project`,
+    `   documentation consistent with the code changes?`,
+    ``,
+    buildDocConsistencyInstructions("   "),
+    `6. **Security** — Are there any security concerns (injection, auth,`,
+    `   secrets exposure)?`,
+    `7. **Performance** — Are there obvious performance issues or regressions?`,
+    `8. **Code quality** — Is the new or modified code clean and`,
+    `   maintainable?  If you spot opportunities to simplify, improve,`,
+    `   or refactor the code *within the scope of this change*, apply`,
+    `   them.  Do not refactor unrelated existing code.`,
+  ];
+  if (ctx.userInstruction) {
+    lines.push(``, `## Additional feedback`, ``, ctx.userInstruction);
+  }
+  return lines.join("\n");
+}
+
 export function buildFixOrDonePrompt(): string {
   return [
     `Based on your self-check above, decide what to do next.`,
@@ -119,13 +165,9 @@ export const FIX_OR_DONE_KEYWORDS = ["FIXED", "DONE"] as const;
 
 export function buildFixOrDoneVerdictPrompt(): string {
   return [
-    `You have finished the self-check pass.`,
-    `Respond with exactly one of the following keywords:`,
-    ``,
-    `- FIXED — if you found and fixed issues`,
-    `- DONE — if everything looks good and no changes were needed`,
-    ``,
-    `Do not include any other commentary — just the keyword.`,
+    `Reply with exactly one keyword (no commentary):`,
+    `FIXED if you found and fixed issues,`,
+    `DONE if everything looks good and no changes were needed.`,
   ].join("\n");
 }
 
@@ -138,7 +180,10 @@ export function createSelfCheckStageHandler(
     primaryAgent: "a",
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send self-check prompt (resume if saved session).
-      const checkPrompt = buildSelfCheckPrompt(ctx, opts);
+      const freshPrompt = buildSelfCheckPrompt(ctx, opts);
+      const resumePrompt = buildSelfCheckResumePrompt(ctx);
+      const useResume = ctx.savedAgentASessionId !== undefined;
+      const checkPrompt = useResume ? resumePrompt : freshPrompt;
       ctx.promptSinks?.a?.(checkPrompt, "work");
       const checkResult = await invokeOrResume(
         opts.agent,
@@ -146,8 +191,12 @@ export function createSelfCheckStageHandler(
         checkPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
-        undefined,
-        ctx.usageSinks?.a,
+        {
+          fallbackPrompt: useResume ? freshPrompt : undefined,
+          usageSink: ctx.usageSinks?.a,
+          promptSink: ctx.promptSinks?.a,
+          promptKind: "work",
+        },
       );
 
       if (checkResult.sessionId) {

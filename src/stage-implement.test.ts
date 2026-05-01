@@ -72,7 +72,8 @@ describe("buildImplementPrompt", () => {
     expect(prompt).toContain("Owner: org");
     expect(prompt).toContain("Repo: repo");
     expect(prompt).toContain("Branch: issue-42");
-    expect(prompt).toContain("Worktree: /tmp/wt");
+    // Worktree line is dropped — the agent's cwd is the worktree.
+    expect(prompt).not.toContain("Worktree:");
   });
 
   test("includes issue details", () => {
@@ -103,6 +104,27 @@ describe("buildImplementPrompt", () => {
     const prompt = buildImplementPrompt(BASE_CTX, makeOpts());
     expect(prompt).toContain("freshly based on the latest");
     expect(prompt).toContain("remote default branch");
+  });
+});
+
+// ---- buildImplementResumePrompt --------------------------------------------
+
+import { buildImplementResumePrompt } from "./stage-implement.js";
+
+describe("buildImplementResumePrompt", () => {
+  test("references issue number without including the full body", () => {
+    const prompt = buildImplementResumePrompt(BASE_CTX);
+    expect(prompt).toContain("issue #42");
+    // Issue body is intentionally omitted on the resume form.
+    expect(prompt).not.toContain("The widget is broken.");
+    expect(prompt).not.toContain("## Repository");
+  });
+
+  test("includes user instruction when present", () => {
+    const ctx = { ...BASE_CTX, userInstruction: "Try a different approach" };
+    const prompt = buildImplementResumePrompt(ctx);
+    expect(prompt).toContain("Additional feedback");
+    expect(prompt).toContain("Try a different approach");
   });
 });
 

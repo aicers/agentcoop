@@ -1327,7 +1327,7 @@ describe("Multi-stage E2E: Stage 4 → Stage 5 → Stage 6", () => {
         );
       }),
       resume: vi.fn().mockImplementation((_sid: string, prompt: string) => {
-        if (prompt.includes("PR creation attempt")) {
+        if (prompt.includes("COMPLETED if the pull request was created")) {
           return makeStream(makeResult({ responseText: "COMPLETED" }));
         }
         // Test plan self-check
@@ -1375,11 +1375,11 @@ describe("Multi-stage E2E: Stage 4 → Stage 5 → Stage 6", () => {
         );
       }),
       resume: vi.fn().mockImplementation((_sid: string, prompt: string) => {
-        if (prompt.includes("PR creation attempt")) {
+        if (prompt.includes("COMPLETED if the pull request was created")) {
           return makeStream(makeResult({ responseText: "COMPLETED" }));
         }
         // Test plan verdict follow-up (3-step: work + verdict)
-        if (prompt.includes("finished the test plan verification pass")) {
+        if (prompt.includes("DONE if everything is verified")) {
           tpVerdictCalls++;
           if (tpVerdictCalls === 1) {
             return makeStream(makeResult({ responseText: "FIXED" }));
@@ -1431,7 +1431,7 @@ describe("Multi-stage E2E: Stage 4 → Stage 5 → Stage 6", () => {
         );
       }),
       resume: vi.fn().mockImplementation((_sid: string, prompt: string) => {
-        if (prompt.includes("PR creation attempt")) {
+        if (prompt.includes("COMPLETED if the pull request was created")) {
           return makeStream(makeResult({ responseText: "COMPLETED" }));
         }
         // Always FIXED — never done
@@ -1499,7 +1499,7 @@ describe("Multi-stage E2E: Stage 2 → Stage 3", () => {
         );
       }),
       resume: vi.fn().mockImplementation((_sid: string, prompt: string) => {
-        if (prompt.includes("evaluate the")) {
+        if (prompt.includes("COMPLETED if the implementation")) {
           implResumeCalls++;
           return makeStream(makeResult({ responseText: "COMPLETED" }));
         }
@@ -1548,7 +1548,7 @@ describe("Multi-stage E2E: Stage 2 → Stage 3", () => {
         );
       }),
       resume: vi.fn().mockImplementation((_sid: string, prompt: string) => {
-        if (prompt.includes("evaluate the")) {
+        if (prompt.includes("COMPLETED if the implementation")) {
           return makeStream(makeResult({ responseText: "COMPLETED" }));
         }
         // 3-step self-check: odd = work, even = verdict.
@@ -1594,7 +1594,7 @@ describe("Multi-stage E2E: Stage 2 → Stage 3", () => {
           makeStream(makeResult({ sessionId: "s1", responseText: "ok" })),
         ),
       resume: vi.fn().mockImplementation((_sid: string, prompt: string) => {
-        if (prompt.includes("evaluate the")) {
+        if (prompt.includes("COMPLETED if the implementation")) {
           return makeStream(makeResult({ responseText: "COMPLETED" }));
         }
         return makeStream(makeResult({ responseText: "DONE" }));
@@ -1947,7 +1947,7 @@ describe("Stage 7 (Review) through pipeline", () => {
       ),
       resume: vi.fn().mockImplementation((_sid: string, prompt: string) => {
         // Verdict follow-up → NOT_APPROVED
-        if (prompt.includes("posted your review")) {
+        if (prompt.includes("APPROVED if the changes are ready")) {
           return makeStream(makeResult({ responseText: "NOT_APPROVED" }));
         }
         // Unresolved summary + verdict
@@ -2010,7 +2010,7 @@ describe("Stage 7 (Review) through pipeline", () => {
       }),
       resume: vi.fn().mockImplementation((_sid: string, prompt: string) => {
         // Verdict follow-up
-        if (prompt.includes("posted your review")) {
+        if (prompt.includes("APPROVED if the changes are ready")) {
           if (bInvokeCalls <= 3) {
             return makeStream(makeResult({ responseText: "NOT_APPROVED" }));
           }
@@ -2080,7 +2080,7 @@ describe("Stage 7 (Review) through pipeline", () => {
       }),
       resume: vi.fn().mockImplementation((_sid: string, prompt: string) => {
         // Review verdict follow-up
-        if (prompt.includes("posted your review")) {
+        if (prompt.includes("APPROVED if the changes are ready")) {
           return makeStream(makeResult({ responseText: "NOT_APPROVED" }));
         }
         // Unresolved summary work step (contains "review cycle")
@@ -2166,7 +2166,7 @@ describe("Stage 7 (Review) through pipeline", () => {
         // Verdict follow-up — return a session ID that advances
         // beyond the invoke session, so we can verify the
         // unresolved summary resumes the verdict session.
-        if (prompt.includes("posted your review")) {
+        if (prompt.includes("APPROVED if the changes are ready")) {
           if (bInvokeCalls <= 2) {
             return makeStream(
               makeResult({

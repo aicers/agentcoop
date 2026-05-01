@@ -48,13 +48,38 @@ user interaction.
 
 ## Prompt design principles
 
-### Self-contained context
+### Self-contained context (with resume-form compaction)
 
-Every prompt includes the full repository coordinates (owner,
-repo, branch, worktree path) and the complete issue body. Agents
-never need to search for context — it is handed to them. This
-avoids wasted tokens on exploration and reduces the chance of the
-agent working against the wrong branch or issue.
+Every stage's first work prompt includes the full repository
+coordinates (owner, repo, branch) and the complete issue body when
+the agent does not yet have a live session — agents never need to
+search for context. To avoid retransmitting the same header and
+issue body on every stage transition, the orchestrator keeps each
+agent's CLI session alive across stages and sends a compact
+**resume-form** prompt when a saved session id is available:
+
+- **Fresh form** — the full prompt with repo header, issue body,
+  and stage instructions. Sent on the very first stage entry
+  (cold start) and as a fallback when the resume helper has to
+  fall back to a fresh `invoke` because the saved session expired.
+- **Resume form** — drops the issue body and repo header, keeping
+  only stage-specific instructions and a one-line `issue #N`
+  reference. Sent whenever a saved session id is available.
+
+`invokeOrResume` accepts an optional `fallbackPrompt` parameter
+(via an options object) so the call site can supply both forms.
+When the resume succeeds, the compact prompt is sent; if the
+resume falls back to a fresh invoke, the helper sends
+`fallbackPrompt` instead and emits a second prompt-sink event so
+diagnostic streams reflect the prompt actually sent.
+
+The `Worktree:` line is no longer included in any stage prompt:
+the agent's working directory is already set to the worktree, so
+the line was informational noise. `Owner` / `Repo` / `Branch` are
+retained only where they are interpolated into command examples
+or API URLs (e.g. the CodeQL dismiss block in Stage 5); elsewhere
+the agent uses `gh` against the current repo and `gh` auto-detects
+the repo from the cwd's git remote.
 
 ### Two-step verdict pattern
 
@@ -75,16 +100,12 @@ or out-of-scope keywords.  When the parser rejects a response, a
 single clarification retry is attempted listing only the valid
 keywords for that substep.
 
-The canonical verdict prompt template:
+The canonical verdict prompt template (compact, two lines):
 
 ```text
-<Context sentence about what just happened.>
-Respond with exactly one of the following keywords:
-
-- KEYWORD_A — <when to use>
-- KEYWORD_B — <when to use>
-
-Do not include any other commentary — just the keyword.
+Reply with exactly one keyword (no commentary):
+KEYWORD_A if <when to use>,
+KEYWORD_B if <when to use>.
 ```
 
 #### Keyword contracts per substep
@@ -219,25 +240,18 @@ two contexts:
   review stage).  `StageResult.validVerdicts` carries the
   keyword set from the stage handler to the pipeline engine.
 
-When `validVerdicts` is provided, the clarification prompt:
+When `validVerdicts` is provided, the clarification prompt is a
+single line listing only the in-scope keywords:
 
 ```text
-Your previous response did not contain a clear verdict keyword.
-Respond with exactly one of the following keywords: KEYWORD_A, KEYWORD_B
-
-Do not include any other commentary — just the keyword.
+Reply with exactly one keyword (no commentary): KEYWORD_A, KEYWORD_B.
 ```
 
 When no `validVerdicts` are set (legacy fallback), all six keywords
 are listed:
 
 ```text
-Your previous response did not end with a clear status keyword.
-Please reply with exactly one of the following keywords to indicate
-the current status: COMPLETED, FIXED, DONE, APPROVED, NOT_APPROVED,
-or BLOCKED.
-
-Do not include any other commentary — just the keyword.
+Reply with exactly one keyword (no commentary): COMPLETED, FIXED, DONE, APPROVED, NOT_APPROVED, BLOCKED.
 ```
 
 ## Stage reference
@@ -290,7 +304,6 @@ You are implementing a solution for the following GitHub issue.
 - Owner: {owner}
 - Repo: {repo}
 - Branch: {branch}
-- Worktree: {worktree_path}
 
 ## Issue #{number}: {title}
 
@@ -298,8 +311,8 @@ You are implementing a solution for the following GitHub issue.
 
 ## Instructions
 
-Implement the changes required to resolve this issue.  Work inside the
-worktree directory listed above — it is freshly based on the latest
+Implement the changes required to resolve this issue.  The current
+working directory is a worktree freshly based on the latest
 remote default branch, so you are working on top of the most recent
 upstream state.  Make sure the code compiles and any existing tests
 still pass.
@@ -319,13 +332,9 @@ above.
 **Completion check:**
 
 ```text
-You have finished your implementation attempt.  Please evaluate the
-result and respond with exactly one of the following keywords:
-
-- COMPLETED — if the implementation is finished and working
-- BLOCKED — if you cannot proceed and need user intervention
-
-Do not include any other commentary — just the keyword.
+Reply with exactly one keyword (no commentary):
+COMPLETED if the implementation is finished and working,
+BLOCKED if you cannot proceed and need user intervention.
 ```
 
 **Outcome handling:**
@@ -352,7 +361,6 @@ You are reviewing the implementation for the following GitHub issue.
 - Owner: {owner}
 - Repo: {repo}
 - Branch: {branch}
-- Worktree: {worktree_path}
 
 ## Issue #{number}: {title}
 
@@ -416,13 +424,9 @@ Based on your self-check above, decide what to do next.
 **Fix-or-done verdict follow-up:**
 
 ```text
-You have finished the self-check pass.
-Respond with exactly one of the following keywords:
-
-- FIXED — if you found and fixed issues
-- DONE — if everything looks good and no changes were needed
-
-Do not include any other commentary — just the keyword.
+Reply with exactly one keyword (no commentary):
+FIXED if you found and fixed issues,
+DONE if everything looks good and no changes were needed.
 ```
 
 **Loop behavior:** `FIXED` → repeat self-check. `DONE` → run
@@ -494,12 +498,6 @@ or if any step fails, the pipeline continues.
 ```text
 You are creating a pull request for the following GitHub issue.
 
-## Repository
-- Owner: {owner}
-- Repo: {repo}
-- Branch: {branch}
-- Worktree: {worktree_path}
-
 ## Issue #{number}: {title}
 
 {issue_body}
@@ -526,13 +524,9 @@ You are creating a pull request for the following GitHub issue.
 **Completion check:**
 
 ```text
-You have finished your PR creation attempt.  Please evaluate the
-result and respond with exactly one of the following keywords:
-
-- COMPLETED — if the pull request was created successfully
-- BLOCKED — if you could not create the PR and need user intervention
-
-Do not include any other commentary — just the keyword.
+Reply with exactly one keyword (no commentary):
+COMPLETED if the pull request was created successfully,
+BLOCKED if you could not create the PR and need user intervention.
 ```
 
 **Ambiguous response handling:** If the completion check response
@@ -572,12 +566,6 @@ When CI passes with no findings, the stage completes immediately.
 
 ```text
 You are fixing CI failures for the following GitHub issue.
-
-## Repository
-- Owner: {owner}
-- Repo: {repo}
-- Branch: {branch}
-- Worktree: {worktree_path}
 
 ## Issue #{number}: {title}
 
@@ -636,12 +624,6 @@ presented to Agent A for review.
 ````text
 CI passed but check runs reported findings (annotations).
 Review the findings below and decide whether any should be addressed.
-
-## Repository
-- Owner: {owner}
-- Repo: {repo}
-- Branch: {branch}
-- Worktree: {worktree_path}
 
 ## Issue #{number}: {title}
 
@@ -794,12 +776,6 @@ check off completed tasks in the issue.
 ```text
 You are verifying the test plan for the following GitHub issue.
 
-## Repository
-- Owner: {owner}
-- Repo: {repo}
-- Branch: {branch}
-- Worktree: {worktree_path}
-
 ## Issue #{number}: {title}
 
 {issue_body}
@@ -862,13 +838,9 @@ If everything is verified and passing, you are done.
 **Test plan verdict follow-up:**
 
 ```text
-You have finished the test plan verification pass.
-Respond with exactly one of the following keywords:
-
-- FIXED — if you found and fixed issues
-- DONE — if everything is verified and passing with no changes needed
-
-Do not include any other commentary — just the keyword.
+Reply with exactly one keyword (no commentary):
+FIXED if you found and fixed issues,
+DONE if everything is verified and passing with no changes needed.
 ```
 
 **Loop behavior:** `FIXED` → repeat the verification loop.
@@ -895,12 +867,6 @@ from the author worktree.
 
 ```text
 You are reviewing a pull request for the following GitHub issue.
-
-## Repository
-- Owner: {owner}
-- Repo: {repo}
-- Branch: {branch}
-- Worktree: {reviewer_worktree_path}
 
 ## Issue #{number}: {title}
 
@@ -950,13 +916,9 @@ You are reviewing a pull request for the following GitHub issue.
 **Reviewer verdict follow-up** (sent after the review comment):
 
 ```text
-You have posted your review comment.
-Respond with exactly one of the following keywords:
-
-- APPROVED — if the changes are ready to merge
-- NOT_APPROVED — if changes are needed
-
-Do not include any other commentary — just the keyword.
+Reply with exactly one keyword (no commentary):
+APPROVED if the changes are ready to merge,
+NOT_APPROVED if changes are needed.
 ```
 
 **Verdict comment:** After recording the verdict, the
@@ -1033,12 +995,6 @@ Sent when Agent B returns `NOT_APPROVED`:
 ```text
 You are addressing review feedback for the following GitHub issue.
 
-## Repository
-- Owner: {owner}
-- Repo: {repo}
-- Branch: {branch}
-- Worktree: {author_worktree_path}
-
 ## Issue #{number}: {title}
 
 {issue_body}
@@ -1091,13 +1047,9 @@ You are addressing review feedback for the following GitHub issue.
 **Author completion check:**
 
 ```text
-You have finished addressing the review feedback.  Please evaluate
-the result and respond with exactly one of the following keywords:
-
-- COMPLETED — if all feedback was addressed and changes were pushed
-- BLOCKED — if you cannot proceed and need user intervention
-
-Do not include any other commentary — just the keyword.
+Reply with exactly one keyword (no commentary):
+COMPLETED if all feedback was addressed and changes were pushed,
+BLOCKED if you cannot proceed and need user intervention.
 ```
 
 After Agent A pushes, the orchestrator runs an internal CI
@@ -1124,12 +1076,9 @@ unresolved items from this review cycle.
 **Verdict follow-up:**
 
 ```text
-Respond with exactly one of the following keywords:
-
-- NONE — if there are no unresolved items
-- COMPLETED — if you posted the unresolved items comment
-
-Do not include any other commentary — just the keyword.
+Reply with exactly one keyword (no commentary):
+NONE if there are no unresolved items,
+COMPLETED if you posted the unresolved items comment.
 ```
 
 If the verdict is ambiguous or contains an out-of-scope keyword,
@@ -1147,12 +1096,6 @@ the PR body:
 The review is complete and the PR has been approved.  Before
 merging, verify that the PR body accurately reflects the final
 state of the implementation.
-
-## Repository
-- Owner: {owner}
-- Repo: {repo}
-- Branch: {branch}
-- Worktree: {author_worktree_path}
 
 ## Issue #{number}: {title}
 
@@ -1176,12 +1119,8 @@ state of the implementation.
 **PR finalization verdict follow-up:**
 
 ```text
-You have finished verifying the PR body.
-Respond with exactly one of the following keywords:
-
-- PR_FINALIZED — if the PR body is now accurate
-
-Do not include any other commentary — just the keyword.
+Reply with exactly one keyword (no commentary):
+PR_FINALIZED if the PR body is now accurate.
 ```
 
 Agent A must respond with `PR_FINALIZED` for the stage to
@@ -1321,18 +1260,14 @@ The work prompt asks the agent to:
 **Completion check:**
 
 ```text
-You have finished your squash decision.  Respond with exactly one
-of the following keywords:
-
-- SQUASHED_MULTI — if you rewrote history into multiple meaningful
-  commits and force-pushed
-- SUGGESTED_SINGLE — if a single commit is appropriate and you
-  drafted the suggested title and body in the
-  `<<<TITLE>>>` / `<<<BODY>>>` envelope (no force-push)
-- BLOCKED — if you could not complete either path and need user
-  intervention
-
-Do not include any other commentary — just the keyword.
+Reply with exactly one keyword (no commentary):
+SQUASHED_MULTI if you rewrote history into multiple meaningful
+commits and force-pushed,
+SUGGESTED_SINGLE if a single commit is appropriate and you drafted
+the suggested title and body in the <<<TITLE>>>/<<<BODY>>> envelope
+(no force-push),
+BLOCKED if you could not complete either path and need user
+intervention.
 ```
 
 The handler calls `parseVerdictKeyword` directly with these three
@@ -1727,7 +1662,6 @@ You are rebasing a feature branch onto the latest main.
 - Owner: {owner}
 - Repo: {repo}
 - Branch: {branch}
-- Worktree: {worktree_path}
 
 ## Instructions
 

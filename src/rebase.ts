@@ -59,7 +59,6 @@ export function buildRebasePrompt(
     `- Owner: ${ctx.owner}`,
     `- Repo: ${ctx.repo}`,
     `- Branch: ${ctx.branch}`,
-    `- Worktree: ${ctx.worktreePath}`,
     ``,
     `## Instructions`,
     ``,

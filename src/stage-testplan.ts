@@ -39,12 +39,6 @@ export function buildTestPlanVerifyPrompt(
   const lines = [
     `You are verifying the test plan for the following GitHub issue.`,
     ``,
-    `## Repository`,
-    `- Owner: ${ctx.owner}`,
-    `- Repo: ${ctx.repo}`,
-    `- Branch: ${ctx.branch}`,
-    `- Worktree: ${ctx.worktreePath}`,
-    ``,
     `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
     ``,
     opts.issueBody,
@@ -90,6 +84,51 @@ export function buildTestPlanVerifyPrompt(
   return lines.join("\n");
 }
 
+/**
+ * Compact resume-form prompt — drops the issue body since the agent
+ * already has it from the prior stage's session.
+ */
+export function buildTestPlanVerifyResumePrompt(ctx: StageContext): string {
+  const lines = [
+    `Verify the test plan for issue #${ctx.issueNumber}.`,
+    ``,
+    `1. Find the pull request for this branch (use \`gh pr view\`).`,
+    `2. Go through each item in the PR's "Test plan" checklist.  For`,
+    `   each item, actually run or verify the described test or behavior.`,
+    `   - Start all required services (dev servers, databases, external`,
+    `     services, etc.) using whatever tools the project provides`,
+    `     (Docker Compose, \`pnpm dev\`, setup scripts, etc.).  If a port`,
+    `     conflict occurs, change the port rather than skipping the`,
+    `     service.`,
+    `   - If a browser is needed for testing, launch one (e.g., headless`,
+    `     Chrome via Playwright).`,
+    `   - For manual test items, do not defer them to the user.  Act as`,
+    `     the end user: launch the application, navigate the UI, verify`,
+    `     behavior, and check off each item yourself.  Use browser`,
+    `     automation (Playwright, headless Chrome) or direct CLI/API`,
+    `     interaction to replicate what a human user would do.`,
+    `   - Only flag a test item for the user if it is truly impossible`,
+    `     to verify programmatically (e.g., subjective visual design`,
+    `     judgment).`,
+    `   - When documentation or the PR requires screenshots, do not use`,
+    `     placeholders.  Actually start the application, open a browser,`,
+    `     and capture real screenshots.`,
+    `3. Check off each verified item in the PR using \`gh\` commands.`,
+    `4. Also go through the task checklist in the GitHub issue.  Check`,
+    `   off each completed task using \`gh\` commands.  Then check the`,
+    `   issue's parent issue (and grandparent, recursively) and check`,
+    `   off any tasks that are now completed.`,
+    `5. If you made any code changes:`,
+    `   ${buildPrSyncInstructions(ctx.issueNumber)}`,
+    `   Then commit and push them so a new CI run is triggered.`,
+    `6. Make sure CI is still passing after any changes.`,
+  ];
+  if (ctx.userInstruction) {
+    lines.push(``, `## Additional feedback`, ``, ctx.userInstruction);
+  }
+  return lines.join("\n");
+}
+
 export function buildTestPlanSelfCheckPrompt(): string {
   return [
     `Based on your verification above, evaluate the current state.`,
@@ -109,13 +148,9 @@ export const TEST_PLAN_VERDICT_KEYWORDS = ["FIXED", "DONE"] as const;
 
 export function buildTestPlanVerdictPrompt(): string {
   return [
-    `You have finished the test plan verification pass.`,
-    `Respond with exactly one of the following keywords:`,
-    ``,
-    `- FIXED — if you found and fixed issues`,
-    `- DONE — if everything is verified and passing with no changes needed`,
-    ``,
-    `Do not include any other commentary — just the keyword.`,
+    `Reply with exactly one keyword (no commentary):`,
+    `FIXED if you found and fixed issues,`,
+    `DONE if everything is verified and passing with no changes needed.`,
   ].join("\n");
 }
 
@@ -128,7 +163,10 @@ export function createTestPlanStageHandler(
     primaryAgent: "a",
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send verification prompt (resume if saved session).
-      const verifyPrompt = buildTestPlanVerifyPrompt(ctx, opts);
+      const freshPrompt = buildTestPlanVerifyPrompt(ctx, opts);
+      const resumePrompt = buildTestPlanVerifyResumePrompt(ctx);
+      const useResume = ctx.savedAgentASessionId !== undefined;
+      const verifyPrompt = useResume ? resumePrompt : freshPrompt;
       ctx.promptSinks?.a?.(verifyPrompt, "work");
       const verifyResult = await invokeOrResume(
         opts.agent,
@@ -136,8 +174,12 @@ export function createTestPlanStageHandler(
         verifyPrompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
-        undefined,
-        ctx.usageSinks?.a,
+        {
+          fallbackPrompt: useResume ? freshPrompt : undefined,
+          usageSink: ctx.usageSinks?.a,
+          promptSink: ctx.promptSinks?.a,
+          promptKind: "work",
+        },
       );
 
       if (verifyResult.sessionId) {

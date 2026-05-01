@@ -109,11 +109,14 @@ function makeOpts(
 // ---- buildSquashPrompt -------------------------------------------------------
 
 describe("buildSquashPrompt", () => {
-  test("includes repo and issue context", () => {
+  test("includes issue context and omits redundant repo headers", () => {
     const prompt = buildSquashPrompt(BASE_CTX, makeOpts());
-    expect(prompt).toContain("Owner: org");
-    expect(prompt).toContain("Repo: repo");
-    expect(prompt).toContain("Branch: issue-42");
+    // Owner / Repo / Branch / Worktree are dropped — gh infers the
+    // repo from cwd and the cwd is already the worktree.
+    expect(prompt).not.toContain("Owner: org");
+    expect(prompt).not.toContain("Repo: repo");
+    expect(prompt).not.toContain("Branch: issue-42");
+    expect(prompt).not.toContain("Worktree:");
     expect(prompt).toContain("Issue #42: Fix the widget");
     expect(prompt).toContain("The widget is broken.");
   });

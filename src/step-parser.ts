@@ -153,22 +153,8 @@ export function buildClarificationPrompt(
   _originalResponse: string,
   validKeywords?: readonly string[],
 ): string {
-  if (validKeywords && validKeywords.length > 0) {
-    const keywordList = validKeywords.join(", ");
-    return [
-      "Your previous response did not contain a clear verdict keyword.",
-      `Respond with exactly one of the following keywords: ${keywordList}`,
-      "",
-      "Do not include any other commentary — just the keyword.",
-    ].join("\n");
-  }
-
-  return [
-    "Your previous response did not end with a clear status keyword.",
-    "Please reply with exactly one of the following keywords to indicate",
-    "the current status: COMPLETED, FIXED, DONE, APPROVED, NOT_APPROVED,",
-    "or BLOCKED.",
-    "",
-    "Do not include any other commentary — just the keyword.",
-  ].join("\n");
+  const keywords = validKeywords?.length
+    ? validKeywords.join(", ")
+    : "COMPLETED, FIXED, DONE, APPROVED, NOT_APPROVED, BLOCKED";
+  return `Reply with exactly one keyword (no commentary): ${keywords}.`;
 }

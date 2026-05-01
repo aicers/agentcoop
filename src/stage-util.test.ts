@@ -765,6 +765,109 @@ describe("invokeOrResume", () => {
     expect(agent.invoke).not.toHaveBeenCalled();
   });
 
+  test("uses fallbackPrompt for fresh invoke when resume falls through", async () => {
+    // Saved session triggers a resume; a soft error like "session
+    // expired / unknown" makes the helper fall back to a fresh
+    // invoke.  When `fallbackPrompt` is supplied, the fresh invoke
+    // must use it (the compact resume-form prompt is only safe on a
+    // live session — fresh agents need full context).
+    const errorResult = makeResult({
+      status: "error",
+      errorType: "unknown",
+      stderrText: "session expired",
+    });
+    const freshResult = makeResult({ sessionId: "fresh-sess" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(freshResult)),
+      resume: vi.fn().mockReturnValue(makeStream(errorResult)),
+    };
+    const promptSink = vi.fn();
+
+    const out = await invokeOrResume(
+      agent,
+      "old-sess",
+      "compact resume prompt",
+      "/cwd",
+      undefined,
+      {
+        fallbackPrompt: "full fresh prompt",
+        promptSink,
+        promptKind: "work",
+      },
+    );
+
+    expect(out).toBe(freshResult);
+    // Resume tried with the compact prompt, fresh invoke used the
+    // full fallback prompt.
+    expect(agent.resume).toHaveBeenCalledWith(
+      "old-sess",
+      "compact resume prompt",
+      { cwd: "/cwd", onUsage: undefined },
+    );
+    expect(agent.invoke).toHaveBeenCalledWith("full fresh prompt", {
+      cwd: "/cwd",
+      onUsage: undefined,
+    });
+    // Prompt sink received a follow-up event reflecting the fresh
+    // prompt actually sent.
+    expect(promptSink).toHaveBeenCalledWith(
+      "full fresh prompt",
+      "work",
+      undefined,
+    );
+  });
+
+  test("does not emit fallback prompt-sink event when fallback is unused", async () => {
+    // When the resume succeeds, the fallback path is never taken so
+    // the helper must not emit a duplicate prompt-sink event.
+    const result = makeResult({ sessionId: "resumed-sess" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn(),
+      resume: vi.fn().mockReturnValue(makeStream(result)),
+    };
+    const promptSink = vi.fn();
+
+    await invokeOrResume(
+      agent,
+      "saved-sess",
+      "compact resume prompt",
+      "/cwd",
+      undefined,
+      {
+        fallbackPrompt: "full fresh prompt",
+        promptSink,
+        promptKind: "work",
+      },
+    );
+
+    expect(agent.invoke).not.toHaveBeenCalled();
+    expect(promptSink).not.toHaveBeenCalled();
+  });
+
+  test("legacy positional usageSink still works", async () => {
+    const result = makeResult({ sessionId: "fresh-sess" });
+    const agent: AgentAdapter = {
+      invoke: vi.fn().mockReturnValue(makeStream(result)),
+      resume: vi.fn(),
+    };
+    const usageSink = vi.fn();
+
+    await invokeOrResume(
+      agent,
+      undefined,
+      "p",
+      "/cwd",
+      undefined,
+      3,
+      usageSink,
+    );
+
+    expect(agent.invoke).toHaveBeenCalledWith("p", {
+      cwd: "/cwd",
+      onUsage: usageSink,
+    });
+  });
+
   test("returns error immediately on config_parsing (non-recoverable)", async () => {
     const configError = makeResult({
       status: "error",

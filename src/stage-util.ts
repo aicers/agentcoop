@@ -268,12 +268,41 @@ async function retryOnTimeout(
 }
 
 /**
+ * Optional extras for {@link invokeOrResume}.  Bundled into a single
+ * options object so the helper can grow without piling on positional
+ * trailing arguments.  `fallbackPrompt` is only used when the saved
+ * session resume fails and the helper falls back to a fresh `invoke`;
+ * this lets stages send a compact "resume form" prompt on the live
+ * session and the full "fresh form" only when the session has expired.
+ *
+ * `promptSink` / `promptKind` / `promptMeta` mirror the parameters of
+ * {@link PromptSink}.  When `fallbackPrompt` is used, the helper emits
+ * a second prompt-sink event with the actual fresh prompt so diagnostic
+ * consumers reflect what was sent rather than the compact resume prompt
+ * the call site logged before invoking the helper.
+ */
+export interface InvokeOrResumeExtras {
+  fallbackPrompt?: string;
+  maxAutoResumes?: number;
+  usageSink?: UsageSink;
+  promptSink?: PromptSink;
+  promptKind?: AgentPromptKind;
+  promptMeta?: PromptSinkMeta;
+}
+
+/**
  * Invoke-or-resume with automatic retry on inactivity timeout.
  *
  * When the agent process is killed due to stdout inactivity, this
  * function automatically resumes the session (up to `maxAutoResumes`
  * times).  After that, the timeout error is returned to the caller so
  * the pipeline can prompt the user.
+ *
+ * The trailing optional `extras` argument bundles `fallbackPrompt` and
+ * the previously-trailing options (`maxAutoResumes`, `usageSink`).  For
+ * source compatibility, callers can still pass the legacy positional
+ * `maxAutoResumes` (number) and `usageSink` (function) as trailing
+ * arguments.
  */
 export async function invokeOrResume(
   agent: AgentAdapter,
@@ -281,16 +310,33 @@ export async function invokeOrResume(
   prompt: string,
   cwd: string,
   sink?: StreamSink,
-  maxAutoResumes = 3,
+  maxAutoResumesOrExtras?: number | InvokeOrResumeExtras,
   usageSink?: UsageSink,
 ): Promise<AgentResult> {
+  const extras: InvokeOrResumeExtras =
+    typeof maxAutoResumesOrExtras === "object" && maxAutoResumesOrExtras
+      ? maxAutoResumesOrExtras
+      : {
+          maxAutoResumes:
+            typeof maxAutoResumesOrExtras === "number"
+              ? maxAutoResumesOrExtras
+              : undefined,
+          usageSink,
+        };
+  const maxAutoResumes = extras.maxAutoResumes ?? 3;
+  const effectiveUsageSink = extras.usageSink ?? usageSink;
+
   const result = await invokeOrResumeOnce(
     agent,
     savedSessionId,
     prompt,
     cwd,
     sink,
-    usageSink,
+    effectiveUsageSink,
+    extras.fallbackPrompt,
+    extras.promptSink,
+    extras.promptKind,
+    extras.promptMeta,
   );
   return retryOnTimeout(
     agent,
@@ -299,7 +345,7 @@ export async function invokeOrResume(
     undefined,
     sink,
     maxAutoResumes,
-    usageSink,
+    effectiveUsageSink,
   );
 }
 
@@ -313,6 +359,10 @@ async function invokeOrResumeOnce(
   cwd: string,
   sink?: StreamSink,
   usageSink?: UsageSink,
+  fallbackPrompt?: string,
+  promptSink?: PromptSink,
+  promptKind?: AgentPromptKind,
+  promptMeta?: PromptSinkMeta,
 ): Promise<AgentResult> {
   const opts = { cwd, onUsage: usageSink };
   if (savedSessionId) {
@@ -336,7 +386,21 @@ async function invokeOrResumeOnce(
     }
     // Session expired or unknown error — fall back to fresh invoke.
   }
-  const stream = agent.invoke(prompt, opts);
+  // When a fallback prompt is provided (e.g. the call site sent a
+  // compact resume-form prompt that assumed a live session), use it
+  // for the fresh invoke so the agent receives full context.  Emit a
+  // second prompt-sink event reflecting the prompt actually sent.
+  const effectivePrompt =
+    savedSessionId && fallbackPrompt !== undefined ? fallbackPrompt : prompt;
+  if (
+    savedSessionId &&
+    fallbackPrompt !== undefined &&
+    promptSink &&
+    promptKind
+  ) {
+    promptSink(fallbackPrompt, promptKind, promptMeta);
+  }
+  const stream = agent.invoke(effectivePrompt, opts);
   const drained = sink ? drainToSink(stream, sink) : undefined;
   const result = await stream.result;
   if (drained) await drained;
