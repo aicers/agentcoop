@@ -50,21 +50,24 @@ user interaction.
 
 ### Self-contained context (with resume-form compaction)
 
-Every stage's first work prompt includes the full repository
-coordinates (owner, repo, branch) and the complete issue body when
-the agent does not yet have a live session — agents never need to
-search for context. To avoid retransmitting the same header and
-issue body on every stage transition, the orchestrator keeps each
-agent's CLI session alive across stages and sends a compact
-**resume-form** prompt when a saved session id is available:
+Every stage's first work prompt includes the complete issue body
+plus whatever repository details that stage actually needs, so the
+agent never has to search for context. To avoid retransmitting the
+same header and issue body on every stage transition, the
+orchestrator keeps each agent's CLI session alive across stages
+and sends a compact **resume-form** prompt when a saved session id
+is available:
 
-- **Fresh form** — the full prompt with repo header, issue body,
-  and stage instructions. Sent on the very first stage entry
-  (cold start) and as a fallback when the resume helper has to
-  fall back to a fresh `invoke` because the saved session expired.
-- **Resume form** — drops the issue body and repo header, keeping
-  only stage-specific instructions and a one-line `issue #N`
-  reference. Sent whenever a saved session id is available.
+- **Fresh form** — the full prompt with the issue body, the
+  stage's required repository details (see the `Owner` / `Repo` /
+  `Branch` rule below), and stage instructions. Sent on the very
+  first stage entry (cold start) and as a fallback when the resume
+  helper has to fall back to a fresh `invoke` because the saved
+  session expired.
+- **Resume form** — drops the issue body and any repo header,
+  keeping only stage-specific instructions and a one-line
+  `issue #N` reference. Sent whenever a saved session id is
+  available.
 
 `invokeOrResume` accepts an optional `fallbackPrompt` parameter
 (via an options object) so the call site can supply both forms.
