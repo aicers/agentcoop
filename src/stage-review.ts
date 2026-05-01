@@ -117,6 +117,17 @@ export interface ReviewStageOptions {
    * genuinely posted (not on every stage-7 exit).
    */
   onReviewPosted?: (round: number) => void;
+  /**
+   * Refresh the detached reviewer worktree before reviewer activity.
+   * Defaults to no-op for tests that do not care about worktree setup.
+   */
+  prepareReviewerWorktree?: (ctx: StageContext) => void;
+  /**
+   * Clean unexpected reviewer changes after reviewer activity.
+   *
+   * @returns true when changes were found and cleaned.
+   */
+  cleanReviewerWorktreeChanges?: (reviewerWorktreePath: string) => boolean;
 }
 
 // ---- prompt builders ---------------------------------------------------------
@@ -165,6 +176,7 @@ export function buildReviewPrompt(
   ctx: StageContext,
   opts: ReviewStageOptions,
   round: number,
+  reviewerWorktreePath = ctx.reviewerWorktreePath ?? ctx.worktreePath,
 ): string {
   const anglesBlock = buildReviewAnglesBlock();
 
@@ -175,7 +187,7 @@ export function buildReviewPrompt(
     `- Owner: ${ctx.owner}`,
     `- Repo: ${ctx.repo}`,
     `- Branch: ${ctx.branch}`,
-    `- Worktree: ${ctx.worktreePath}`,
+    `- Worktree: ${reviewerWorktreePath}`,
     ``,
     `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
     ``,
@@ -347,6 +359,7 @@ export function buildUnresolvedSummaryPrompt(round: number): string {
 export function buildResumeUnresolvedSummaryPrompt(
   ctx: StageContext,
   round: number,
+  reviewerWorktreePath = ctx.reviewerWorktreePath ?? ctx.worktreePath,
 ): string {
   return [
     `You previously reviewed a pull request and the review was approved.`,
@@ -356,6 +369,7 @@ export function buildResumeUnresolvedSummaryPrompt(
     `- Owner: ${ctx.owner}`,
     `- Repo: ${ctx.repo}`,
     `- Branch: ${ctx.branch}`,
+    `- Worktree: ${reviewerWorktreePath}`,
     ``,
     `1. Find the pull request for this branch (use \`gh pr view\`).`,
     `2. Read your \`[Reviewer Round ${round}]\` review comment to`,
@@ -412,6 +426,7 @@ export function buildPrFinalizationPrompt(
 export function buildResumeVerdictPrompt(
   ctx: StageContext,
   round: number,
+  reviewerWorktreePath = ctx.reviewerWorktreePath ?? ctx.worktreePath,
 ): string {
   return [
     `You previously posted a review on a pull request, prefixed with`,
@@ -422,6 +437,7 @@ export function buildResumeVerdictPrompt(
     `- Owner: ${ctx.owner}`,
     `- Repo: ${ctx.repo}`,
     `- Branch: ${ctx.branch}`,
+    `- Worktree: ${reviewerWorktreePath}`,
     ``,
     `1. Find the pull request for this branch (use \`gh pr view\`).`,
     `2. Read your \`[Reviewer Round ${round}]\` review comment.`,
@@ -445,6 +461,55 @@ export function createReviewStageHandler(
     number: 7,
     primaryAgent: "b",
     handler: async (ctx: StageContext): Promise<StageResult> => {
+      const reviewerWorktreePath = ctx.reviewerWorktreePath ?? ctx.worktreePath;
+      const prepareReviewerWorktree =
+        opts.prepareReviewerWorktree ?? (() => undefined);
+      const cleanReviewerWorktreeChanges =
+        opts.cleanReviewerWorktreeChanges ?? (() => false);
+      const maybeCleanReviewerWorktree = () => {
+        if (!cleanReviewerWorktreeChanges(reviewerWorktreePath)) return;
+        console.warn(
+          `Warning: cleaned unexpected local changes in reviewer worktree ${reviewerWorktreePath}`,
+        );
+      };
+      const invokeReviewer = async (
+        sessionId: string | undefined,
+        prompt: string,
+      ): Promise<AgentResult> => {
+        prepareReviewerWorktree(ctx);
+        try {
+          return await invokeOrResume(
+            opts.agentB,
+            sessionId,
+            prompt,
+            reviewerWorktreePath,
+            ctx.streamSinks?.b,
+            undefined,
+            ctx.usageSinks?.b,
+          );
+        } finally {
+          maybeCleanReviewerWorktree();
+        }
+      };
+      const followUpReviewer = async (
+        sessionId: string,
+        prompt: string,
+      ): Promise<AgentResult> => {
+        prepareReviewerWorktree(ctx);
+        try {
+          return await sendFollowUp(
+            opts.agentB,
+            sessionId,
+            prompt,
+            reviewerWorktreePath,
+            ctx.streamSinks?.b,
+            undefined,
+            ctx.usageSinks?.b,
+          );
+        } finally {
+          maybeCleanReviewerWorktree();
+        }
+      };
       const round = ctx.iteration + 1; // 1-based for display
 
       // Fetch PR comments for sub-step derivation and validation.
@@ -488,16 +553,16 @@ export function createReviewStageHandler(
       // ---- review --------------------------------------------------
       if (currentStep === "review") {
         opts.onReviewProgress?.("review");
-        const reviewPrompt = buildReviewPrompt(ctx, opts, round);
+        const reviewPrompt = buildReviewPrompt(
+          ctx,
+          opts,
+          round,
+          reviewerWorktreePath,
+        );
         ctx.promptSinks?.b?.(reviewPrompt, "review", { round });
-        const reviewResult = await invokeOrResume(
-          opts.agentB,
+        const reviewResult = await invokeReviewer(
           ctx.savedAgentBSessionId,
           reviewPrompt,
-          ctx.worktreePath,
-          ctx.streamSinks?.b,
-          undefined,
-          ctx.usageSinks?.b,
         );
 
         if (reviewResult.sessionId) {
@@ -534,14 +599,9 @@ export function createReviewStageHandler(
           ctx.promptSinks?.b?.(verdictPrompt, "verdict-followup", {
             resume: true,
           });
-          verdictResult = await sendFollowUp(
-            opts.agentB,
+          verdictResult = await followUpReviewer(
             agentBSessionId,
             verdictPrompt,
-            ctx.worktreePath,
-            ctx.streamSinks?.b,
-            undefined,
-            ctx.usageSinks?.b,
           );
         } else {
           // No review session — review was already posted on the PR.
@@ -559,17 +619,13 @@ export function createReviewStageHandler(
           }
           // Invoke Agent B fresh to read its own review and provide
           // the verdict keyword.
-          const resumePrompt = buildResumeVerdictPrompt(ctx, round);
-          ctx.promptSinks?.b?.(resumePrompt, "verdict-followup");
-          verdictResult = await invokeOrResume(
-            opts.agentB,
-            undefined,
-            resumePrompt,
-            ctx.worktreePath,
-            ctx.streamSinks?.b,
-            undefined,
-            ctx.usageSinks?.b,
+          const resumePrompt = buildResumeVerdictPrompt(
+            ctx,
+            round,
+            reviewerWorktreePath,
           );
+          ctx.promptSinks?.b?.(resumePrompt, "verdict-followup");
+          verdictResult = await invokeReviewer(undefined, resumePrompt);
           if (verdictResult.sessionId) {
             ctx.onSessionId?.("b", verdictResult.sessionId);
           }
@@ -602,27 +658,14 @@ export function createReviewStageHandler(
           const clarifySessionId = verdictResult.sessionId ?? agentBSessionId;
           let retryResult: AgentResult;
           if (clarifySessionId) {
-            retryResult = await sendFollowUp(
-              opts.agentB,
+            retryResult = await followUpReviewer(
               clarifySessionId,
               clarifyPrompt,
-              ctx.worktreePath,
-              ctx.streamSinks?.b,
-              undefined,
-              ctx.usageSinks?.b,
             );
           } else {
             // No session from either the fresh verdict invoke or a
             // prior review step — invoke fresh again for clarification.
-            retryResult = await invokeOrResume(
-              opts.agentB,
-              undefined,
-              clarifyPrompt,
-              ctx.worktreePath,
-              ctx.streamSinks?.b,
-              undefined,
-              ctx.usageSinks?.b,
-            );
+            retryResult = await invokeReviewer(undefined, clarifyPrompt);
           }
 
           if (retryResult.status === "error") {
@@ -726,7 +769,7 @@ export function createReviewStageHandler(
           opts,
           agentBSessionId,
           round,
-          ctx.worktreePath,
+          reviewerWorktreePath,
           ctx,
           ctx.streamSinks?.b,
           ctx.promptSinks?.b,
@@ -1021,7 +1064,7 @@ export function createReviewStageHandler(
             opts,
             agentBSessionId,
             round,
-            ctx.worktreePath,
+            reviewerWorktreePath,
             ctx,
             ctx.streamSinks?.b,
             ctx.promptSinks?.b,
@@ -1062,41 +1105,56 @@ async function handleUnresolvedSummary(
   opts: ReviewStageOptions,
   sessionId: string | undefined,
   round: number,
-  cwd: string,
+  reviewerWorktreePath: string,
   ctx: StageContext,
   sink?: StreamSink,
   promptSink?: PromptSink,
   usageSink?: UsageSink,
 ): Promise<UnresolvedSummaryResult> {
+  const prepareReviewerWorktree =
+    opts.prepareReviewerWorktree ?? (() => undefined);
+  const cleanReviewerWorktreeChanges =
+    opts.cleanReviewerWorktreeChanges ?? (() => false);
+  const maybeCleanReviewerWorktree = () => {
+    if (!cleanReviewerWorktreeChanges(reviewerWorktreePath)) return;
+    console.warn(
+      `Warning: cleaned unexpected local changes in reviewer worktree ${reviewerWorktreePath}`,
+    );
+  };
   // When resuming without a session, use the richer resume prompt
   // that gives Agent B repository context and tells it to read its
   // own review from the PR.  With a live session the agent already
   // has full context from the review step.
   const summaryPrompt = sessionId
     ? buildUnresolvedSummaryPrompt(round)
-    : buildResumeUnresolvedSummaryPrompt(ctx, round);
+    : buildResumeUnresolvedSummaryPrompt(ctx, round, reviewerWorktreePath);
   promptSink?.(summaryPrompt, "summary");
 
   // If we have a session, resume; otherwise invoke fresh.
   let result: AgentResult;
-  if (sessionId) {
-    result = await sendFollowUp(
-      opts.agentB,
-      sessionId,
-      summaryPrompt,
-      cwd,
-      sink,
-      undefined,
-      usageSink,
-    );
-  } else {
-    const stream = opts.agentB.invoke(summaryPrompt, {
-      cwd,
-      onUsage: usageSink,
-    });
-    const drained = sink ? drainToSink(stream, sink) : undefined;
-    result = await stream.result;
-    if (drained) await drained;
+  prepareReviewerWorktree(ctx);
+  try {
+    if (sessionId) {
+      result = await sendFollowUp(
+        opts.agentB,
+        sessionId,
+        summaryPrompt,
+        reviewerWorktreePath,
+        sink,
+        undefined,
+        usageSink,
+      );
+    } else {
+      const stream = opts.agentB.invoke(summaryPrompt, {
+        cwd: reviewerWorktreePath,
+        onUsage: usageSink,
+      });
+      const drained = sink ? drainToSink(stream, sink) : undefined;
+      result = await stream.result;
+      if (drained) await drained;
+    }
+  } finally {
+    maybeCleanReviewerWorktree();
   }
 
   if (result.status === "error") {
@@ -1114,24 +1172,29 @@ async function handleUnresolvedSummary(
   let verdictResult: AgentResult;
   const verdictSessionId = result.sessionId ?? sessionId;
 
-  if (verdictSessionId) {
-    verdictResult = await sendFollowUp(
-      opts.agentB,
-      verdictSessionId,
-      verdictPrompt,
-      cwd,
-      sink,
-      undefined,
-      usageSink,
-    );
-  } else {
-    const stream = opts.agentB.invoke(verdictPrompt, {
-      cwd,
-      onUsage: usageSink,
-    });
-    const drained = sink ? drainToSink(stream, sink) : undefined;
-    verdictResult = await stream.result;
-    if (drained) await drained;
+  prepareReviewerWorktree(ctx);
+  try {
+    if (verdictSessionId) {
+      verdictResult = await sendFollowUp(
+        opts.agentB,
+        verdictSessionId,
+        verdictPrompt,
+        reviewerWorktreePath,
+        sink,
+        undefined,
+        usageSink,
+      );
+    } else {
+      const stream = opts.agentB.invoke(verdictPrompt, {
+        cwd: reviewerWorktreePath,
+        onUsage: usageSink,
+      });
+      const drained = sink ? drainToSink(stream, sink) : undefined;
+      verdictResult = await stream.result;
+      if (drained) await drained;
+    }
+  } finally {
+    maybeCleanReviewerWorktree();
   }
 
   if (verdictResult.status === "error") {
@@ -1165,24 +1228,29 @@ async function handleUnresolvedSummary(
     const verdictSessionId2 = verdictResult.sessionId ?? sessionId;
     let retryResult: AgentResult;
 
-    if (verdictSessionId2) {
-      retryResult = await sendFollowUp(
-        opts.agentB,
-        verdictSessionId2,
-        clarifyPrompt,
-        cwd,
-        sink,
-        undefined,
-        usageSink,
-      );
-    } else {
-      const stream = opts.agentB.invoke(clarifyPrompt, {
-        cwd,
-        onUsage: usageSink,
-      });
-      const drained = sink ? drainToSink(stream, sink) : undefined;
-      retryResult = await stream.result;
-      if (drained) await drained;
+    prepareReviewerWorktree(ctx);
+    try {
+      if (verdictSessionId2) {
+        retryResult = await sendFollowUp(
+          opts.agentB,
+          verdictSessionId2,
+          clarifyPrompt,
+          reviewerWorktreePath,
+          sink,
+          undefined,
+          usageSink,
+        );
+      } else {
+        const stream = opts.agentB.invoke(clarifyPrompt, {
+          cwd: reviewerWorktreePath,
+          onUsage: usageSink,
+        });
+        const drained = sink ? drainToSink(stream, sink) : undefined;
+        retryResult = await stream.result;
+        if (drained) await drained;
+      }
+    } finally {
+      maybeCleanReviewerWorktree();
     }
 
     if (retryResult.status === "error") {

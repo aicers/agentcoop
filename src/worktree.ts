@@ -51,6 +51,25 @@ export function worktreePath(
 }
 
 /**
+ * Return the deterministic detached reviewer worktree path:
+ * `~/.agentcoop/worktrees/{owner}/{repo}/issue-{number}-review`
+ */
+export function reviewerWorktreePath(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+): string {
+  return join(
+    homedir(),
+    ".agentcoop",
+    "worktrees",
+    owner,
+    repo,
+    `issue-${issueNumber}-review`,
+  );
+}
+
+/**
  * Return the path to the bare clone used as the main repository:
  * `~/.agentcoop/repos/{owner}/{repo}.git`
  */
@@ -278,6 +297,37 @@ function forceRemoveWorktreeAndBranch(
 }
 
 /**
+ * Force-remove a detached reviewer worktree entry.
+ * Errors are silently ignored (the worktree may not exist).
+ */
+function forceRemoveDetachedWorktree(bare: string, wtPath: string): void {
+  try {
+    execFileSync("git", ["worktree", "remove", "--force", wtPath], {
+      ...EXEC_OPTS,
+      cwd: bare,
+    });
+  } catch {
+    // Already removed or never existed.
+  }
+
+  rmSync(wtPath, { recursive: true, force: true });
+  execFileSync("git", ["worktree", "prune"], { ...EXEC_OPTS, cwd: bare });
+}
+
+function isValidGitWorktree(wtPath: string): boolean {
+  if (!existsSync(wtPath)) return false;
+  try {
+    const output = execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+      ...EXEC_OPTS,
+      cwd: wtPath,
+    }) as string;
+    return output.trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Create a worktree for the given issue, branching from `baseBranch`.
  *
  * When the target path already exists the caller must provide a
@@ -371,6 +421,86 @@ export function createWorktree(options: {
 }
 
 /**
+ * Create or refresh the detached reviewer worktree on the latest
+ * `origin/{authorBranch}`.
+ */
+export function prepareReviewerWorktree(options: {
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  authorBranch: string;
+}): string {
+  const { owner, repo, issueNumber, authorBranch } = options;
+  const bare = repoPath(owner, repo);
+  const wtPath = reviewerWorktreePath(owner, repo, issueNumber);
+  const lockPath = repoLockPath(owner, repo);
+
+  withLock(lockPath, () => {
+    execFileSync("git", ["fetch", "origin", authorBranch], {
+      ...EXEC_OPTS,
+      cwd: bare,
+    });
+
+    const refresh = () => {
+      execFileSync("git", ["switch", "--detach", `origin/${authorBranch}`], {
+        ...EXEC_OPTS,
+        cwd: wtPath,
+      });
+      execFileSync("git", ["reset", "--hard", `origin/${authorBranch}`], {
+        ...EXEC_OPTS,
+        cwd: wtPath,
+      });
+      execFileSync("git", ["clean", "-fd"], {
+        ...EXEC_OPTS,
+        cwd: wtPath,
+      });
+    };
+
+    if (isValidGitWorktree(wtPath)) {
+      try {
+        refresh();
+        return;
+      } catch {
+        forceRemoveDetachedWorktree(bare, wtPath);
+      }
+    } else if (existsSync(wtPath)) {
+      forceRemoveDetachedWorktree(bare, wtPath);
+    }
+
+    execFileSync(
+      "git",
+      ["worktree", "add", "--detach", wtPath, `origin/${authorBranch}`],
+      { ...EXEC_OPTS, cwd: bare },
+    );
+  });
+
+  return wtPath;
+}
+
+/**
+ * Reset and clean unexpected reviewer changes.
+ *
+ * @returns true when changes were found and cleaned.
+ */
+export function cleanReviewerWorktreeChanges(wtPath: string): boolean {
+  if (!hasUncommittedChanges(wtPath)) return false;
+
+  try {
+    execFileSync("git", ["reset", "--hard", "HEAD"], {
+      ...EXEC_OPTS,
+      cwd: wtPath,
+    });
+    execFileSync("git", ["clean", "-fd"], {
+      ...EXEC_OPTS,
+      cwd: wtPath,
+    });
+  } catch {
+    // Best-effort cleanup only; reviewer dirtiness should not fail the run.
+  }
+  return true;
+}
+
+/**
  * Remove a worktree and its branch.  Used during final cleanup (stage 9).
  *
  * @param branch - The branch to delete.  Defaults to `issue-{issueNumber}`
@@ -387,4 +517,17 @@ export function removeWorktree(
   const wtPath = worktreePath(owner, repo, issueNumber);
   const resolvedBranch = branch ?? `issue-${issueNumber}`;
   forceRemoveWorktreeAndBranch(bare, wtPath, resolvedBranch);
+}
+
+/**
+ * Remove the detached reviewer worktree. Used during cleanup.
+ */
+export function removeReviewerWorktree(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+): void {
+  const bare = repoPath(owner, repo);
+  const wtPath = reviewerWorktreePath(owner, repo, issueNumber);
+  forceRemoveDetachedWorktree(bare, wtPath);
 }

@@ -8,6 +8,7 @@ import {
   buildPrFinalizationPrompt,
   buildPrFinalizationVerdictPrompt,
   buildResumeUnresolvedSummaryPrompt,
+  buildResumeVerdictPrompt,
   buildReviewPrompt,
   buildReviewVerdictPrompt,
   buildUnresolvedSummaryPrompt,
@@ -61,6 +62,7 @@ const BASE_CTX: StageContext = {
   issueNumber: 42,
   branch: "issue-42",
   worktreePath: "/tmp/wt",
+  reviewerWorktreePath: "/tmp/wt-review",
   iteration: 0,
   lastAutoIteration: false,
   userInstruction: undefined,
@@ -119,6 +121,8 @@ function makeOpts(
     pollTimeoutMs: 1000,
     emptyRunsGracePeriodMs: 0,
     postPrComment: vi.fn(),
+    prepareReviewerWorktree: vi.fn(),
+    cleanReviewerWorktreeChanges: vi.fn().mockReturnValue(false),
     ...overrides,
   };
 }
@@ -131,6 +135,11 @@ describe("buildReviewPrompt", () => {
     expect(prompt).toContain("Owner: org");
     expect(prompt).toContain("Repo: repo");
     expect(prompt).toContain("Issue #42: Fix the widget");
+  });
+
+  test("uses reviewer worktree path in reviewer prompt", () => {
+    const prompt = buildReviewPrompt(BASE_CTX, makeOpts(), 1);
+    expect(prompt).toContain("Worktree: /tmp/wt-review");
   });
 
   test("includes round number", () => {
@@ -297,8 +306,16 @@ describe("buildResumeUnresolvedSummaryPrompt", () => {
     expect(prompt).toContain("Owner: org");
     expect(prompt).toContain("Repo: repo");
     expect(prompt).toContain("Branch: issue-42");
+    expect(prompt).toContain("Worktree: /tmp/wt-review");
     expect(prompt).toContain("[Reviewer Round 2]");
     expect(prompt).toContain("[Reviewer Unresolved Round 2]");
+  });
+});
+
+describe("buildResumeVerdictPrompt", () => {
+  test("includes reviewer worktree path", () => {
+    const prompt = buildResumeVerdictPrompt(BASE_CTX, 2);
+    expect(prompt).toContain("Worktree: /tmp/wt-review");
   });
 });
 
@@ -1690,6 +1707,84 @@ describe("createReviewStageHandler", () => {
     );
   });
 
+  test("uses reviewer cwd for Agent B and author cwd for Agent A", async () => {
+    const opts = makeOpts();
+    const stage = createReviewStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    expect(opts.agentB.invoke).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ cwd: "/tmp/wt-review" }),
+    );
+    expect(opts.agentA.invoke).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  test("keeps author-fix substeps on the author worktree after NOT_APPROVED", async () => {
+    const opts = makeOpts({
+      agentB: {
+        invoke: vi.fn().mockReturnValue(
+          makeStream(
+            makeResult({
+              sessionId: "sess-b",
+              responseText: "Needs changes.",
+            }),
+          ),
+        ),
+        resume: vi
+          .fn()
+          .mockReturnValue(
+            makeStream(makeResult({ responseText: "NOT_APPROVED" })),
+          ),
+      },
+    });
+    const stage = createReviewStageHandler(opts);
+
+    await stage.handler(BASE_CTX);
+
+    expect(opts.agentB.invoke).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ cwd: "/tmp/wt-review" }),
+    );
+    expect(opts.agentA.invoke).toHaveBeenCalledWith(
+      expect.stringContaining("[Reviewer Round 1]"),
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+    expect(opts.agentA.resume).toHaveBeenCalledWith(
+      "sess-a",
+      buildAuthorCompletionCheckPrompt(),
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  test("prepares reviewer worktree before reviewer calls", async () => {
+    const opts = makeOpts();
+    const stage = createReviewStageHandler(opts);
+    await stage.handler(BASE_CTX);
+
+    expect(opts.prepareReviewerWorktree).toHaveBeenCalled();
+  });
+
+  test("cleans unexpected reviewer changes after reviewer calls", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const opts = makeOpts({
+      cleanReviewerWorktreeChanges: vi.fn().mockReturnValue(true),
+    });
+    const stage = createReviewStageHandler(opts);
+
+    await stage.handler(BASE_CTX);
+
+    expect(opts.cleanReviewerWorktreeChanges).toHaveBeenCalledWith(
+      "/tmp/wt-review",
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "Warning: cleaned unexpected local changes in reviewer worktree /tmp/wt-review",
+    );
+    warn.mockRestore();
+  });
+
   test("returns error when PR finalization agent call fails", async () => {
     const agentA: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(
@@ -3029,5 +3124,103 @@ describe("saved Agent B session reuse on resume", () => {
     const firstResumeCall = (agentB.resume as ReturnType<typeof vi.fn>).mock
       .calls[0];
     expect(firstResumeCall[0]).toBe("saved-b-sess");
+  });
+
+  test("resume at verdict without a saved session invokes Agent B in the reviewer worktree", async () => {
+    const prepareReviewerWorktree = vi.fn();
+    const cleanReviewerWorktreeChanges = vi.fn().mockReturnValue(false);
+    const agentB: AgentAdapter = {
+      invoke: vi.fn().mockReturnValueOnce(
+        makeStream(
+          makeResult({
+            sessionId: "sess-b-verdict",
+            responseText: "APPROVED",
+          }),
+        ),
+      ),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(
+          makeStream(makeResult({ responseText: "No unresolved items." })),
+        )
+        .mockReturnValueOnce(makeStream(makeResult({ responseText: "NONE" }))),
+    };
+    const opts = makeOpts({
+      agentB,
+      prepareReviewerWorktree,
+      cleanReviewerWorktreeChanges,
+      getPrNumber: () => 99,
+      fetchPrComments: () => [
+        { body: "**[Reviewer Round 1]** Review.", user: { login: "bot" } },
+      ],
+    });
+    const stage = createReviewStageHandler(opts);
+
+    await stage.handler({ ...BASE_CTX, savedAgentBSessionId: undefined });
+
+    expect(agentB.invoke).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "You previously posted a review on a pull request",
+      ),
+      expect.objectContaining({ cwd: "/tmp/wt-review" }),
+    );
+    expect(agentB.resume).toHaveBeenCalledWith(
+      "sess-b-verdict",
+      expect.any(String),
+      expect.objectContaining({ cwd: "/tmp/wt-review" }),
+    );
+    expect(prepareReviewerWorktree).toHaveBeenCalled();
+    expect(cleanReviewerWorktreeChanges).toHaveBeenCalledWith("/tmp/wt-review");
+  });
+
+  test("resume at unresolved_summary without a saved session invokes Agent B in the reviewer worktree", async () => {
+    const prepareReviewerWorktree = vi.fn();
+    const cleanReviewerWorktreeChanges = vi.fn().mockReturnValue(false);
+    const agentB: AgentAdapter = {
+      invoke: vi
+        .fn()
+        .mockReturnValueOnce(
+          makeStream(
+            makeResult({
+              sessionId: "sess-b-unresolved",
+              responseText: "Nothing unresolved.",
+            }),
+          ),
+        )
+        .mockReturnValueOnce(makeStream(makeResult({ responseText: "NONE" }))),
+      resume: vi
+        .fn()
+        .mockReturnValueOnce(makeStream(makeResult({ responseText: "NONE" }))),
+    };
+    const opts = makeOpts({
+      agentB,
+      prepareReviewerWorktree,
+      cleanReviewerWorktreeChanges,
+      getPrNumber: () => 99,
+      fetchPrComments: () => [
+        { body: "**[Reviewer Round 1]** Review.", user: { login: "bot" } },
+        {
+          body: "[Review Verdict Round 1: APPROVED]",
+          user: { login: "bot" },
+        },
+      ],
+    });
+    const stage = createReviewStageHandler(opts);
+
+    await stage.handler({ ...BASE_CTX, savedAgentBSessionId: undefined });
+
+    expect(agentB.invoke).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "You previously reviewed a pull request and the review was approved.",
+      ),
+      expect.objectContaining({ cwd: "/tmp/wt-review" }),
+    );
+    expect(agentB.resume).toHaveBeenCalledWith(
+      "sess-b-unresolved",
+      expect.any(String),
+      expect.objectContaining({ cwd: "/tmp/wt-review" }),
+    );
+    expect(prepareReviewerWorktree).toHaveBeenCalled();
+    expect(cleanReviewerWorktreeChanges).toHaveBeenCalledWith("/tmp/wt-review");
   });
 });

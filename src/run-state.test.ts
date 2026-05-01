@@ -100,6 +100,15 @@ describe("saveRunState / loadRunState round-trip", () => {
     expect(loaded?.prNumber).toBeUndefined();
   });
 
+  test("preserves reviewerWorktreePath", () => {
+    const state = makeRunState({
+      reviewerWorktreePath: "/tmp/wt/issue-42-review",
+    });
+    saveRunState(state);
+    const loaded = loadRunState("org", "repo", 42);
+    expect(loaded?.reviewerWorktreePath).toBe("/tmp/wt/issue-42-review");
+  });
+
   test("preserves agent sessionIds", () => {
     const state = makeRunState({
       agentA: {
@@ -184,6 +193,18 @@ describe("loadRunState — missing / malformed", () => {
     const loaded = loadRunState("org", "repo", 42);
     expect(loaded).toBeDefined();
     expect(loaded?.prNumber).toBeUndefined();
+  });
+
+  test("normalises null reviewerWorktreePath to undefined", () => {
+    const raw = { ...makeRunState(), reviewerWorktreePath: null };
+    const path = runStatePath("org", "repo", 42);
+    mkdirSync(join(tmpHome, ".agentcoop", "runs", "org", "repo"), {
+      recursive: true,
+    });
+    writeFileSync(path, JSON.stringify(raw));
+    const loaded = loadRunState("org", "repo", 42);
+    expect(loaded).toBeDefined();
+    expect(loaded?.reviewerWorktreePath).toBeUndefined();
   });
 
   test("normalises null sessionId to undefined", () => {

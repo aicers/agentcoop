@@ -89,10 +89,14 @@ import {
 } from "./version-check.js";
 import {
   bootstrapRepo,
+  cleanReviewerWorktreeChanges,
   createWorktree,
   detectDefaultBranch,
   hasUncommittedChanges,
+  prepareReviewerWorktree,
+  removeReviewerWorktree,
   removeWorktree,
+  reviewerWorktreePath,
   worktreePath,
 } from "./worktree.js";
 
@@ -237,6 +241,7 @@ async function runCancellationCleanup(opts: {
   if (deleteWt) {
     console.log(m["cleanup.deletingWorktree"]);
     removeWorktree(opts.owner, opts.repo, opts.issueNumber, opts.branch);
+    removeReviewerWorktree(opts.owner, opts.repo, opts.issueNumber);
     result.deletedWorktree = true;
   }
 
@@ -548,6 +553,7 @@ try {
     conflictChoice: startFresh ? "clean" : "reuse",
   });
   bootstrapLog.log(m["boot.worktreeReady"](wt.path, wt.branch));
+  const reviewerWtPath = reviewerWorktreePath(owner, repo, issueNumber);
 
   if (wt.hadUncommittedChanges) {
     bootstrapLog.warn(m["boot.uncommittedPreserved"]);
@@ -729,6 +735,19 @@ try {
           saveRunState(runState);
           emitter.emit("review:posted", { round });
         },
+        prepareReviewerWorktree: (ctx) => {
+          const path = prepareReviewerWorktree({
+            owner: ctx.owner,
+            repo: ctx.repo,
+            issueNumber: ctx.issueNumber,
+            authorBranch: ctx.branch,
+          });
+          if (runState.reviewerWorktreePath !== path) {
+            runState.reviewerWorktreePath = path;
+            saveRunState(runState);
+          }
+        },
+        cleanReviewerWorktreeChanges,
       }),
     pipelineSettings,
   );
@@ -741,6 +760,7 @@ try {
     issueNumber,
     branch: wt.branch,
     worktreePath: wt.path,
+    reviewerWorktreePath: reviewerWtPath,
     baseSha: wt.baseSha,
     prNumber: undefined,
     currentStage: 2,
@@ -866,7 +886,10 @@ try {
         },
       });
     },
-    cleanup: () => removeWorktree(owner, repo, issueNumber, wt.branch),
+    cleanup: () => {
+      removeWorktree(owner, repo, issueNumber, wt.branch);
+      removeReviewerWorktree(owner, repo, issueNumber);
+    },
     stopServices: () => {
       if (hasDockerComposeRunning(wt.path)) {
         stopDockerCompose(wt.path);
@@ -923,6 +946,7 @@ try {
       if (signal?.aborted) return;
       if (deleteWt) {
         removeWorktree(owner, repo, issueNumber, wt.branch);
+        removeReviewerWorktree(owner, repo, issueNumber);
       }
 
       // Delete remote branch (only if pushed).
@@ -980,6 +1004,7 @@ try {
       issueTitle,
       branch: wt.branch,
       worktreePath: wt.path,
+      reviewerWorktreePath: reviewerWtPath,
       baseSha: savedState?.baseSha ?? wt.baseSha,
     },
     startFromStage,

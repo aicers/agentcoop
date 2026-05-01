@@ -22,14 +22,18 @@ vi.mock("./lock.js", () => ({
 
 const {
   worktreePath,
+  reviewerWorktreePath,
   repoPath,
   detectDefaultBranch,
   bootstrapRepo,
   hasUncommittedChanges,
+  cleanReviewerWorktreeChanges,
   getHeadSha,
+  prepareReviewerWorktree,
   resolveBaseSha,
   resolveMergeBase,
   createWorktree,
+  removeReviewerWorktree,
   removeWorktree,
 } = await import("./worktree.js");
 
@@ -56,6 +60,21 @@ describe("worktreePath", () => {
   test("handles different issue numbers", () => {
     expect(worktreePath("org", "repo", 42)).toBe(
       join(home, ".agentcoop", "worktrees", "org", "repo", "issue-42"),
+    );
+  });
+});
+
+describe("reviewerWorktreePath", () => {
+  test("returns deterministic reviewer path", () => {
+    expect(reviewerWorktreePath("aicers", "agentcoop", 5)).toBe(
+      join(
+        home,
+        ".agentcoop",
+        "worktrees",
+        "aicers",
+        "agentcoop",
+        "issue-5-review",
+      ),
     );
   });
 });
@@ -550,6 +569,187 @@ describe("removeWorktree", () => {
       "git",
       ["branch", "-D", "issue-5"],
       expect.objectContaining({ cwd: bare }),
+    );
+  });
+});
+
+describe("prepareReviewerWorktree", () => {
+  const baseOpts = {
+    owner: "org",
+    repo: "repo",
+    issueNumber: 5,
+    authorBranch: "alice/issue-5",
+  };
+
+  test("creates detached reviewer worktree when missing", () => {
+    mockExistsSync.mockReturnValue(false);
+
+    const result = prepareReviewerWorktree(baseOpts);
+
+    expect(result).toBe(reviewerWorktreePath("org", "repo", 5));
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["fetch", "origin", "alice/issue-5"],
+      expect.objectContaining({ cwd: repoPath("org", "repo") }),
+    );
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      [
+        "worktree",
+        "add",
+        "--detach",
+        reviewerWorktreePath("org", "repo", 5),
+        "origin/alice/issue-5",
+      ],
+      expect.objectContaining({ cwd: repoPath("org", "repo") }),
+    );
+  });
+
+  test("refreshes existing valid reviewer worktree to latest origin branch", () => {
+    mockExistsSync.mockReturnValue(true);
+    mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "rev-parse") return "true\n";
+      return "" as never;
+    }) as typeof execFileSync);
+
+    prepareReviewerWorktree(baseOpts);
+
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["switch", "--detach", "origin/alice/issue-5"],
+      expect.objectContaining({ cwd: reviewerWorktreePath("org", "repo", 5) }),
+    );
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["reset", "--hard", "origin/alice/issue-5"],
+      expect.objectContaining({ cwd: reviewerWorktreePath("org", "repo", 5) }),
+    );
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["clean", "-fd"],
+      expect.objectContaining({ cwd: reviewerWorktreePath("org", "repo", 5) }),
+    );
+  });
+
+  test("recreates reviewer worktree when refresh fails", () => {
+    mockExistsSync.mockReturnValue(true);
+    mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "rev-parse") return "true\n";
+      if (cmd === "git" && args[0] === "switch") {
+        throw new Error("refresh failed");
+      }
+      return "" as never;
+    }) as typeof execFileSync);
+
+    prepareReviewerWorktree(baseOpts);
+
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["worktree", "remove", "--force", reviewerWorktreePath("org", "repo", 5)],
+      expect.objectContaining({ cwd: repoPath("org", "repo") }),
+    );
+    expect(mockRmSync).toHaveBeenCalledWith(
+      reviewerWorktreePath("org", "repo", 5),
+      { recursive: true, force: true },
+    );
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      [
+        "worktree",
+        "add",
+        "--detach",
+        reviewerWorktreePath("org", "repo", 5),
+        "origin/alice/issue-5",
+      ],
+      expect.objectContaining({ cwd: repoPath("org", "repo") }),
+    );
+  });
+
+  test("recreates reviewer worktree when existing path is invalid", () => {
+    mockExistsSync.mockReturnValue(true);
+    mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "rev-parse") {
+        throw new Error("not a git worktree");
+      }
+      return "" as never;
+    }) as typeof execFileSync);
+
+    prepareReviewerWorktree(baseOpts);
+
+    expect(mockRmSync).toHaveBeenCalledWith(
+      reviewerWorktreePath("org", "repo", 5),
+      { recursive: true, force: true },
+    );
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      [
+        "worktree",
+        "add",
+        "--detach",
+        reviewerWorktreePath("org", "repo", 5),
+        "origin/alice/issue-5",
+      ],
+      expect.objectContaining({ cwd: repoPath("org", "repo") }),
+    );
+  });
+});
+
+describe("cleanReviewerWorktreeChanges", () => {
+  test("returns false when reviewer worktree is already clean", () => {
+    mockExistsSync.mockReturnValue(true);
+    mockExecFileSync.mockReturnValue("");
+
+    expect(cleanReviewerWorktreeChanges("/tmp/reviewer")).toBe(false);
+  });
+
+  test("cleans tracked and untracked reviewer changes", () => {
+    mockExistsSync.mockReturnValue(true);
+    mockExecFileSync
+      .mockReturnValueOnce(" M src/index.ts\n?? tmp.txt\n")
+      .mockReturnValue("" as never);
+
+    expect(cleanReviewerWorktreeChanges("/tmp/reviewer")).toBe(true);
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["reset", "--hard", "HEAD"],
+      expect.objectContaining({ cwd: "/tmp/reviewer" }),
+    );
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["clean", "-fd"],
+      expect.objectContaining({ cwd: "/tmp/reviewer" }),
+    );
+  });
+
+  test("returns true even when best-effort cleanup commands fail", () => {
+    mockExistsSync.mockReturnValue(true);
+    mockExecFileSync
+      .mockReturnValueOnce(" M src/index.ts\n")
+      .mockImplementation(() => {
+        throw new Error("cleanup failed");
+      });
+
+    expect(cleanReviewerWorktreeChanges("/tmp/reviewer")).toBe(true);
+  });
+});
+
+describe("removeReviewerWorktree", () => {
+  test("removes detached reviewer worktree without branch deletion", () => {
+    removeReviewerWorktree("org", "repo", 5);
+
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["worktree", "remove", "--force", reviewerWorktreePath("org", "repo", 5)],
+      expect.objectContaining({ cwd: repoPath("org", "repo") }),
+    );
+    expect(mockRmSync).toHaveBeenCalledWith(
+      reviewerWorktreePath("org", "repo", 5),
+      { recursive: true, force: true },
+    );
+    expect(mockExecFileSync).not.toHaveBeenCalledWith(
+      "git",
+      ["branch", "-D", expect.any(String)],
+      expect.anything(),
     );
   });
 });
