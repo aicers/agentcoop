@@ -874,7 +874,8 @@ You are reviewing a pull request for the following GitHub issue.
 
 ## Instructions
 
-1. Find the pull request for this branch (use `gh pr view`).
+1. Find the pull request for this branch (use
+   `gh pr view {branch} --repo {owner}/{repo}`).
 2. Review the diff against the issue.
    Your job is an
    independent judgment on whether this is the right change

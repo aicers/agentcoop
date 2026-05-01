@@ -193,7 +193,8 @@ export function buildReviewPrompt(
     ``,
     `## Instructions`,
     ``,
-    `1. Find the pull request for this branch (use \`gh pr view\`).`,
+    `1. Find the pull request for this branch (use`,
+    `   \`gh pr view ${ctx.branch} --repo ${ctx.owner}/${ctx.repo}\`).`,
   ];
 
   if (round > 1) {
@@ -249,7 +250,8 @@ export function buildReviewResumePrompt(
   const lines = [
     `Review the pull request for issue #${ctx.issueNumber} (round ${round}).`,
     ``,
-    `1. Find the pull request for this branch (use \`gh pr view\`).`,
+    `1. Find the pull request for this branch (use`,
+    `   \`gh pr view ${ctx.branch} --repo ${ctx.owner}/${ctx.repo}\`).`,
   ];
 
   if (round > 1) {
@@ -441,7 +443,8 @@ export function buildResumeUnresolvedSummaryPrompt(
     `and the review was approved.  The process was interrupted before you`,
     `could summarise unresolved items.`,
     ``,
-    `1. Find the pull request for this branch (use \`gh pr view\`).`,
+    `1. Find the pull request for this branch (use`,
+    `   \`gh pr view ${ctx.branch} --repo ${ctx.owner}/${ctx.repo}\`).`,
     `2. Read your \`[Reviewer Round ${round}]\` review comment to`,
     `   understand which items you raised.`,
     `3. Check the code on the branch to see which items were addressed`,
@@ -524,7 +527,8 @@ export function buildResumeVerdictPrompt(
     `prefixed with \`**[Reviewer Round ${round}]**\`.  The process was`,
     `interrupted before your verdict was recorded.`,
     ``,
-    `1. Find the pull request for this branch (use \`gh pr view\`).`,
+    `1. Find the pull request for this branch (use`,
+    `   \`gh pr view ${ctx.branch} --repo ${ctx.owner}/${ctx.repo}\`).`,
     `2. Read your \`[Reviewer Round ${round}]\` review comment.`,
     `3. Reply with exactly one keyword (no commentary):`,
     `   APPROVED if the changes are ready to merge,`,

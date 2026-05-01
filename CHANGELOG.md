@@ -30,7 +30,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the worktree.  `Owner:` / `Repo:` / `Branch:` are retained where they
   are interpolated into command examples or API URLs (e.g. the CodeQL
   dismiss block in Stage 5) and dropped where `gh` auto-detects the
-  repo from cwd.  Saves roughly 3,000–4,000 tokens per pipeline run on
+  repo from cwd.  Agent B reviewer prompts run from a detached
+  worktree where `gh pr view` cannot infer the current branch, so
+  they invoke `gh pr view {branch} --repo {owner}/{repo}` explicitly
+  instead of relying on auto-detection.  Saves roughly 3,000–4,000 tokens per pipeline run on
   a typical issue with one self-check, one CI fix, and two review
   rounds, with no change to verdict parsing semantics.
 - Agent B review turns now run from a detached reviewer worktree that is
