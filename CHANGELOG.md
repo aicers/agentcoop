@@ -8,6 +8,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Agent B review turns now run from a detached reviewer worktree that is
+  refreshed from `origin/{authorBranch}` before reviewer activity,
+  while Agent A continues to modify the author worktree.  Cleanup
+  removes both worktrees.
 - Stage 8 (Squash) no longer asks the agent to author the
   marker-delimited squash-suggestion PR comment.  The agent now
   drafts the title and body inside a `<<<TITLE>>>` / `<<<BODY>>>`

@@ -104,8 +104,8 @@ inside the TUI; Stage 1 is orchestrator-managed and runs beforehand.
 
 - **Stage 1 — Bootstrap:** Orchestrator-managed, runs before the TUI
   mounts. Bootstraps the repository (clone or fetch), detects the
-  default branch via `gh repo view`, creates the git worktree for
-  this issue, and on resume promotes the starting stage past
+  default branch via `gh repo view`, creates the author git worktree
+  for this issue, and on resume promotes the starting stage past
   `Create PR` if a PR already exists so `gh pr create` is not
   replayed.
 - **Stage 2 — Implement:** Agent A implements the issue in a git worktree
@@ -164,8 +164,9 @@ keep trying (timeout resumes polling; agent-error retries the same
 step; exhaustion resets the fix counter) before cleanup runs, so
 none of those branches can silently end the session.
 Once the user confirms the PR has been merged, the orchestrator
-stops any running services (e.g., Docker Compose), deletes the git
-worktree and its branch, and ends the agent sessions.  See
+stops any running services (e.g., Docker Compose), deletes the author
+git worktree, its branch, and the detached reviewer worktree, and
+ends the agent sessions.  See
 [Done stage details](docs/pipeline.md#stage-9-done) for the full
 flow.
 
@@ -246,16 +247,25 @@ issue's work from the original repository.
 On first run for a repository, AgentCoop creates a bare clone at
 `~/.agentcoop/repos/{owner}/{repo}.git`. On subsequent runs it
 fetches to keep the bare clone up to date. From this bare clone,
-each issue gets its own git worktree at
+each issue gets an author git worktree at
 `~/.agentcoop/worktrees/{owner}/{repo}/issue-{number}`, branched
 from the latest remote default branch.
+
+During the review stage, Agent B uses a separate detached reviewer
+worktree at
+`~/.agentcoop/worktrees/{owner}/{repo}/issue-{number}-review`. The
+reviewer worktree is refreshed from `origin/{authorBranch}` before
+reviewer activity, so Agent B reviews the pushed PR branch without
+sharing Agent A's editable checkout.
 
 This design has two advantages:
 
 - **No pollution.** The user's working copy is never touched. All
-  agent work happens in an isolated worktree outside the repository,
+  agent work happens in isolated worktrees outside the repository,
   so there is no risk of interfering with the user's uncommitted
-  changes, IDE state, or other branches.
+  changes, IDE state, or other branches. Reviewer-side changes are
+  cleaned from the detached reviewer worktree and cannot contaminate
+  the author worktree.
 - **Parallel safety.** Multiple issues can be worked on
   simultaneously because each gets its own worktree and branch. The
   bare clone serves as a shared, lockfile-protected reference that
