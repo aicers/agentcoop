@@ -33,10 +33,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   repo from cwd.  Agent B reviewer prompts run from a detached
   worktree where `gh pr view` cannot infer the current branch, so
   they invoke `gh pr view {branch} --repo {owner}/{repo}` explicitly
-  instead of relying on auto-detection.  Saves roughly 3,000–4,000
-  tokens per pipeline run on a typical issue with one self-check, one
-  CI fix, and two review rounds, with no change to verdict parsing
-  semantics.
+  instead of relying on auto-detection.  The shared `pollCiAndFix`
+  helper used by Stage 7 (post-review CI fix) and Stage 8 (post-squash
+  CI fix) was also threaded through `invokeOrResume`: it now reads the
+  current Agent A session id from `StageContext`, sends the compact
+  `buildCiFindingsResumePrompt` / `buildCiFixResumePrompt` on the live
+  session, and falls back to the fresh-form prompts only when the
+  helper has to fresh-invoke.  Saves roughly 3,000–4,000 tokens per
+  pipeline run on a typical issue with one self-check, one CI fix, and
+  two review rounds, with no change to verdict parsing semantics.
 - Agent B review turns now run from a detached reviewer worktree that is
   refreshed from `origin/{authorBranch}` before reviewer activity,
   while Agent A continues to modify the author worktree.  Cleanup

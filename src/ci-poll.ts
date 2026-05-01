@@ -24,10 +24,15 @@ import {
 import { t } from "./i18n/index.js";
 import type { StageContext } from "./pipeline.js";
 import type { PipelineEventEmitter } from "./pipeline-events.js";
-import { buildCiFindingsPrompt, buildCiFixPrompt } from "./stage-cicheck.js";
+import {
+  buildCiFindingsPrompt,
+  buildCiFindingsResumePrompt,
+  buildCiFixPrompt,
+  buildCiFixResumePrompt,
+} from "./stage-cicheck.js";
 import {
   buildErrorDetail,
-  drainToSink,
+  invokeOrResume,
   logAgentFailure,
 } from "./stage-util.js";
 import { getHeadSha as defaultGetHeadSha } from "./worktree.js";
@@ -225,6 +230,14 @@ export async function pollCiAndFix(
   let fixAttempts = 0;
   let findingsReviews = 0;
 
+  // Track the current Agent A session id locally so each iteration
+  // resumes the most recent session.  Initialised from the stage
+  // context, then updated after every agent invocation.  When
+  // present, the compact resume-form prompt is sent on the live
+  // session and the fresh-form prompt is used as the fallback if
+  // the session has expired.
+  let currentSessionId = ctx.savedAgentASessionId;
+
   while (true) {
     // Read HEAD SHA from the worktree so we only consider CI runs
     // triggered by the most recent push (initial or fix).
@@ -304,25 +317,40 @@ export async function pollCiAndFix(
           ? correlateFindings(ciStatus.findings, alerts)
           : undefined;
 
-      const findingsPrompt = buildCiFindingsPrompt(
+      const freshFindingsPrompt = buildCiFindingsPrompt(
         ctx,
         { issueTitle, issueBody },
         ciStatus.findings,
         ciStatus.findingsIncomplete,
         correlated,
       );
+      const resumeFindingsPrompt = buildCiFindingsResumePrompt(
+        ctx,
+        ciStatus.findings,
+        ciStatus.findingsIncomplete,
+        correlated,
+      );
+      const findingsUseResume = currentSessionId !== undefined;
+      const findingsPrompt = findingsUseResume
+        ? resumeFindingsPrompt
+        : freshFindingsPrompt;
       ctx.promptSinks?.a?.(findingsPrompt, "ci-fix");
-      const reviewStream = agent.invoke(findingsPrompt, {
-        cwd: ctx.worktreePath,
-        onUsage: ctx.usageSinks?.a,
-      });
-      const drained = ctx.streamSinks?.a
-        ? drainToSink(reviewStream, ctx.streamSinks.a)
-        : undefined;
-      const reviewResult = await reviewStream.result;
-      if (drained) await drained;
+      const reviewResult = await invokeOrResume(
+        agent,
+        currentSessionId,
+        findingsPrompt,
+        ctx.worktreePath,
+        ctx.streamSinks?.a,
+        {
+          fallbackPrompt: findingsUseResume ? freshFindingsPrompt : undefined,
+          usageSink: ctx.usageSinks?.a,
+          promptSink: ctx.promptSinks?.a,
+          promptKind: "ci-fix",
+        },
+      );
 
       if (reviewResult.sessionId) {
+        currentSessionId = reviewResult.sessionId;
         ctx.onSessionId?.("a", reviewResult.sessionId);
       }
 
@@ -399,23 +427,31 @@ export async function pollCiAndFix(
         ? logSections.join("\n\n")
         : "No detailed failure logs available.";
 
-    const fixPrompt = buildCiFixPrompt(
+    const freshFixPrompt = buildCiFixPrompt(
       ctx,
       { agent, issueTitle, issueBody },
       failureLogs,
     );
+    const resumeFixPrompt = buildCiFixResumePrompt(ctx, failureLogs);
+    const fixUseResume = currentSessionId !== undefined;
+    const fixPrompt = fixUseResume ? resumeFixPrompt : freshFixPrompt;
     ctx.promptSinks?.a?.(fixPrompt, "ci-fix");
-    const fixStream = agent.invoke(fixPrompt, {
-      cwd: ctx.worktreePath,
-      onUsage: ctx.usageSinks?.a,
-    });
-    const drained = ctx.streamSinks?.a
-      ? drainToSink(fixStream, ctx.streamSinks.a)
-      : undefined;
-    const fixResult = await fixStream.result;
-    if (drained) await drained;
+    const fixResult = await invokeOrResume(
+      agent,
+      currentSessionId,
+      fixPrompt,
+      ctx.worktreePath,
+      ctx.streamSinks?.a,
+      {
+        fallbackPrompt: fixUseResume ? freshFixPrompt : undefined,
+        usageSink: ctx.usageSinks?.a,
+        promptSink: ctx.promptSinks?.a,
+        promptKind: "ci-fix",
+      },
+    );
 
     if (fixResult.sessionId) {
+      currentSessionId = fixResult.sessionId;
       ctx.onSessionId?.("a", fixResult.sessionId);
     }
 
