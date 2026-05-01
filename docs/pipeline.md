@@ -9,7 +9,7 @@ the [README](../README.md).
 
 - [Pipeline overview](#pipeline-overview)
 - [Prompt design principles](#prompt-design-principles)
-  - [Self-contained context](#self-contained-context)
+  - [Self-contained context](#self-contained-context-with-resume-form-compaction)
   - [Two-step verdict pattern](#two-step-verdict-pattern)
   - [No confirmation requests](#no-confirmation-requests)
   - [Service-aware instructions](#service-aware-instructions)
