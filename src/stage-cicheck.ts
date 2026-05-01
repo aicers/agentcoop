@@ -90,12 +90,6 @@ export function buildCiFixPrompt(
   const lines = [
     `You are fixing CI failures for the following GitHub issue.`,
     ``,
-    `## Repository`,
-    `- Owner: ${ctx.owner}`,
-    `- Repo: ${ctx.repo}`,
-    `- Branch: ${ctx.branch}`,
-    `- Worktree: ${ctx.worktreePath}`,
-    ``,
     `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
     ``,
     opts.issueBody,
@@ -120,6 +114,39 @@ export function buildCiFixPrompt(
     lines.push(``, `## Additional feedback`, ``, ctx.userInstruction);
   }
 
+  return lines.join("\n");
+}
+
+/**
+ * Compact resume-form CI fix prompt — repository / issue context is
+ * already in the live agent session, so only the failure logs and
+ * instructions are re-sent.
+ */
+export function buildCiFixResumePrompt(
+  ctx: StageContext,
+  failureLogs: string,
+): string {
+  const lines = [
+    `Fix the CI failures for issue #${ctx.issueNumber}.`,
+    ``,
+    `## CI Failure Logs`,
+    ``,
+    failureLogs || "No detailed failure logs available.",
+    ``,
+    `## Instructions`,
+    ``,
+    `Diagnose and fix the CI failures shown above.  After making your`,
+    `changes:`,
+    ``,
+    buildDocConsistencyInstructions(),
+    ``,
+    `${buildPrSyncInstructions(ctx.issueNumber)}`,
+    ``,
+    `Then commit and push the branch so a new CI run is triggered.`,
+  ];
+  if (ctx.userInstruction) {
+    lines.push(``, `## Additional feedback`, ``, ctx.userInstruction);
+  }
   return lines.join("\n");
 }
 
@@ -246,15 +273,66 @@ export function buildCiFindingsPrompt(
     `CI passed but check runs reported findings (annotations).`,
     `Review the findings below and decide whether any should be addressed.`,
     ``,
-    `## Repository`,
-    `- Owner: ${ctx.owner}`,
-    `- Repo: ${ctx.repo}`,
-    `- Branch: ${ctx.branch}`,
-    `- Worktree: ${ctx.worktreePath}`,
-    ``,
     `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
     ``,
     opts.issueBody,
+    ``,
+    `## CI Findings`,
+    ``,
+    correlated ? formatFindings(correlated) : formatFindings(findings),
+  ];
+
+  if (findingsIncomplete) {
+    lines.push(
+      ``,
+      `**Note:** Some check run annotations could not be fetched.`,
+      `The findings above may be incomplete.  Check the PR's Checks`,
+      `tab for the full list of annotations.`,
+    );
+  }
+
+  if (correlated) {
+    lines.push(buildTriageInstructions(ctx, correlated));
+  }
+
+  lines.push(
+    ``,
+    `## Instructions`,
+    ``,
+    `For each finding, decide whether it should be fixed or can be`,
+    `safely ignored.  If you fix any findings:`,
+    ``,
+    buildDocConsistencyInstructions(),
+    ``,
+    `${buildPrSyncInstructions(ctx.issueNumber)}`,
+    ``,
+    `Then commit and push the branch so a new CI run is triggered.`,
+    `If all findings are acceptable as-is, explain your reasoning.`,
+  );
+
+  if (ctx.userInstruction) {
+    lines.push(``, `## Additional feedback`, ``, ctx.userInstruction);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Compact resume-form findings prompt — drops the issue body which
+ * the agent's live session already has from prior stages.  Findings
+ * data and the (conditional) CodeQL triage block are preserved
+ * because they are dynamic per-run content.
+ */
+export function buildCiFindingsResumePrompt(
+  ctx: StageContext,
+  findings: CiFinding[],
+  findingsIncomplete?: boolean,
+  correlated?: CorrelatedFinding[],
+): string {
+  const lines = [
+    `CI passed but check runs reported findings (annotations) for issue`,
+    `#${ctx.issueNumber}.  Review the findings below and decide whether`,
+    `any should be addressed.`,
     ``,
     `## CI Findings`,
     ``,
@@ -386,13 +464,23 @@ export function createCiCheckStageHandler(
             ? correlateFindings(ciStatus.findings, alerts)
             : undefined;
 
-        const findingsPrompt = buildCiFindingsPrompt(
+        const freshFindingsPrompt = buildCiFindingsPrompt(
           ctx,
           opts,
           ciStatus.findings,
           ciStatus.findingsIncomplete,
           correlated,
         );
+        const resumeFindingsPrompt = buildCiFindingsResumePrompt(
+          ctx,
+          ciStatus.findings,
+          ciStatus.findingsIncomplete,
+          correlated,
+        );
+        const findingsUseResume = ctx.savedAgentASessionId !== undefined;
+        const findingsPrompt = findingsUseResume
+          ? resumeFindingsPrompt
+          : freshFindingsPrompt;
         ctx.promptSinks?.a?.(findingsPrompt, "ci-fix");
         const reviewResult = await invokeOrResume(
           opts.agent,
@@ -400,8 +488,12 @@ export function createCiCheckStageHandler(
           findingsPrompt,
           ctx.worktreePath,
           ctx.streamSinks?.a,
-          undefined,
-          ctx.usageSinks?.a,
+          {
+            fallbackPrompt: findingsUseResume ? freshFindingsPrompt : undefined,
+            usageSink: ctx.usageSinks?.a,
+            promptSink: ctx.promptSinks?.a,
+            promptKind: "ci-fix",
+          },
         );
 
         if (reviewResult.sessionId) {
@@ -447,7 +539,10 @@ export function createCiCheckStageHandler(
           ? logSections.join("\n\n")
           : "No detailed failure logs available.";
 
-      const prompt = buildCiFixPrompt(ctx, opts, failureLogs);
+      const freshFixPrompt = buildCiFixPrompt(ctx, opts, failureLogs);
+      const resumeFixPrompt = buildCiFixResumePrompt(ctx, failureLogs);
+      const fixUseResume = ctx.savedAgentASessionId !== undefined;
+      const prompt = fixUseResume ? resumeFixPrompt : freshFixPrompt;
       ctx.promptSinks?.a?.(prompt, "ci-fix");
       const fixResult = await invokeOrResume(
         opts.agent,
@@ -455,8 +550,12 @@ export function createCiCheckStageHandler(
         prompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
-        undefined,
-        ctx.usageSinks?.a,
+        {
+          fallbackPrompt: fixUseResume ? freshFixPrompt : undefined,
+          usageSink: ctx.usageSinks?.a,
+          promptSink: ctx.promptSinks?.a,
+          promptKind: "ci-fix",
+        },
       );
 
       if (fixResult.sessionId) {

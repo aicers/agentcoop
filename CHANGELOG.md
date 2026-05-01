@@ -8,6 +8,47 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Pipeline stage prompts now use a compact resume-form when sending to
+  an agent on a live session, falling back to the full fresh-form only
+  when the resume helper has to fall back to a fresh `invoke` (session
+  expired / unknown error).  Each stage's `buildXxxPrompt` produces both
+  forms; `invokeOrResume` accepts an optional `fallbackPrompt` (and
+  `promptSink` / `promptKind` / `promptMeta` for diagnostics, bundled
+  into a single options object) so call sites that supply both forms
+  log the prompt actually sent.  The compact resume prompt drops the
+  repository header and full issue body (the agent already has them
+  from the prior stage's session) and keeps only stage-specific
+  instructions plus a one-line `issue #N` reference.  Verdict and
+  clarification prompts (`buildCompletionCheckPrompt`,
+  `buildPrCompletionCheckPrompt`, `buildFixOrDoneVerdictPrompt`,
+  `buildTestPlanVerdictPrompt`, `buildReviewVerdictPrompt`,
+  `buildUnresolvedVerdictPrompt`, `buildPrFinalizationVerdictPrompt`,
+  `buildSquashCompletionCheckPrompt`, and `buildClarificationPrompt`)
+  are collapsed to two-line "Reply with exactly one keyword …" forms;
+  the strict verdict parser is unchanged.  The redundant `Worktree:`
+  line is removed from every stage prompt — the agent's cwd is already
+  the worktree.  `Owner:` / `Repo:` / `Branch:` are retained where they
+  are interpolated into command examples or API URLs (e.g. the CodeQL
+  dismiss block in Stage 5) and dropped where `gh` auto-detects the
+  repo from cwd.  Agent B reviewer prompts run from a detached
+  worktree where `gh pr view` cannot infer the current branch, so
+  they invoke `gh pr view {branch} --repo {owner}/{repo}` explicitly
+  instead of relying on auto-detection.  The shared `pollCiAndFix`
+  helper used by Stage 7 (post-review CI fix) and Stage 8 (post-squash
+  CI fix) was also threaded through `invokeOrResume`: it now reads the
+  current Agent A session id from `StageContext`, sends the compact
+  `buildCiFindingsResumePrompt` / `buildCiFixResumePrompt` on the live
+  session, and falls back to the fresh-form prompts only when the
+  helper has to fresh-invoke.  `pollCiAndFix` accepts an optional
+  `initialAgentASessionId` so callers can hand it the freshest Agent A
+  session id from the same handler invocation; Stage 7 (post-author-fix
+  CI poll) and Stage 8 (`runCiPollAndFinish` from the verdict /
+  clarification / agent-squash follow-up paths) thread the live session
+  id through, since `ctx.savedAgentASessionId` is a stage-entry snapshot
+  and would otherwise force the first CI findings/fix turn back onto a
+  fresh `invoke`.  Saves roughly 3,000–4,000 tokens per pipeline run
+  on a typical issue with one self-check, one CI fix, and two review
+  rounds, with no change to verdict parsing semantics.
 - Agent B review turns now run from a detached reviewer worktree that is
   refreshed from `origin/{authorBranch}` before reviewer activity,
   while Agent A continues to modify the author worktree.  Cleanup

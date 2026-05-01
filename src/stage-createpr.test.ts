@@ -67,12 +67,14 @@ function makeOpts(
 // ---- buildCreatePrPrompt ---------------------------------------------------
 
 describe("buildCreatePrPrompt", () => {
-  test("includes repo context", () => {
+  test("omits redundant repo headers", () => {
+    // Owner / Repo / Branch / Worktree are redundant — `gh` infers
+    // the repo from cwd, and cwd is already the worktree.
     const prompt = buildCreatePrPrompt(BASE_CTX, makeOpts());
-    expect(prompt).toContain("Owner: org");
-    expect(prompt).toContain("Repo: repo");
-    expect(prompt).toContain("Branch: issue-42");
-    expect(prompt).toContain("Worktree: /tmp/wt");
+    expect(prompt).not.toContain("Owner: org");
+    expect(prompt).not.toContain("Repo: repo");
+    expect(prompt).not.toContain("Branch: issue-42");
+    expect(prompt).not.toContain("Worktree:");
   });
 
   test("includes issue details", () => {
@@ -124,13 +126,13 @@ describe("buildPrCompletionCheckPrompt", () => {
 
   test("asks for exactly one keyword", () => {
     const prompt = buildPrCompletionCheckPrompt();
-    expect(prompt).toContain("exactly one");
+    expect(prompt).toContain("exactly one keyword");
   });
 
   test("asks for just the keyword with no other commentary", () => {
     const prompt = buildPrCompletionCheckPrompt();
     expect(prompt).toContain("BLOCKED");
-    expect(prompt).toContain("Do not include any other commentary");
+    expect(prompt).toContain("no commentary");
   });
 });
 

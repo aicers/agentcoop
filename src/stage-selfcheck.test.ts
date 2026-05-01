@@ -125,6 +125,7 @@ describe("buildSelfCheckPrompt", () => {
     expect(prompt).toContain("Owner: org");
     expect(prompt).toContain("Repo: repo");
     expect(prompt).toContain("Branch: issue-42");
+    expect(prompt).not.toContain("Worktree:");
     expect(prompt).toContain("Issue #42: Fix the widget");
     expect(prompt).toContain("The widget is broken.");
   });

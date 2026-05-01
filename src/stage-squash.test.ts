@@ -109,11 +109,14 @@ function makeOpts(
 // ---- buildSquashPrompt -------------------------------------------------------
 
 describe("buildSquashPrompt", () => {
-  test("includes repo and issue context", () => {
+  test("includes issue context and omits redundant repo headers", () => {
     const prompt = buildSquashPrompt(BASE_CTX, makeOpts());
-    expect(prompt).toContain("Owner: org");
-    expect(prompt).toContain("Repo: repo");
-    expect(prompt).toContain("Branch: issue-42");
+    // Owner / Repo / Branch / Worktree are dropped — gh infers the
+    // repo from cwd and the cwd is already the worktree.
+    expect(prompt).not.toContain("Owner: org");
+    expect(prompt).not.toContain("Repo: repo");
+    expect(prompt).not.toContain("Branch: issue-42");
+    expect(prompt).not.toContain("Worktree:");
     expect(prompt).toContain("Issue #42: Fix the widget");
     expect(prompt).toContain("The widget is broken.");
   });
@@ -708,13 +711,13 @@ describe("createSquashStageHandler", () => {
       );
     const collectFailureLogs = vi.fn().mockReturnValue("err");
 
-    const invokeResults = [
-      makeStream(
-        makeResult({
-          sessionId: "sess-squash",
-          responseText: "Squashed.",
-        }),
-      ),
+    // The squash work prompt persists `sess-squash`; the verdict
+    // follow-up resumes that session and returns SQUASHED_MULTI, then
+    // the CI fix turn resumes the same session via `pollCiAndFix` and
+    // crashes.  Sequence the resume mock so the second resume call
+    // (the CI fix) is the agent error.
+    const resumeResults = [
+      makeStream(makeResult({ responseText: "SQUASHED_MULTI" })),
       makeStream(
         makeResult({
           status: "error",
@@ -724,14 +727,17 @@ describe("createSquashStageHandler", () => {
         }),
       ),
     ];
-    let invokeCall = 0;
+    let resumeCall = 0;
     const agent: AgentAdapter = {
-      invoke: vi.fn().mockImplementation(() => invokeResults[invokeCall++]),
-      resume: vi
-        .fn()
-        .mockReturnValue(
-          makeStream(makeResult({ responseText: "SQUASHED_MULTI" })),
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-squash",
+            responseText: "Squashed.",
+          }),
         ),
+      ),
+      resume: vi.fn().mockImplementation(() => resumeResults[resumeCall++]),
     };
 
     const opts = makeOpts({ agent, getCiStatus, collectFailureLogs });

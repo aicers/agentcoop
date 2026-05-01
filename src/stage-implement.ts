@@ -37,7 +37,6 @@ export function buildImplementPrompt(
     `- Owner: ${ctx.owner}`,
     `- Repo: ${ctx.repo}`,
     `- Branch: ${ctx.branch}`,
-    `- Worktree: ${ctx.worktreePath}`,
     ``,
     `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
     ``,
@@ -45,8 +44,8 @@ export function buildImplementPrompt(
     ``,
     `## Instructions`,
     ``,
-    `Implement the changes required to resolve this issue.  Work inside the`,
-    `worktree directory listed above — it is freshly based on the latest`,
+    `Implement the changes required to resolve this issue.  The current`,
+    `working directory is a worktree freshly based on the latest`,
     `remote default branch, so you are working on top of the most recent`,
     `upstream state.  Make sure the code compiles and any existing tests`,
     `still pass.`,
@@ -65,17 +64,35 @@ export function buildImplementPrompt(
   return lines.join("\n");
 }
 
+/**
+ * Compact resume-form prompt for stage 2 — sent when the agent
+ * already has the repository / issue context from a prior stage's
+ * session.  The fresh-form prompt is sent only when the resume falls
+ * back to a fresh invoke.
+ */
+export function buildImplementResumePrompt(ctx: StageContext): string {
+  const lines = [
+    `Implement the changes required to resolve issue #${ctx.issueNumber}.`,
+    `Make sure the code compiles and any existing tests still pass.`,
+    ``,
+    `If the project uses external services (databases, message brokers,`,
+    `dev servers, etc.), start them using whatever tools the project`,
+    `provides and run the full test suite against them.  If a port`,
+    `conflict occurs, change the port rather than skipping the service.`,
+  ];
+  if (ctx.userInstruction) {
+    lines.push(``, `## Additional feedback`, ``, ctx.userInstruction);
+  }
+  return lines.join("\n");
+}
+
 export const IMPLEMENT_CHECK_KEYWORDS = ["COMPLETED", "BLOCKED"] as const;
 
 export function buildCompletionCheckPrompt(): string {
   return [
-    `You have finished your implementation attempt.  Please evaluate the`,
-    `result and respond with exactly one of the following keywords:`,
-    ``,
-    `- COMPLETED — if the implementation is finished and working`,
-    `- BLOCKED — if you cannot proceed and need user intervention`,
-    ``,
-    `Do not include any other commentary — just the keyword.`,
+    `Reply with exactly one keyword (no commentary):`,
+    `COMPLETED if the implementation is finished and working,`,
+    `BLOCKED if you cannot proceed and need user intervention.`,
   ].join("\n");
 }
 
@@ -88,7 +105,13 @@ export function createImplementStageHandler(
     primaryAgent: "a",
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send the implementation prompt (resume if saved session).
-      const prompt = buildImplementPrompt(ctx, opts);
+      // When a saved session exists, send the compact resume-form
+      // prompt and supply the full fresh-form as fallback so an
+      // expired session still gets full context.
+      const freshPrompt = buildImplementPrompt(ctx, opts);
+      const resumePrompt = buildImplementResumePrompt(ctx);
+      const useResume = ctx.savedAgentASessionId !== undefined;
+      const prompt = useResume ? resumePrompt : freshPrompt;
       ctx.promptSinks?.a?.(prompt, "work");
       const implResult = await invokeOrResume(
         opts.agent,
@@ -96,8 +119,12 @@ export function createImplementStageHandler(
         prompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
-        undefined,
-        ctx.usageSinks?.a,
+        {
+          fallbackPrompt: useResume ? freshPrompt : undefined,
+          usageSink: ctx.usageSinks?.a,
+          promptSink: ctx.promptSinks?.a,
+          promptKind: "work",
+        },
       );
 
       if (implResult.sessionId) {

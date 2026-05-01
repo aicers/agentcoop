@@ -90,12 +90,12 @@ function makeOpts(
 // ---- buildCiFixPrompt ------------------------------------------------------
 
 describe("buildCiFixPrompt", () => {
-  test("includes repo context", () => {
+  test("omits redundant repo headers", () => {
     const prompt = buildCiFixPrompt(BASE_CTX, makeOpts(), "error log");
-    expect(prompt).toContain("Owner: org");
-    expect(prompt).toContain("Repo: repo");
-    expect(prompt).toContain("Branch: issue-42");
-    expect(prompt).toContain("Worktree: /tmp/wt");
+    expect(prompt).not.toContain("Owner: org");
+    expect(prompt).not.toContain("Repo: repo");
+    expect(prompt).not.toContain("Branch: issue-42");
+    expect(prompt).not.toContain("Worktree:");
   });
 
   test("includes issue details", () => {
@@ -855,11 +855,12 @@ describe("buildCiFindingsPrompt", () => {
     },
   ];
 
-  test("includes repo context", () => {
+  test("omits redundant repo headers", () => {
     const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), sampleFindings);
-    expect(prompt).toContain("Owner: org");
-    expect(prompt).toContain("Repo: repo");
-    expect(prompt).toContain("Branch: issue-42");
+    expect(prompt).not.toContain("Owner: org");
+    expect(prompt).not.toContain("Repo: repo");
+    expect(prompt).not.toContain("Branch: issue-42");
+    expect(prompt).not.toContain("Worktree:");
   });
 
   test("includes issue details", () => {

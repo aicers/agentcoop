@@ -176,9 +176,10 @@ describe("buildClarificationPrompt", () => {
     expect(prompt).toContain("BLOCKED");
   });
 
-  test("scoped prompt uses 'verdict keyword' phrasing", () => {
+  test("scoped prompt asks for one keyword with no commentary", () => {
     const prompt = buildClarificationPrompt("ambiguous", ["APPROVED"]);
-    expect(prompt).toContain("verdict keyword");
+    expect(prompt).toContain("exactly one keyword");
+    expect(prompt).toContain("APPROVED");
   });
 });
 

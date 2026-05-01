@@ -194,12 +194,6 @@ export function buildSquashPrompt(
   const lines = [
     `You are squashing commits for the following GitHub issue.`,
     ``,
-    `## Repository`,
-    `- Owner: ${ctx.owner}`,
-    `- Repo: ${ctx.repo}`,
-    `- Branch: ${ctx.branch}`,
-    `- Worktree: ${ctx.worktreePath}`,
-    ``,
     `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
     ``,
     opts.issueBody,
@@ -283,6 +277,95 @@ export function buildSquashPrompt(
 }
 
 /**
+ * Compact resume-form squash prompt — drops the issue body which the
+ * agent already has from prior stages.  The detailed envelope contract
+ * and branch-on-decision instructions remain because they are
+ * squash-specific guidance the agent has not yet seen this stage.
+ */
+export function buildSquashResumePrompt(
+  ctx: StageContext,
+  opts: SquashStageOptions,
+): string {
+  const lines = [
+    `Squash commits for issue #${ctx.issueNumber}.`,
+    ``,
+    `1. ${buildPrSyncInstructions(ctx.issueNumber)}`,
+    `2. Decide whether the work on this branch is best presented as`,
+    `   **one** commit or as **several** meaningful commits.  Inspect the`,
+    `   existing commits' scope, file overlap, and intent.`,
+    ``,
+    `   - **One commit is appropriate** when all changes belong to a`,
+    `     single logical change (typical small fix or feature).`,
+    `   - **Multiple commits are appropriate** when the branch contains`,
+    `     genuinely independent changes that benefit from separate`,
+    `     history (e.g. a refactor preceding a feature).`,
+    ``,
+    `3. Branch on your decision:`,
+    ``,
+    `   **If a single commit is appropriate:**`,
+    `   - Do NOT rewrite history.  Do NOT force-push.`,
+    `   - Do NOT post or edit any PR comment yourself — agentcoop will`,
+    `     author the squash-suggestion comment from your reply below.`,
+    `   - Draft the commit title and body that should be used when the`,
+    `     PR is squash-merged.  The title must not include issue or PR`,
+    `     numbers; reference the issue in the body using \`Closes #N\``,
+    `     or \`Part of #N\`.`,
+    `   - Reply with the title and body wrapped in this exact envelope`,
+    `     (no fences, no surrounding code blocks, no extra commentary`,
+    `     between the tags):`,
+    ``,
+    `     \`\`\`text`,
+    `     <<<TITLE>>>`,
+    `     <your title on a single line>`,
+    `     <<</TITLE>>>`,
+    ``,
+    `     <<<BODY>>>`,
+    `     <your body, multi-line allowed,`,
+    `     may include \`Closes #N\` / \`Part of #N\`>`,
+    `     <<</BODY>>>`,
+    `     \`\`\``,
+    ``,
+    `     Both envelopes are required.  Do not nest fenced code blocks`,
+    `     around the envelope.  agentcoop parses the text between the`,
+    `     tags verbatim — leading and trailing blank lines are stripped,`,
+    `     internal blank lines are preserved.  The body may include a`,
+    `     literal \`<<</BODY>>>\` line as content (e.g. when documenting`,
+    `     this envelope contract); agentcoop anchors the structural`,
+    `     close to the LAST own-line \`<<</BODY>>>\`, AND that close tag`,
+    `     must be the last non-blank line of your response.  Do not add`,
+    `     any prose after the closing \`<<</BODY>>>\` — only blank lines`,
+    `     may follow it.`,
+    ``,
+    `   **If multiple commits are appropriate:**`,
+    ...(ctx.baseSha
+      ? [
+          `   - Review the commits after the base commit \`${ctx.baseSha}\``,
+          `     and consolidate them into a few meaningful commits.  Only`,
+          `     commits introduced on this branch should be touched — do not`,
+          `     include commits from the base branch.  Use`,
+          `     \`git reset --soft ${ctx.baseSha}\` followed by \`git commit\`,`,
+          `     or an interactive rebase — whichever is simpler.`,
+        ]
+      : [
+          `   - Review all commits on this branch and consolidate them into`,
+          `     a few meaningful commits.  Use an interactive rebase or`,
+          `     reset-based approach — whichever is simpler.`,
+        ]),
+    `   - Write clear, concise commit messages that summarise the changes.`,
+    `     Do not include issue or PR numbers in the commit title.`,
+    `     Instead, reference the issue in the commit body using`,
+    `     \`Closes #N\` or \`Part of #N\`.`,
+    `   - Force-push the branch (\`git push --force-with-lease\`).`,
+  ];
+  // Suppress unused parameter warning — opts may be needed in future.
+  void opts;
+  if (ctx.userInstruction) {
+    lines.push(``, `## Additional feedback`, ``, ctx.userInstruction);
+  }
+  return lines.join("\n");
+}
+
+/**
  * Three-way verdict keywords for the squash stage.  Kept out of the
  * shared `KEYWORD_MAP` / `StepStatus` enum because they are
  * squash-specific; the handler branches on the raw keyword from
@@ -298,18 +381,14 @@ export type SquashVerdict = (typeof SQUASH_CHECK_KEYWORDS)[number];
 
 export function buildSquashCompletionCheckPrompt(): string {
   return [
-    `You have finished your squash decision.  Respond with exactly one`,
-    `of the following keywords:`,
-    ``,
-    `- SQUASHED_MULTI — if you rewrote history into multiple meaningful`,
-    `  commits and force-pushed`,
-    `- SUGGESTED_SINGLE — if a single commit is appropriate and you`,
-    `  drafted the suggested title and body in the <<<TITLE>>>/`,
-    `  <<<BODY>>> envelope (no force-push)`,
-    `- BLOCKED — if you could not complete either path and need user`,
-    `  intervention`,
-    ``,
-    `Do not include any other commentary — just the keyword.`,
+    `Reply with exactly one keyword (no commentary):`,
+    `SQUASHED_MULTI if you rewrote history into multiple meaningful`,
+    `commits and force-pushed,`,
+    `SUGGESTED_SINGLE if a single commit is appropriate and you drafted`,
+    `the suggested title and body in the <<<TITLE>>>/<<<BODY>>> envelope`,
+    `(no force-push),`,
+    `BLOCKED if you could not complete either path and need user`,
+    `intervention.`,
   ].join("\n");
 }
 
@@ -1039,7 +1118,7 @@ export function createSquashStageHandler(
       }
 
       if (saved === "ci_poll") {
-        return runCiPollAndFinish(ctx, opts);
+        return runCiPollAndFinish(ctx, opts, resolveSavedSessionId());
       }
 
       if (saved === "squashing") {
@@ -1063,7 +1142,7 @@ export function createSquashStageHandler(
         // prompt so the agent continues the same conversation.
         const resumeCount = countCommits(ctx.worktreePath, opts.defaultBranch);
         if (resumeCount <= 1) {
-          return runCiPollAndFinish(ctx, opts);
+          return runCiPollAndFinish(ctx, opts, resolveSavedSessionId());
         }
 
         const sessionId = resolveSavedSessionId();
@@ -1091,7 +1170,7 @@ export function createSquashStageHandler(
             );
           }
 
-          return runCiPollAndFinish(ctx, opts);
+          return runCiPollAndFinish(ctx, opts, followup.sessionId ?? sessionId);
         }
         // No session available — fall through to a fresh planning run
         // as a last resort.  This should be rare: the session id is
@@ -1146,16 +1225,24 @@ export function createSquashStageHandler(
       // ---- planning: send the squash work prompt --------------------------
       opts.onSquashSubStep?.("planning");
 
-      const prompt = buildSquashPrompt(ctx, opts);
+      const freshSquashPrompt = buildSquashPrompt(ctx, opts);
+      const resumeSquashPrompt = buildSquashResumePrompt(ctx, opts);
+      const savedSquashSessionId = resolveSavedSessionId();
+      const squashUseResume = savedSquashSessionId !== undefined;
+      const prompt = squashUseResume ? resumeSquashPrompt : freshSquashPrompt;
       ctx.promptSinks?.a?.(prompt, "work");
       const squashResult = await invokeOrResume(
         opts.agent,
-        resolveSavedSessionId(),
+        savedSquashSessionId,
         prompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
-        undefined,
-        ctx.usageSinks?.a,
+        {
+          fallbackPrompt: squashUseResume ? freshSquashPrompt : undefined,
+          usageSink: ctx.usageSinks?.a,
+          promptSink: ctx.promptSinks?.a,
+          promptKind: "work",
+        },
       );
 
       if (squashResult.sessionId) {
@@ -1326,7 +1413,7 @@ export function createSquashStageHandler(
             keyword: "SQUASHED_MULTI",
             raw: retry.responseText,
           });
-          return runCiPollAndFinish(ctx, opts);
+          return runCiPollAndFinish(ctx, opts, retrySessionId);
         }
         if (retryKeyword === "BLOCKED") {
           verdictCtx?.events.emit("pipeline:verdict", {
@@ -1478,7 +1565,13 @@ export function createSquashStageHandler(
       }
 
       // SQUASHED_MULTI — proceed with the existing CI poll path.
-      return runCiPollAndFinish(ctx, opts);
+      // Hand the freshest known Agent A session id to the CI poll so
+      // the first findings/fix turn resumes the live conversation.
+      return runCiPollAndFinish(
+        ctx,
+        opts,
+        verdictSessionId ?? squashResult.sessionId,
+      );
     },
   };
 }
@@ -1564,15 +1657,25 @@ async function askUserAndApply(
     return mapAgentError(followup, "during agent squash follow-up");
   }
 
-  return runCiPollAndFinish(ctx, opts);
+  return runCiPollAndFinish(ctx, opts, followup.sessionId ?? sessionId);
 }
 
 /**
  * Poll CI after a force-push and return the final stage result.
+ *
+ * `initialAgentASessionId` is the latest known Agent A session id at
+ * the call site — typically a verdict / clarification / follow-up
+ * session that was just persisted in the same handler invocation.
+ * `pollCiAndFix` uses it to seed its internal session tracker so the
+ * first CI findings/fix turn resumes that live conversation rather
+ * than the stage-entry snapshot in `ctx.savedAgentASessionId`.  When
+ * not supplied, the helper falls back to the live persisted id (via
+ * `getSavedAgentSessionId`) and finally to `ctx.savedAgentASessionId`.
  */
 async function runCiPollAndFinish(
   ctx: StageContext,
   opts: SquashStageOptions,
+  initialAgentASessionId?: string,
 ): Promise<StageResult> {
   opts.onSquashSubStep?.("ci_poll");
 
@@ -1581,6 +1684,10 @@ async function runCiPollAndFinish(
     agent: opts.agent,
     issueTitle: opts.issueTitle,
     issueBody: opts.issueBody,
+    initialAgentASessionId:
+      initialAgentASessionId ??
+      opts.getSavedAgentSessionId?.() ??
+      ctx.savedAgentASessionId,
     getCiStatus: opts.getCiStatus ?? defaultGetCiStatus,
     collectFailureLogs: opts.collectFailureLogs ?? defaultCollectFailureLogs,
     getHeadSha: opts.getHeadSha,

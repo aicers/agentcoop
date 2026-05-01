@@ -130,16 +130,14 @@ function makeOpts(
 // ---- prompt builders ---------------------------------------------------------
 
 describe("buildReviewPrompt", () => {
-  test("includes repo and issue context", () => {
+  test("issue context is preserved while redundant headers are dropped", () => {
     const prompt = buildReviewPrompt(BASE_CTX, makeOpts(), 1);
-    expect(prompt).toContain("Owner: org");
-    expect(prompt).toContain("Repo: repo");
     expect(prompt).toContain("Issue #42: Fix the widget");
-  });
-
-  test("uses reviewer worktree path in reviewer prompt", () => {
-    const prompt = buildReviewPrompt(BASE_CTX, makeOpts(), 1);
-    expect(prompt).toContain("Worktree: /tmp/wt-review");
+    // Owner / Repo / Branch / Worktree are redundant — gh infers
+    // the repo from cwd, and cwd is the reviewer worktree.
+    expect(prompt).not.toContain("Owner: org");
+    expect(prompt).not.toContain("Repo: repo");
+    expect(prompt).not.toContain("Worktree:");
   });
 
   test("includes round number", () => {
@@ -301,30 +299,33 @@ describe("buildUnresolvedSummaryPrompt", () => {
 });
 
 describe("buildResumeUnresolvedSummaryPrompt", () => {
-  test("includes repo context and instructs B to read its review", () => {
+  test("instructs B to read its review by issue number", () => {
     const prompt = buildResumeUnresolvedSummaryPrompt(BASE_CTX, 2);
-    expect(prompt).toContain("Owner: org");
-    expect(prompt).toContain("Repo: repo");
-    expect(prompt).toContain("Branch: issue-42");
-    expect(prompt).toContain("Worktree: /tmp/wt-review");
+    // Worktree / Owner / Repo / Branch are dropped — cwd is the
+    // reviewer worktree and gh auto-detects the repo.
+    expect(prompt).not.toContain("Worktree:");
+    expect(prompt).not.toContain("Owner: org");
+    expect(prompt).toContain("issue #42");
     expect(prompt).toContain("[Reviewer Round 2]");
     expect(prompt).toContain("[Reviewer Unresolved Round 2]");
   });
 });
 
 describe("buildResumeVerdictPrompt", () => {
-  test("includes reviewer worktree path", () => {
+  test("references the issue and round without the worktree path", () => {
     const prompt = buildResumeVerdictPrompt(BASE_CTX, 2);
-    expect(prompt).toContain("Worktree: /tmp/wt-review");
+    expect(prompt).not.toContain("Worktree:");
+    expect(prompt).toContain("issue #42");
+    expect(prompt).toContain("[Reviewer Round 2]");
   });
 });
 
 describe("buildPrFinalizationPrompt", () => {
-  test("includes repo and issue context", () => {
+  test("includes issue context and omits redundant headers", () => {
     const prompt = buildPrFinalizationPrompt(BASE_CTX, makeOpts());
-    expect(prompt).toContain("Owner: org");
-    expect(prompt).toContain("Repo: repo");
     expect(prompt).toContain("Issue #42: Fix the widget");
+    expect(prompt).not.toContain("Owner: org");
+    expect(prompt).not.toContain("Worktree:");
   });
 
   test("mentions Closes, Part of, and Not addressed", () => {
@@ -1685,12 +1686,12 @@ describe("createReviewStageHandler", () => {
     await stage.handler(BASE_CTX);
 
     // B.invoke should have been called (not resume) since there's
-    // no session, and the prompt should contain repo context.
+    // no session, and the prompt should reference the issue and
+    // ask B to read its review from the PR.
     const invokeCall = (agentB.invoke as ReturnType<typeof vi.fn>).mock
       .calls[0];
     const prompt: string = invokeCall[0];
-    expect(prompt).toContain("Owner: org");
-    expect(prompt).toContain("Repo: repo");
+    expect(prompt).toContain("issue #42");
     expect(prompt).toContain("[Reviewer Round 1]");
   });
 
@@ -3160,7 +3161,7 @@ describe("saved Agent B session reuse on resume", () => {
 
     expect(agentB.invoke).toHaveBeenCalledWith(
       expect.stringContaining(
-        "You previously posted a review on a pull request",
+        "You previously posted a review on the pull request for issue #42",
       ),
       expect.objectContaining({ cwd: "/tmp/wt-review" }),
     );
@@ -3211,7 +3212,7 @@ describe("saved Agent B session reuse on resume", () => {
 
     expect(agentB.invoke).toHaveBeenCalledWith(
       expect.stringContaining(
-        "You previously reviewed a pull request and the review was approved.",
+        "You previously reviewed a pull request for issue #42",
       ),
       expect.objectContaining({ cwd: "/tmp/wt-review" }),
     );

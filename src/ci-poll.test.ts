@@ -65,9 +65,35 @@ const BASE_CTX: StageContext = {
 };
 
 function makeAgent(invokeResult?: AgentResult): AgentAdapter {
+  const result = invokeResult ?? makeResult();
   return {
-    invoke: vi.fn().mockReturnValue(makeStream(invokeResult ?? makeResult())),
-    resume: vi.fn(),
+    invoke: vi.fn().mockReturnValue(makeStream(result)),
+    // `pollCiAndFix` now reuses the saved Agent A session id across
+    // iterations, so `resume` must return a stream too — otherwise
+    // the second-and-later turns of multi-iteration tests fail.
+    resume: vi.fn().mockReturnValue(makeStream(result)),
+  };
+}
+
+/**
+ * Build an agent whose `invoke` and `resume` share a single ordered
+ * queue of results.  `pollCiAndFix` calls `invoke` for the very first
+ * Agent A turn and `resume` for every subsequent turn, so multi-turn
+ * tests need both methods to draw from the same sequence.  Returns an
+ * adapter plus a `totalCalls()` helper that sums calls across both
+ * methods.
+ */
+function makeSequencedAgent(results: AgentResult[]): {
+  agent: AgentAdapter;
+  totalCalls: () => number;
+} {
+  let call = 0;
+  const next = () => makeStream(results[call++]);
+  const invoke = vi.fn().mockImplementation(next);
+  const resume = vi.fn().mockImplementation(next);
+  return {
+    agent: { invoke, resume },
+    totalCalls: () => invoke.mock.calls.length + resume.mock.calls.length,
   };
 }
 
@@ -183,6 +209,82 @@ describe("pollCiAndFix", () => {
     expect(invokedPrompt).toContain("Error: test failed at line 42");
   });
 
+  // -- initialAgentASessionId seeds the loop's session tracker --------------
+
+  test("initialAgentASessionId resumes the live session for the first CI fix turn", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      )
+      .mockReturnValueOnce(makeCiStatus("pass"));
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+
+    const agent = makeAgent();
+    await pollCiAndFix(
+      makeOpts({
+        agent,
+        getCiStatus,
+        collectFailureLogs,
+        initialAgentASessionId: "sess-live",
+      }),
+    );
+
+    expect(agent.resume).toHaveBeenCalledTimes(1);
+    expect(agent.invoke).not.toHaveBeenCalled();
+    const [resumedSessionId, resumedPrompt] = (
+      agent.resume as ReturnType<typeof vi.fn>
+    ).mock.calls[0];
+    expect(resumedSessionId).toBe("sess-live");
+    expect(resumedPrompt).not.toContain("## Repository");
+    expect(resumedPrompt).not.toContain("The widget is broken.");
+  });
+
+  test("initialAgentASessionId is preferred over ctx.savedAgentASessionId", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      )
+      .mockReturnValueOnce(makeCiStatus("pass"));
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+
+    const agent = makeAgent();
+    await pollCiAndFix(
+      makeOpts({
+        ctx: { ...BASE_CTX, savedAgentASessionId: "sess-stale" },
+        agent,
+        getCiStatus,
+        collectFailureLogs,
+        initialAgentASessionId: "sess-live",
+      }),
+    );
+
+    expect(agent.resume).toHaveBeenCalledTimes(1);
+    const [resumedSessionId] = (agent.resume as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(resumedSessionId).toBe("sess-live");
+  });
+
+  test("falls back to fresh invoke when neither initialAgentASessionId nor ctx.savedAgentASessionId is set", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      )
+      .mockReturnValueOnce(makeCiStatus("pass"));
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+
+    const agent = makeAgent();
+    await pollCiAndFix(makeOpts({ agent, getCiStatus, collectFailureLogs }));
+
+    expect(agent.invoke).toHaveBeenCalledTimes(1);
+    expect(agent.resume).not.toHaveBeenCalled();
+    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    expect(invokedPrompt).toContain("CI Failure Logs");
+  });
+
   // -- CI fails, all fix attempts exhausted -----------------------------------
 
   test("returns error after maxFixAttempts exhausted", async () => {
@@ -193,16 +295,11 @@ describe("pollCiAndFix", () => {
       );
     const collectFailureLogs = vi.fn().mockReturnValue("err");
 
-    const invokeResults = [
-      makeStream(makeResult({ responseText: "Fix 1." })),
-      makeStream(makeResult({ responseText: "Fix 2." })),
-      makeStream(makeResult({ responseText: "Fix 3." })),
-    ];
-    let call = 0;
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockImplementation(() => invokeResults[call++]),
-      resume: vi.fn(),
-    };
+    const { agent, totalCalls } = makeSequencedAgent([
+      makeResult({ responseText: "Fix 1." }),
+      makeResult({ responseText: "Fix 2." }),
+      makeResult({ responseText: "Fix 3." }),
+    ]);
 
     const result = await pollCiAndFix(
       makeOpts({ agent, getCiStatus, collectFailureLogs, maxFixAttempts: 3 }),
@@ -210,7 +307,7 @@ describe("pollCiAndFix", () => {
 
     expect(result.passed).toBe(false);
     expect(result.message).toContain("still failing after 3 fix attempt");
-    expect(agent.invoke).toHaveBeenCalledTimes(3);
+    expect(totalCalls()).toBe(3);
   });
 
   // -- agent error during fix -------------------------------------------------
@@ -398,22 +495,17 @@ describe("pollCiAndFix", () => {
 
     const collectFailureLogs = vi.fn().mockReturnValue("err");
 
-    const invokeResults = [
-      makeStream(makeResult({ responseText: "Fix 1." })),
-      makeStream(makeResult({ responseText: "Fix 2." })),
-    ];
-    let call = 0;
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockImplementation(() => invokeResults[call++]),
-      resume: vi.fn(),
-    };
+    const { agent, totalCalls } = makeSequencedAgent([
+      makeResult({ responseText: "Fix 1." }),
+      makeResult({ responseText: "Fix 2." }),
+    ]);
 
     const result = await pollCiAndFix(
       makeOpts({ agent, getCiStatus, collectFailureLogs }),
     );
 
     expect(result.passed).toBe(true);
-    expect(agent.invoke).toHaveBeenCalledTimes(2);
+    expect(totalCalls()).toBe(2);
   });
 
   // -- confirmRetry opt-in prompt --------------------------------------------
@@ -623,24 +715,15 @@ describe("pollCiAndFix", () => {
       .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
     const getHeadSha = vi.fn().mockReturnValue("same-sha");
 
-    let invokeCall = 0;
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockImplementation(() => {
-        invokeCall++;
-        if (invokeCall === 1) {
-          return makeStream(
-            makeResult({
-              status: "error",
-              errorType: "execution_error",
-              stderrText: "crash",
-              responseText: "",
-            }),
-          );
-        }
-        return makeStream(makeResult({ responseText: "Acknowledged." }));
+    const { agent, totalCalls } = makeSequencedAgent([
+      makeResult({
+        status: "error",
+        errorType: "execution_error",
+        stderrText: "crash",
+        responseText: "",
       }),
-      resume: vi.fn(),
-    };
+      makeResult({ responseText: "Acknowledged." }),
+    ]);
 
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const confirmRetry = vi.fn().mockResolvedValue(true);
@@ -662,9 +745,9 @@ describe("pollCiAndFix", () => {
     expect(confirmRetry).toHaveBeenCalledOnce();
     expect(confirmRetry.mock.calls[0][0].reason).toBe("agent_error");
     expect(confirmRetry.mock.calls[0][0].detail).toContain("crash");
-    // Two invokes: the failed first attempt + the retry.  This proves
-    // the findingsReviews counter was decremented on retry.
-    expect(agent.invoke).toHaveBeenCalledTimes(2);
+    // Two agent calls: the failed first attempt + the retry.  This
+    // proves the findingsReviews counter was decremented on retry.
+    expect(totalCalls()).toBe(2);
     expect(result.passed).toBe(true);
 
     errorSpy.mockRestore();
@@ -724,24 +807,15 @@ describe("pollCiAndFix", () => {
       .mockReturnValueOnce(makeCiStatus("pass"));
     const collectFailureLogs = vi.fn().mockReturnValue("err");
 
-    let invokeCall = 0;
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockImplementation(() => {
-        invokeCall++;
-        if (invokeCall === 1) {
-          return makeStream(
-            makeResult({
-              status: "error",
-              errorType: "execution_error",
-              stderrText: "boom",
-              responseText: "",
-            }),
-          );
-        }
-        return makeStream(makeResult({ responseText: "Fixed." }));
+    const { agent, totalCalls } = makeSequencedAgent([
+      makeResult({
+        status: "error",
+        errorType: "execution_error",
+        stderrText: "boom",
+        responseText: "",
       }),
-      resume: vi.fn(),
-    };
+      makeResult({ responseText: "Fixed." }),
+    ]);
 
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const confirmRetry = vi.fn().mockResolvedValue(true);
@@ -761,7 +835,7 @@ describe("pollCiAndFix", () => {
 
     expect(confirmRetry).toHaveBeenCalledOnce();
     expect(confirmRetry.mock.calls[0][0].reason).toBe("agent_error");
-    expect(agent.invoke).toHaveBeenCalledTimes(2);
+    expect(totalCalls()).toBe(2);
     expect(result.passed).toBe(true);
 
     errorSpy.mockRestore();
@@ -1252,15 +1326,10 @@ describe("pollCiAndFix", () => {
     const shas = ["sha-1", "sha-1", "sha-2", "sha-2", "sha-3"];
     const getHeadSha = vi.fn().mockImplementation(() => shas[shaCall++]);
 
-    const invokeResults = [
-      makeStream(makeResult({ responseText: "Reviewed findings." })),
-      makeStream(makeResult({ responseText: "Fixed CI." })),
-    ];
-    let invokeCall = 0;
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockImplementation(() => invokeResults[invokeCall++]),
-      resume: vi.fn(),
-    };
+    const { agent, totalCalls } = makeSequencedAgent([
+      makeResult({ responseText: "Reviewed findings." }),
+      makeResult({ responseText: "Fixed CI." }),
+    ]);
 
     const result = await pollCiAndFix(
       makeOpts({
@@ -1276,7 +1345,7 @@ describe("pollCiAndFix", () => {
     // With the old coupled counter, this would have exhausted the budget.
     expect(result.passed).toBe(true);
     expect(result.message).toContain("CI checks passed");
-    expect(agent.invoke).toHaveBeenCalledTimes(2);
+    expect(totalCalls()).toBe(2);
   });
 
   test("caps findings-review re-polls at maxFixAttempts", async () => {
@@ -1305,16 +1374,11 @@ describe("pollCiAndFix", () => {
       return sha;
     });
 
-    const invokeResults = [
-      makeStream(makeResult()),
-      makeStream(makeResult()),
-      makeStream(makeResult()),
-    ];
-    let invokeCall = 0;
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockImplementation(() => invokeResults[invokeCall++]),
-      resume: vi.fn(),
-    };
+    const { agent, totalCalls } = makeSequencedAgent([
+      makeResult(),
+      makeResult(),
+      makeResult(),
+    ]);
 
     const result = await pollCiAndFix(
       makeOpts({
@@ -1330,7 +1394,7 @@ describe("pollCiAndFix", () => {
     expect(result.passed).toBe(true);
     expect(result.message).toContain("Findings were reviewed");
     // maxFixAttempts=2 → max(1,2)=2 findings reviews allowed.
-    expect(agent.invoke).toHaveBeenCalledTimes(2);
+    expect(totalCalls()).toBe(2);
   });
 
   test("findings prompt includes structured finding details", async () => {

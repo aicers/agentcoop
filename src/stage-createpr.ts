@@ -52,12 +52,6 @@ export function buildCreatePrPrompt(
   const lines = [
     `You are creating a pull request for the following GitHub issue.`,
     ``,
-    `## Repository`,
-    `- Owner: ${ctx.owner}`,
-    `- Repo: ${ctx.repo}`,
-    `- Branch: ${ctx.branch}`,
-    `- Worktree: ${ctx.worktreePath}`,
-    ``,
     `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
     ``,
     opts.issueBody,
@@ -88,17 +82,43 @@ export function buildCreatePrPrompt(
   return lines.join("\n");
 }
 
+/**
+ * Compact resume-form prompt for stage 4 — sent when the agent
+ * already has the issue context from a prior stage's session.
+ */
+export function buildCreatePrResumePrompt(ctx: StageContext): string {
+  const lines = [
+    `Create a pull request for issue #${ctx.issueNumber}.`,
+    ``,
+    `1. Commit any remaining uncommitted changes on the branch.`,
+    `2. Push the branch to the remote.`,
+    `3. Create a pull request using \`gh pr create\` targeting the default`,
+    `   branch.  The PR title should reference the issue number`,
+    `   (e.g. "Fix widget rendering (#${ctx.issueNumber})").`,
+    `4. In the PR body, include:`,
+    `   - A brief summary of the changes`,
+    `   - If this PR fully resolves the issue, include "Closes #${ctx.issueNumber}"`,
+    `     in the description. If it only partially addresses it,`,
+    `     use "Part of #${ctx.issueNumber}" instead and add a`,
+    `     "## Not addressed" section listing which issue requirements`,
+    `     were not implemented and why.`,
+    `   - A "## Test plan" section with a checkbox checklist of items to`,
+    `     verify (derived from the issue requirements)`,
+    `5. Do NOT merge the PR — just create it.`,
+  ];
+  if (ctx.userInstruction) {
+    lines.push(``, `## Additional feedback`, ``, ctx.userInstruction);
+  }
+  return lines.join("\n");
+}
+
 export const PR_CHECK_KEYWORDS = ["COMPLETED", "BLOCKED"] as const;
 
 export function buildPrCompletionCheckPrompt(): string {
   return [
-    `You have finished your PR creation attempt.  Please evaluate the`,
-    `result and respond with exactly one of the following keywords:`,
-    ``,
-    `- COMPLETED — if the pull request was created successfully`,
-    `- BLOCKED — if you could not create the PR and need user intervention`,
-    ``,
-    `Do not include any other commentary — just the keyword.`,
+    `Reply with exactly one keyword (no commentary):`,
+    `COMPLETED if the pull request was created successfully,`,
+    `BLOCKED if you could not create the PR and need user intervention.`,
   ].join("\n");
 }
 
@@ -112,7 +132,10 @@ export function createCreatePrStageHandler(
     requiresArtifact: true,
     handler: async (ctx: StageContext): Promise<StageResult> => {
       // Step 1: Send the PR creation prompt (resume if saved session).
-      const prompt = buildCreatePrPrompt(ctx, opts);
+      const freshPrompt = buildCreatePrPrompt(ctx, opts);
+      const resumePrompt = buildCreatePrResumePrompt(ctx);
+      const useResume = ctx.savedAgentASessionId !== undefined;
+      const prompt = useResume ? resumePrompt : freshPrompt;
       ctx.promptSinks?.a?.(prompt, "work");
       const prResult = await invokeOrResume(
         opts.agent,
@@ -120,8 +143,12 @@ export function createCreatePrStageHandler(
         prompt,
         ctx.worktreePath,
         ctx.streamSinks?.a,
-        undefined,
-        ctx.usageSinks?.a,
+        {
+          fallbackPrompt: useResume ? freshPrompt : undefined,
+          usageSink: ctx.usageSinks?.a,
+          promptSink: ctx.promptSinks?.a,
+          promptKind: "work",
+        },
       );
 
       if (prResult.sessionId) {

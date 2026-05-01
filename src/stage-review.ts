@@ -178,16 +178,14 @@ export function buildReviewPrompt(
   round: number,
   reviewerWorktreePath = ctx.reviewerWorktreePath ?? ctx.worktreePath,
 ): string {
+  // reviewerWorktreePath is preserved as a parameter for callers that
+  // want to log or override the path, but is no longer interpolated
+  // into the prompt — the agent's cwd is already the reviewer worktree.
+  void reviewerWorktreePath;
   const anglesBlock = buildReviewAnglesBlock();
 
   const lines = [
     `You are reviewing a pull request for the following GitHub issue.`,
-    ``,
-    `## Repository`,
-    `- Owner: ${ctx.owner}`,
-    `- Repo: ${ctx.repo}`,
-    `- Branch: ${ctx.branch}`,
-    `- Worktree: ${reviewerWorktreePath}`,
     ``,
     `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
     ``,
@@ -195,7 +193,8 @@ export function buildReviewPrompt(
     ``,
     `## Instructions`,
     ``,
-    `1. Find the pull request for this branch (use \`gh pr view\`).`,
+    `1. Find the pull request for this branch (use`,
+    `   \`gh pr view ${ctx.branch} --repo ${ctx.owner}/${ctx.repo}\`).`,
   ];
 
   if (round > 1) {
@@ -238,17 +237,69 @@ export function buildReviewPrompt(
   return lines.join("\n");
 }
 
+/**
+ * Compact resume-form review prompt.  Re-uses the angles guidance
+ * because per-round evaluation depth is what changes; only the issue
+ * body is dropped.
+ */
+export function buildReviewResumePrompt(
+  ctx: StageContext,
+  round: number,
+): string {
+  const anglesBlock = buildReviewAnglesBlock();
+  const lines = [
+    `Review the pull request for issue #${ctx.issueNumber} (round ${round}).`,
+    ``,
+    `1. Find the pull request for this branch (use`,
+    `   \`gh pr view ${ctx.branch} --repo ${ctx.owner}/${ctx.repo}\`).`,
+  ];
+
+  if (round > 1) {
+    lines.push(
+      `2. Read the author's response in the PR comment prefixed with`,
+      `   \`[Author Round ${round - 1}]\` to understand what was changed.`,
+      `   For each item you raised in \`[Reviewer Round ${round - 1}]\`,`,
+      `   check the outcome:`,
+      `   - If the author says it was fixed, verify that the fix is`,
+      `     actually present in the updated diff.`,
+      `   - If the author pushed back with reasoning, evaluate that`,
+      `     reasoning honestly. If it is sound, treat the item as`,
+      `     resolved and do NOT re-raise it. If it is weak, unclear,`,
+      `     or does not address the concern, keep the item open.`,
+      `   - Only carry forward items that remain genuinely unresolved.`,
+      `3. Review the updated diff against the issue.`,
+      anglesBlock,
+      `4. Post your follow-up review as a PR comment prefixed with`,
+      `   \`**[Reviewer Round ${round}]**\`. Include any still-unresolved`,
+      `   prior items and any new findings from this round. Be`,
+      `   specific. Cite file paths and line numbers when they help;`,
+      `   for broader concerns, explain the concern at the`,
+      `   appropriate level.`,
+    );
+  } else {
+    lines.push(
+      `2. Review the diff against the issue.`,
+      anglesBlock,
+      `3. Post your review as a PR comment prefixed with`,
+      `   \`**[Reviewer Round ${round}]**\`. Be specific. Cite file paths and`,
+      `   line numbers when they help; for broader concerns, explain`,
+      `   the concern at the appropriate level.`,
+    );
+  }
+
+  if (ctx.userInstruction) {
+    lines.push(``, `## Additional feedback`, ``, ctx.userInstruction);
+  }
+  return lines.join("\n");
+}
+
 export const REVIEW_VERDICT_KEYWORDS = ["APPROVED", "NOT_APPROVED"] as const;
 
 export function buildReviewVerdictPrompt(): string {
   return [
-    `You have posted your review comment.`,
-    `Respond with exactly one of the following keywords:`,
-    ``,
-    `- APPROVED — if the changes are ready to merge`,
-    `- NOT_APPROVED — if changes are needed`,
-    ``,
-    `Do not include any other commentary — just the keyword.`,
+    `Reply with exactly one keyword (no commentary):`,
+    `APPROVED if the changes are ready to merge,`,
+    `NOT_APPROVED if changes are needed.`,
   ].join("\n");
 }
 
@@ -258,12 +309,9 @@ export const UNRESOLVED_KEYWORDS = ["NONE", "COMPLETED"] as const;
 
 export function buildUnresolvedVerdictPrompt(): string {
   return [
-    `Respond with exactly one of the following keywords:`,
-    ``,
-    `- NONE — if there are no unresolved items`,
-    `- COMPLETED — if you posted the unresolved items comment`,
-    ``,
-    `Do not include any other commentary — just the keyword.`,
+    `Reply with exactly one keyword (no commentary):`,
+    `NONE if there are no unresolved items,`,
+    `COMPLETED if you posted the unresolved items comment.`,
   ].join("\n");
 }
 
@@ -271,12 +319,8 @@ export const PR_FINALIZATION_KEYWORDS = ["PR_FINALIZED"] as const;
 
 export function buildPrFinalizationVerdictPrompt(): string {
   return [
-    `You have finished verifying the PR body.`,
-    `Respond with exactly one of the following keywords:`,
-    ``,
-    `- PR_FINALIZED — if the PR body is now accurate`,
-    ``,
-    `Do not include any other commentary — just the keyword.`,
+    `Reply with exactly one keyword (no commentary):`,
+    `PR_FINALIZED if the PR body is now accurate.`,
   ].join("\n");
 }
 
@@ -287,12 +331,6 @@ export function buildAuthorFixPrompt(
 ): string {
   const lines = [
     `You are addressing review feedback for the following GitHub issue.`,
-    ``,
-    `## Repository`,
-    `- Owner: ${ctx.owner}`,
-    `- Repo: ${ctx.repo}`,
-    `- Branch: ${ctx.branch}`,
-    `- Worktree: ${ctx.worktreePath}`,
     ``,
     `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
     ``,
@@ -327,15 +365,48 @@ export function buildAuthorFixPrompt(
   return lines.join("\n");
 }
 
+/**
+ * Compact resume-form author-fix prompt.  Drops the issue body (the
+ * agent already has it from the prior stage's session).
+ */
+export function buildAuthorFixResumePrompt(
+  ctx: StageContext,
+  round: number,
+): string {
+  const lines = [
+    `Address the round ${round} review feedback for issue #${ctx.issueNumber}.`,
+    ``,
+    `1. Find the pull request for this branch (use \`gh pr view\`).`,
+    `2. Read the review comments prefixed with \`[Reviewer Round ${round}]\``,
+    `   (only comments from your own account).`,
+    `3. Evaluate each review item against the issue requirements and`,
+    `   the codebase context before acting on it:`,
+    `   - **Accept and fix** items that are valid.`,
+    `   - **Push back with reasoning** on items that are incorrect,`,
+    `     out of scope, would introduce regressions, or conflict`,
+    `     with project conventions — do not apply them blindly.`,
+    `   - **Partially address** items where only part of the`,
+    `     suggestion is appropriate, and explain what you kept`,
+    `     and why.`,
+    `4. Post a response as a PR comment prefixed with`,
+    `   \`**[Author Round ${round}]**\`. For each review item,`,
+    `   clearly state its disposition:`,
+    `   - **Fixed** — what you changed.`,
+    `   - **Pushed back** — why the suggestion should not be applied.`,
+    `   - **Partially addressed** — what you changed and what you`,
+    `     left, with reasoning.`,
+    `5. ${buildDocConsistencyInstructions("   ").trimStart()}`,
+    `6. ${buildPrSyncInstructions(ctx.issueNumber)}`,
+    `7. Commit and push your changes so a new CI run is triggered.`,
+  ];
+  return lines.join("\n");
+}
+
 export function buildAuthorCompletionCheckPrompt(): string {
   return [
-    `You have finished addressing the review feedback.  Please evaluate`,
-    `the result and respond with exactly one of the following keywords:`,
-    ``,
-    `- COMPLETED — if all feedback was addressed and changes were pushed`,
-    `- BLOCKED — if you cannot proceed and need user intervention`,
-    ``,
-    `Do not include any other commentary — just the keyword.`,
+    `Reply with exactly one keyword (no commentary):`,
+    `COMPLETED if all feedback was addressed and changes were pushed,`,
+    `BLOCKED if you cannot proceed and need user intervention.`,
   ].join("\n");
 }
 
@@ -353,25 +424,27 @@ export function buildUnresolvedSummaryPrompt(round: number): string {
 
 /**
  * Prompt for resuming the unresolved-summary step when Agent B has no
- * saved session.  Gives B repository context and tells it to read its
- * own review from the PR before deciding what is unresolved.
+ * saved session.  This is the **fresh-form** prompt invoked when there
+ * is no live reviewer session to follow up on; the agent's cwd is
+ * already set to the reviewer worktree, so the worktree path is no
+ * longer interpolated explicitly.
  */
 export function buildResumeUnresolvedSummaryPrompt(
   ctx: StageContext,
   round: number,
   reviewerWorktreePath = ctx.reviewerWorktreePath ?? ctx.worktreePath,
 ): string {
+  // reviewerWorktreePath is preserved as a parameter for callers that
+  // want to log or override the path, but is no longer interpolated
+  // into the prompt.
+  void reviewerWorktreePath;
   return [
-    `You previously reviewed a pull request and the review was approved.`,
-    `The process was interrupted before you could summarise unresolved items.`,
+    `You previously reviewed a pull request for issue #${ctx.issueNumber}`,
+    `and the review was approved.  The process was interrupted before you`,
+    `could summarise unresolved items.`,
     ``,
-    `## Repository`,
-    `- Owner: ${ctx.owner}`,
-    `- Repo: ${ctx.repo}`,
-    `- Branch: ${ctx.branch}`,
-    `- Worktree: ${reviewerWorktreePath}`,
-    ``,
-    `1. Find the pull request for this branch (use \`gh pr view\`).`,
+    `1. Find the pull request for this branch (use`,
+    `   \`gh pr view ${ctx.branch} --repo ${ctx.owner}/${ctx.repo}\`).`,
     `2. Read your \`[Reviewer Round ${round}]\` review comment to`,
     `   understand which items you raised.`,
     `3. Check the code on the branch to see which items were addressed`,
@@ -391,12 +464,6 @@ export function buildPrFinalizationPrompt(
     `The review is complete and the PR has been approved.  Before`,
     `merging, verify that the PR body accurately reflects the final`,
     `state of the implementation.`,
-    ``,
-    `## Repository`,
-    `- Owner: ${ctx.owner}`,
-    `- Repo: ${ctx.repo}`,
-    `- Branch: ${ctx.branch}`,
-    `- Worktree: ${ctx.worktreePath}`,
     ``,
     `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
     ``,
@@ -419,35 +486,53 @@ export function buildPrFinalizationPrompt(
 }
 
 /**
+ * Compact resume-form PR finalization prompt — drops the issue body.
+ */
+export function buildPrFinalizationResumePrompt(ctx: StageContext): string {
+  return [
+    `The review is complete and the PR has been approved.  Before merging,`,
+    `verify the PR body for issue #${ctx.issueNumber} accurately reflects`,
+    `the final state of the implementation.`,
+    ``,
+    `1. Read the current PR body using`,
+    `   \`gh pr view --json body --jq .body\`.`,
+    `2. Compare the issue requirements against the code on the branch`,
+    `   to determine whether every requirement has been addressed.`,
+    `3. If the PR fully resolves the issue, ensure the body contains`,
+    `   "Closes #${ctx.issueNumber}".  If it only partially addresses it,`,
+    `   ensure it says "Part of #${ctx.issueNumber}" and includes a`,
+    `   "## Not addressed" section listing which issue requirements`,
+    `   were not implemented and why.`,
+    `4. If the reference or "## Not addressed" section needs to change,`,
+    `   update the PR body using \`gh pr edit --body "..."\`.`,
+  ].join("\n");
+}
+
+/**
  * Prompt for resuming when the reviewer comment was already posted but
  * the process died before recording the verdict.  Agent B reads its
- * own review and provides just the verdict keyword.
+ * own review and provides just the verdict keyword.  This is a
+ * **fresh-form** prompt invoked when there is no live reviewer
+ * session; the agent's cwd is already set to the reviewer worktree,
+ * so the worktree path is no longer interpolated explicitly.
  */
 export function buildResumeVerdictPrompt(
   ctx: StageContext,
   round: number,
   reviewerWorktreePath = ctx.reviewerWorktreePath ?? ctx.worktreePath,
 ): string {
+  void reviewerWorktreePath;
   return [
-    `You previously posted a review on a pull request, prefixed with`,
-    `\`**[Reviewer Round ${round}]**\`.  The process was interrupted`,
-    `before your verdict was recorded.`,
+    `You previously posted a review on the pull request for issue #${ctx.issueNumber},`,
+    `prefixed with \`**[Reviewer Round ${round}]**\`.  The process was`,
+    `interrupted before your verdict was recorded.`,
     ``,
-    `## Repository`,
-    `- Owner: ${ctx.owner}`,
-    `- Repo: ${ctx.repo}`,
-    `- Branch: ${ctx.branch}`,
-    `- Worktree: ${reviewerWorktreePath}`,
-    ``,
-    `1. Find the pull request for this branch (use \`gh pr view\`).`,
+    `1. Find the pull request for this branch (use`,
+    `   \`gh pr view ${ctx.branch} --repo ${ctx.owner}/${ctx.repo}\`).`,
     `2. Read your \`[Reviewer Round ${round}]\` review comment.`,
-    `3. Based on your review, respond with exactly one of the`,
-    `   following keywords:`,
-    ``,
-    `   - APPROVED — if the changes are ready to merge`,
-    `   - NOT_APPROVED — if changes are needed`,
-    ``,
-    `   Do not include any other commentary — just the keyword.`,
+    `3. Reply with exactly one keyword (no commentary):`,
+    `   APPROVED if the changes are ready to merge,`,
+    `   NOT_APPROVED if changes are needed.`,
   ].join("\n");
 }
 
@@ -475,6 +560,11 @@ export function createReviewStageHandler(
       const invokeReviewer = async (
         sessionId: string | undefined,
         prompt: string,
+        extras?: {
+          fallbackPrompt?: string;
+          promptKind?: import("./pipeline-events.js").AgentPromptKind;
+          promptMeta?: { round?: number; resume?: boolean };
+        },
       ): Promise<AgentResult> => {
         prepareReviewerWorktree(ctx);
         try {
@@ -484,8 +574,13 @@ export function createReviewStageHandler(
             prompt,
             reviewerWorktreePath,
             ctx.streamSinks?.b,
-            undefined,
-            ctx.usageSinks?.b,
+            {
+              fallbackPrompt: extras?.fallbackPrompt,
+              usageSink: ctx.usageSinks?.b,
+              promptSink: ctx.promptSinks?.b,
+              promptKind: extras?.promptKind,
+              promptMeta: extras?.promptMeta,
+            },
           );
         } finally {
           maybeCleanReviewerWorktree();
@@ -553,16 +648,26 @@ export function createReviewStageHandler(
       // ---- review --------------------------------------------------
       if (currentStep === "review") {
         opts.onReviewProgress?.("review");
-        const reviewPrompt = buildReviewPrompt(
+        const freshReviewPrompt = buildReviewPrompt(
           ctx,
           opts,
           round,
           reviewerWorktreePath,
         );
+        const resumeReviewPrompt = buildReviewResumePrompt(ctx, round);
+        const reviewUseResume = ctx.savedAgentBSessionId !== undefined;
+        const reviewPrompt = reviewUseResume
+          ? resumeReviewPrompt
+          : freshReviewPrompt;
         ctx.promptSinks?.b?.(reviewPrompt, "review", { round });
         const reviewResult = await invokeReviewer(
           ctx.savedAgentBSessionId,
           reviewPrompt,
+          {
+            fallbackPrompt: reviewUseResume ? freshReviewPrompt : undefined,
+            promptKind: "review",
+            promptMeta: { round },
+          },
         );
 
         if (reviewResult.sessionId) {
@@ -781,7 +886,12 @@ export function createReviewStageHandler(
 
         // PR finalization: Agent A verifies issue reference and
         // "Not addressed" section before the pipeline advances.
-        const finalizePrompt = buildPrFinalizationPrompt(ctx, opts);
+        const freshFinalizePrompt = buildPrFinalizationPrompt(ctx, opts);
+        const resumeFinalizePrompt = buildPrFinalizationResumePrompt(ctx);
+        const finalizeUseResume = ctx.savedAgentASessionId !== undefined;
+        const finalizePrompt = finalizeUseResume
+          ? resumeFinalizePrompt
+          : freshFinalizePrompt;
         ctx.promptSinks?.a?.(finalizePrompt, "work");
         const finalizeResult = await invokeOrResume(
           opts.agentA,
@@ -789,8 +899,12 @@ export function createReviewStageHandler(
           finalizePrompt,
           ctx.worktreePath,
           ctx.streamSinks?.a,
-          undefined,
-          ctx.usageSinks?.a,
+          {
+            fallbackPrompt: finalizeUseResume ? freshFinalizePrompt : undefined,
+            usageSink: ctx.usageSinks?.a,
+            promptSink: ctx.promptSinks?.a,
+            promptKind: "work",
+          },
         );
 
         if (finalizeResult.sessionId) {
@@ -923,10 +1037,20 @@ export function createReviewStageHandler(
       }
 
       // ---- NOT_APPROVED path: author fix + CI poll -----------------
+      // Track the latest Agent A session id produced inside this
+      // handler invocation so the subsequent CI poll can resume the
+      // live conversation rather than the stage-entry snapshot.  When
+      // resuming directly into `ci_poll` (author_fix block skipped),
+      // this stays undefined and `pollCiAndFix` falls back to
+      // `ctx.savedAgentASessionId`.
+      let latestAuthorFixSessionId: string | undefined;
       if (currentStep === "author_fix") {
         opts.onReviewProgress?.("author_fix", "NOT_APPROVED");
 
-        const fixPrompt = buildAuthorFixPrompt(ctx, opts, round);
+        const freshFixPrompt = buildAuthorFixPrompt(ctx, opts, round);
+        const resumeFixPrompt = buildAuthorFixResumePrompt(ctx, round);
+        const fixUseResume = ctx.savedAgentASessionId !== undefined;
+        const fixPrompt = fixUseResume ? resumeFixPrompt : freshFixPrompt;
         ctx.promptSinks?.a?.(fixPrompt, "work");
         const fixResult = await invokeOrResume(
           opts.agentA,
@@ -934,8 +1058,12 @@ export function createReviewStageHandler(
           fixPrompt,
           ctx.worktreePath,
           ctx.streamSinks?.a,
-          undefined,
-          ctx.usageSinks?.a,
+          {
+            fallbackPrompt: fixUseResume ? freshFixPrompt : undefined,
+            usageSink: ctx.usageSinks?.a,
+            promptSink: ctx.promptSinks?.a,
+            promptKind: "work",
+          },
         );
 
         if (fixResult.sessionId) {
@@ -1029,17 +1157,27 @@ export function createReviewStageHandler(
           return checkMapped;
         }
 
+        latestAuthorFixSessionId = checkResult.sessionId ?? fixResult.sessionId;
         opts.onReviewProgress?.("ci_poll", "NOT_APPROVED");
         currentStep = "ci_poll";
       }
 
       // ---- CI poll (NOT_APPROVED path) -----------------------------
       if (currentStep === "ci_poll") {
+        // The author-fix and completion-check turns above may have
+        // produced a newer Agent A session id than the stage-entry
+        // snapshot in `ctx.savedAgentASessionId`.  Hand the freshest
+        // known id to `pollCiAndFix` so the first CI findings/fix
+        // turn resumes the live conversation rather than fresh-
+        // invoking.
+        const initialAgentASessionId =
+          latestAuthorFixSessionId ?? ctx.savedAgentASessionId;
         const ciResult = await pollCiAndFix({
           ctx,
           agent: opts.agentA,
           issueTitle: opts.issueTitle,
           issueBody: opts.issueBody,
+          initialAgentASessionId,
           getCiStatus: opts.getCiStatus ?? defaultGetCiStatus,
           collectFailureLogs:
             opts.collectFailureLogs ?? defaultCollectFailureLogs,
