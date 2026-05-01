@@ -79,13 +79,17 @@ diagnostic streams reflect the prompt actually sent.
 The shared `pollCiAndFix` helper (used by Stage 5, the post-review
 CI fix in Stage 7, and the post-squash CI fix in Stage 8) is also
 threaded through `invokeOrResume`. It reads the current Agent A
-session id from `StageContext`, sends the compact
-`buildCiFindingsResumePrompt` / `buildCiFixResumePrompt` on the
-live session, and falls back to the fresh
-`buildCiFindingsPrompt` / `buildCiFixPrompt` only when the helper
-has to fresh-invoke. Across multiple iterations of the fix loop,
-the helper tracks the latest session id locally so each turn
-resumes the most recent session.
+session id from `StageContext` (or, when the caller has just
+obtained a newer session id in the same handler invocation, from
+the optional `initialAgentASessionId` option — Stage 7 hands in
+the author-fix/completion-check session id, Stage 8 hands in the
+verdict / clarification / agent-squash follow-up session id),
+sends the compact `buildCiFindingsResumePrompt` /
+`buildCiFixResumePrompt` on the live session, and falls back to
+the fresh `buildCiFindingsPrompt` / `buildCiFixPrompt` only when
+the helper has to fresh-invoke. Across multiple iterations of the
+fix loop, the helper tracks the latest session id locally so each
+turn resumes the most recent session.
 
 The `Worktree:` line is no longer included in any stage prompt:
 the agent's working directory is already set to the worktree, so

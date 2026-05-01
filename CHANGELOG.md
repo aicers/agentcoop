@@ -39,9 +39,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   current Agent A session id from `StageContext`, sends the compact
   `buildCiFindingsResumePrompt` / `buildCiFixResumePrompt` on the live
   session, and falls back to the fresh-form prompts only when the
-  helper has to fresh-invoke.  Saves roughly 3,000–4,000 tokens per
-  pipeline run on a typical issue with one self-check, one CI fix, and
-  two review rounds, with no change to verdict parsing semantics.
+  helper has to fresh-invoke.  `pollCiAndFix` accepts an optional
+  `initialAgentASessionId` so callers can hand it the freshest Agent A
+  session id from the same handler invocation; Stage 7 (post-author-fix
+  CI poll) and Stage 8 (`runCiPollAndFinish` from the verdict /
+  clarification / agent-squash follow-up paths) thread the live session
+  id through, since `ctx.savedAgentASessionId` is a stage-entry snapshot
+  and would otherwise force the first CI findings/fix turn back onto a
+  fresh `invoke`.  Saves roughly 3,000–4,000 tokens per pipeline run
+  on a typical issue with one self-check, one CI fix, and two review
+  rounds, with no change to verdict parsing semantics.
 - Agent B review turns now run from a detached reviewer worktree that is
   refreshed from `origin/{authorBranch}` before reviewer activity,
   while Agent A continues to modify the author worktree.  Cleanup

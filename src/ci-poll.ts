@@ -85,6 +85,26 @@ export interface CiPollOptions {
   /** Pipeline event emitter for diagnostic events. */
   events?: PipelineEventEmitter;
   /**
+   * Latest known Agent A session id at the moment the caller hands
+   * off to `pollCiAndFix`.  When set, it overrides
+   * `ctx.savedAgentASessionId` for seeding the CI loop's own session
+   * tracker so the very first CI findings/fix turn resumes the
+   * caller's most recent conversation rather than the stage-entry
+   * snapshot.
+   *
+   * Why a separate option instead of relying on `ctx.savedAgentASessionId`:
+   * `StageContext` is a one-shot snapshot taken at handler entry, but
+   * Stage 7 (`author_fix` → `ci_poll`) and Stage 8 (squash work →
+   * verdict → user choice → CI poll) routinely produce a newer Agent
+   * A session id within the same handler invocation.  `ctx.onSessionId`
+   * persists those externally but does not mutate the snapshot, so
+   * without this option the first CI prompt would still fall back to
+   * fresh-form even though the live session is known.  Subsequent
+   * loop iterations are covered by the helper's local
+   * `currentSessionId` which is updated after every agent turn.
+   */
+  initialAgentASessionId?: string;
+  /**
    * Optional callback invoked when CI cannot proceed via the normal
    * fix loop — exhausted fix budget, pending timeout, or an agent
    * error during findings review or fix.  When set, the caller is
@@ -231,12 +251,15 @@ export async function pollCiAndFix(
   let findingsReviews = 0;
 
   // Track the current Agent A session id locally so each iteration
-  // resumes the most recent session.  Initialised from the stage
-  // context, then updated after every agent invocation.  When
-  // present, the compact resume-form prompt is sent on the live
-  // session and the fresh-form prompt is used as the fallback if
-  // the session has expired.
-  let currentSessionId = ctx.savedAgentASessionId;
+  // resumes the most recent session.  Prefer the caller's
+  // `initialAgentASessionId` (the live session id from the same
+  // handler invocation) over `ctx.savedAgentASessionId` (the
+  // stage-entry snapshot), then update after every agent invocation.
+  // When present, the compact resume-form prompt is sent on the live
+  // session and the fresh-form prompt is used as the fallback if the
+  // session has expired.
+  let currentSessionId =
+    options.initialAgentASessionId ?? ctx.savedAgentASessionId;
 
   while (true) {
     // Read HEAD SHA from the worktree so we only consider CI runs

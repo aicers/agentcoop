@@ -711,13 +711,13 @@ describe("createSquashStageHandler", () => {
       );
     const collectFailureLogs = vi.fn().mockReturnValue("err");
 
-    const invokeResults = [
-      makeStream(
-        makeResult({
-          sessionId: "sess-squash",
-          responseText: "Squashed.",
-        }),
-      ),
+    // The squash work prompt persists `sess-squash`; the verdict
+    // follow-up resumes that session and returns SQUASHED_MULTI, then
+    // the CI fix turn resumes the same session via `pollCiAndFix` and
+    // crashes.  Sequence the resume mock so the second resume call
+    // (the CI fix) is the agent error.
+    const resumeResults = [
+      makeStream(makeResult({ responseText: "SQUASHED_MULTI" })),
       makeStream(
         makeResult({
           status: "error",
@@ -727,14 +727,17 @@ describe("createSquashStageHandler", () => {
         }),
       ),
     ];
-    let invokeCall = 0;
+    let resumeCall = 0;
     const agent: AgentAdapter = {
-      invoke: vi.fn().mockImplementation(() => invokeResults[invokeCall++]),
-      resume: vi
-        .fn()
-        .mockReturnValue(
-          makeStream(makeResult({ responseText: "SQUASHED_MULTI" })),
+      invoke: vi.fn().mockReturnValue(
+        makeStream(
+          makeResult({
+            sessionId: "sess-squash",
+            responseText: "Squashed.",
+          }),
         ),
+      ),
+      resume: vi.fn().mockImplementation(() => resumeResults[resumeCall++]),
     };
 
     const opts = makeOpts({ agent, getCiStatus, collectFailureLogs });

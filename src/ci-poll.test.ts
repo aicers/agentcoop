@@ -209,6 +209,82 @@ describe("pollCiAndFix", () => {
     expect(invokedPrompt).toContain("Error: test failed at line 42");
   });
 
+  // -- initialAgentASessionId seeds the loop's session tracker --------------
+
+  test("initialAgentASessionId resumes the live session for the first CI fix turn", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      )
+      .mockReturnValueOnce(makeCiStatus("pass"));
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+
+    const agent = makeAgent();
+    await pollCiAndFix(
+      makeOpts({
+        agent,
+        getCiStatus,
+        collectFailureLogs,
+        initialAgentASessionId: "sess-live",
+      }),
+    );
+
+    expect(agent.resume).toHaveBeenCalledTimes(1);
+    expect(agent.invoke).not.toHaveBeenCalled();
+    const [resumedSessionId, resumedPrompt] = (
+      agent.resume as ReturnType<typeof vi.fn>
+    ).mock.calls[0];
+    expect(resumedSessionId).toBe("sess-live");
+    expect(resumedPrompt).not.toContain("## Repository");
+    expect(resumedPrompt).not.toContain("The widget is broken.");
+  });
+
+  test("initialAgentASessionId is preferred over ctx.savedAgentASessionId", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      )
+      .mockReturnValueOnce(makeCiStatus("pass"));
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+
+    const agent = makeAgent();
+    await pollCiAndFix(
+      makeOpts({
+        ctx: { ...BASE_CTX, savedAgentASessionId: "sess-stale" },
+        agent,
+        getCiStatus,
+        collectFailureLogs,
+        initialAgentASessionId: "sess-live",
+      }),
+    );
+
+    expect(agent.resume).toHaveBeenCalledTimes(1);
+    const [resumedSessionId] = (agent.resume as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(resumedSessionId).toBe("sess-live");
+  });
+
+  test("falls back to fresh invoke when neither initialAgentASessionId nor ctx.savedAgentASessionId is set", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      )
+      .mockReturnValueOnce(makeCiStatus("pass"));
+    const collectFailureLogs = vi.fn().mockReturnValue("err");
+
+    const agent = makeAgent();
+    await pollCiAndFix(makeOpts({ agent, getCiStatus, collectFailureLogs }));
+
+    expect(agent.invoke).toHaveBeenCalledTimes(1);
+    expect(agent.resume).not.toHaveBeenCalled();
+    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    expect(invokedPrompt).toContain("CI Failure Logs");
+  });
+
   // -- CI fails, all fix attempts exhausted -----------------------------------
 
   test("returns error after maxFixAttempts exhausted", async () => {

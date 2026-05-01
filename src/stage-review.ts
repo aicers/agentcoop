@@ -1037,6 +1037,13 @@ export function createReviewStageHandler(
       }
 
       // ---- NOT_APPROVED path: author fix + CI poll -----------------
+      // Track the latest Agent A session id produced inside this
+      // handler invocation so the subsequent CI poll can resume the
+      // live conversation rather than the stage-entry snapshot.  When
+      // resuming directly into `ci_poll` (author_fix block skipped),
+      // this stays undefined and `pollCiAndFix` falls back to
+      // `ctx.savedAgentASessionId`.
+      let latestAuthorFixSessionId: string | undefined;
       if (currentStep === "author_fix") {
         opts.onReviewProgress?.("author_fix", "NOT_APPROVED");
 
@@ -1150,17 +1157,27 @@ export function createReviewStageHandler(
           return checkMapped;
         }
 
+        latestAuthorFixSessionId = checkResult.sessionId ?? fixResult.sessionId;
         opts.onReviewProgress?.("ci_poll", "NOT_APPROVED");
         currentStep = "ci_poll";
       }
 
       // ---- CI poll (NOT_APPROVED path) -----------------------------
       if (currentStep === "ci_poll") {
+        // The author-fix and completion-check turns above may have
+        // produced a newer Agent A session id than the stage-entry
+        // snapshot in `ctx.savedAgentASessionId`.  Hand the freshest
+        // known id to `pollCiAndFix` so the first CI findings/fix
+        // turn resumes the live conversation rather than fresh-
+        // invoking.
+        const initialAgentASessionId =
+          latestAuthorFixSessionId ?? ctx.savedAgentASessionId;
         const ciResult = await pollCiAndFix({
           ctx,
           agent: opts.agentA,
           issueTitle: opts.issueTitle,
           issueBody: opts.issueBody,
+          initialAgentASessionId,
           getCiStatus: opts.getCiStatus ?? defaultGetCiStatus,
           collectFailureLogs:
             opts.collectFailureLogs ?? defaultCollectFailureLogs,

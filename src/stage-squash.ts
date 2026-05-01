@@ -1118,7 +1118,7 @@ export function createSquashStageHandler(
       }
 
       if (saved === "ci_poll") {
-        return runCiPollAndFinish(ctx, opts);
+        return runCiPollAndFinish(ctx, opts, resolveSavedSessionId());
       }
 
       if (saved === "squashing") {
@@ -1142,7 +1142,7 @@ export function createSquashStageHandler(
         // prompt so the agent continues the same conversation.
         const resumeCount = countCommits(ctx.worktreePath, opts.defaultBranch);
         if (resumeCount <= 1) {
-          return runCiPollAndFinish(ctx, opts);
+          return runCiPollAndFinish(ctx, opts, resolveSavedSessionId());
         }
 
         const sessionId = resolveSavedSessionId();
@@ -1170,7 +1170,7 @@ export function createSquashStageHandler(
             );
           }
 
-          return runCiPollAndFinish(ctx, opts);
+          return runCiPollAndFinish(ctx, opts, followup.sessionId ?? sessionId);
         }
         // No session available — fall through to a fresh planning run
         // as a last resort.  This should be rare: the session id is
@@ -1413,7 +1413,7 @@ export function createSquashStageHandler(
             keyword: "SQUASHED_MULTI",
             raw: retry.responseText,
           });
-          return runCiPollAndFinish(ctx, opts);
+          return runCiPollAndFinish(ctx, opts, retrySessionId);
         }
         if (retryKeyword === "BLOCKED") {
           verdictCtx?.events.emit("pipeline:verdict", {
@@ -1565,7 +1565,13 @@ export function createSquashStageHandler(
       }
 
       // SQUASHED_MULTI — proceed with the existing CI poll path.
-      return runCiPollAndFinish(ctx, opts);
+      // Hand the freshest known Agent A session id to the CI poll so
+      // the first findings/fix turn resumes the live conversation.
+      return runCiPollAndFinish(
+        ctx,
+        opts,
+        verdictSessionId ?? squashResult.sessionId,
+      );
     },
   };
 }
@@ -1651,15 +1657,25 @@ async function askUserAndApply(
     return mapAgentError(followup, "during agent squash follow-up");
   }
 
-  return runCiPollAndFinish(ctx, opts);
+  return runCiPollAndFinish(ctx, opts, followup.sessionId ?? sessionId);
 }
 
 /**
  * Poll CI after a force-push and return the final stage result.
+ *
+ * `initialAgentASessionId` is the latest known Agent A session id at
+ * the call site — typically a verdict / clarification / follow-up
+ * session that was just persisted in the same handler invocation.
+ * `pollCiAndFix` uses it to seed its internal session tracker so the
+ * first CI findings/fix turn resumes that live conversation rather
+ * than the stage-entry snapshot in `ctx.savedAgentASessionId`.  When
+ * not supplied, the helper falls back to the live persisted id (via
+ * `getSavedAgentSessionId`) and finally to `ctx.savedAgentASessionId`.
  */
 async function runCiPollAndFinish(
   ctx: StageContext,
   opts: SquashStageOptions,
+  initialAgentASessionId?: string,
 ): Promise<StageResult> {
   opts.onSquashSubStep?.("ci_poll");
 
@@ -1668,6 +1684,10 @@ async function runCiPollAndFinish(
     agent: opts.agent,
     issueTitle: opts.issueTitle,
     issueBody: opts.issueBody,
+    initialAgentASessionId:
+      initialAgentASessionId ??
+      opts.getSavedAgentSessionId?.() ??
+      ctx.savedAgentASessionId,
     getCiStatus: opts.getCiStatus ?? defaultGetCiStatus,
     collectFailureLogs: opts.collectFailureLogs ?? defaultCollectFailureLogs,
     getHeadSha: opts.getHeadSha,
