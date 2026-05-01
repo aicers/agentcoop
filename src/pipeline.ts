@@ -111,6 +111,7 @@ export interface StageContext {
   issueTitle?: string;
   branch: string;
   worktreePath: string;
+  reviewerWorktreePath?: string;
   /**
    * Full SHA of the base commit (tip of origin/{defaultBranch} when the
    * worktree was created).  Used by the squash stage to limit the

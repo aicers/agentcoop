@@ -311,6 +311,35 @@ describe("squash-apply policy join point", () => {
 });
 
 // ---------------------------------------------------------------------------
+// reviewer worktree orchestration join points (issue #306)
+// ---------------------------------------------------------------------------
+describe("reviewer worktree orchestration", () => {
+  const indexSource = readFileSync(resolve(root, "src/index.ts"), "utf-8");
+
+  test("passes reviewerWorktreePath into stage context for fresh and resumed runs", () => {
+    const matches =
+      indexSource.match(/reviewerWorktreePath:\s*reviewerWtPath/g) ?? [];
+    expect(matches).toEqual([
+      "reviewerWorktreePath: reviewerWtPath",
+      "reviewerWorktreePath: reviewerWtPath",
+    ]);
+  });
+
+  test("cleanup paths remove both author and reviewer worktrees", () => {
+    const cleanupMatches = indexSource.match(
+      /removeWorktree\(owner,\s*repo,\s*issueNumber,\s*wt\.branch\);\s*removeReviewerWorktree\(owner,\s*repo,\s*issueNumber\);/g,
+    );
+    expect(cleanupMatches).toHaveLength(2);
+  });
+
+  test("cancellation cleanup removes the reviewer worktree", () => {
+    expect(indexSource).toMatch(
+      /removeReviewerWorktree\(opts\.owner,\s*opts\.repo,\s*opts\.issueNumber\);/,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // CLI E2E smoke test
 // ---------------------------------------------------------------------------
 describe("CLI E2E", () => {
