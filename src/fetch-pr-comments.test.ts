@@ -22,7 +22,7 @@ describe("fetchPrComments", () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "gh",
       ["api", "repos/org/repo/issues/5/comments", "--paginate", "--slurp"],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
   });
 

@@ -27,7 +27,7 @@ describe("getGitHubUsername", () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "gh",
       ["api", "user", "--jq", ".login"],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
     expect(result).toBe("octocat");
   });
@@ -67,7 +67,7 @@ describe("listRepositories", () => {
         "100",
         "--no-archived",
       ],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
     expect(result).toEqual(repos);
   });
@@ -121,7 +121,7 @@ describe("getIssue", () => {
         "--json",
         "number,title,body,state,labels",
       ],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
     expect(result).toEqual({
       number: 42,

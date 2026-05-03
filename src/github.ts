@@ -1,13 +1,11 @@
-import { execFileSync } from "node:child_process";
+import { ghExec } from "./gh-exec.js";
 
 /**
  * Returns the login of the currently authenticated GitHub user.
  */
 export function getGitHubUsername(): string {
   try {
-    return execFileSync("gh", ["api", "user", "--jq", ".login"], {
-      encoding: "utf-8",
-    }).trim();
+    return ghExec(["api", "user", "--jq", ".login"]).trim();
   } catch {
     throw new Error(
       "Failed to determine GitHub username. Ensure `gh` is installed and authenticated (`gh auth login`).",
@@ -29,37 +27,29 @@ export interface Issue {
 }
 
 export function listRepositories(owner: string): Repository[] {
-  const output = execFileSync(
-    "gh",
-    [
-      "repo",
-      "list",
-      owner,
-      "--json",
-      "name,description",
-      "--limit",
-      "100",
-      "--no-archived",
-    ],
-    { encoding: "utf-8" },
-  );
+  const output = ghExec([
+    "repo",
+    "list",
+    owner,
+    "--json",
+    "name,description",
+    "--limit",
+    "100",
+    "--no-archived",
+  ]);
   return JSON.parse(output);
 }
 
 export function getIssue(owner: string, repo: string, number: number): Issue {
-  const output = execFileSync(
-    "gh",
-    [
-      "issue",
-      "view",
-      String(number),
-      "--repo",
-      `${owner}/${repo}`,
-      "--json",
-      "number,title,body,state,labels",
-    ],
-    { encoding: "utf-8" },
-  );
+  const output = ghExec([
+    "issue",
+    "view",
+    String(number),
+    "--repo",
+    `${owner}/${repo}`,
+    "--json",
+    "number,title,body,state,labels",
+  ]);
   const raw = JSON.parse(output);
   return {
     number: raw.number,

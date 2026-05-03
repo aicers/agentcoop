@@ -204,7 +204,7 @@ describe("fetchCiRuns", () => {
         "--limit",
         "100",
       ],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
   });
 
@@ -233,7 +233,7 @@ describe("fetchCiRuns", () => {
         "--commit",
         "abc123",
       ],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
   });
 
@@ -315,7 +315,7 @@ describe("fetchCiRuns", () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "gh",
       ["api", "repos/org/repo/commits/deadbeef/check-runs?per_page=100"],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
   });
 
@@ -329,7 +329,7 @@ describe("fetchCiRuns", () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "gh",
       ["api", "repos/org/repo/commits/my-branch/check-runs?per_page=100"],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
   });
 
@@ -343,7 +343,7 @@ describe("fetchCiRuns", () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "gh",
       ["api", "repos/org/repo/commits/user%2Fissue-42/check-runs?per_page=100"],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
   });
 
@@ -516,7 +516,7 @@ describe("collectFailureLogs", () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "gh",
       ["run", "view", "12345", "--repo", "org/repo", "--log-failed"],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
   });
 
@@ -577,7 +577,7 @@ describe("collectFailureLogs", () => {
         "--slurp",
         "repos/org/repo/check-runs/500/annotations?per_page=100",
       ],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
   });
 
@@ -733,7 +733,7 @@ describe("collectFailureLogs", () => {
         "--slurp",
         "repos/org/repo/check-runs/900/annotations?per_page=100",
       ],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
   });
 });
@@ -953,7 +953,7 @@ describe("fetchCodeScanningAlerts", () => {
         "--slurp",
         "repos/org/repo/code-scanning/alerts?ref=my-branch&state=open&per_page=100",
       ],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
   });
 
@@ -1133,7 +1133,7 @@ describe("dismissCodeScanningAlert", () => {
         "-f",
         "dismissed_comment=Test-only code",
       ],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
   });
 
