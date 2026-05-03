@@ -791,10 +791,23 @@ If all findings are acceptable as-is, explain your reasoning.
 
 **`annotationsIncomplete` flag:** Surfaces in the prompt as a line
 of the inspection context.  It means the _pointer metadata_ itself
-could not be fully determined (a job listing failed or hit its
-page cap), not that annotation bodies are missing — those are
-fetched by the agent on demand.  When `true`, the prompt also
-includes a hint to re-fetch the jobs listing.
+could not be fully determined, not that annotation bodies are
+missing — those are fetched by the agent on demand.  Three things
+can set the flag:
+
+- A `gh api .../jobs` call failed for one of the failing workflow
+  runs.
+- The job listing for a failing run hit its first-page cap of 100
+  entries (matrix builds with many jobs).
+- The upstream CI run listing itself was truncated (the workflow
+  run page was full, or the check-runs endpoint reported
+  `total_count > 100`).  In this case `hasAnnotations` is also
+  forced to `true` so the findings-review path stays engaged
+  instead of treating an incomplete listing as a clean pass.
+
+When `true`, the prompt includes a hint to paginate the relevant
+listing (`gh api ...?page=2&per_page=100`) before drawing
+conclusions.
 
 **Pointer-only design:** The pipeline never serialises annotation
 bodies, alert payloads, or correlated `[alert #N]` lists into the

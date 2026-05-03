@@ -212,7 +212,9 @@ describe("fetchCiRuns", () => {
   test("parses JSON output", () => {
     const runs = [run({ databaseId: 100, name: "build" })];
     mockExecFileSync.mockReturnValue(JSON.stringify(runs));
-    expect(fetchCiRuns("org", "repo", "main")).toEqual(runs);
+    const result = fetchCiRuns("org", "repo", "main");
+    expect(result.runs).toEqual(runs);
+    expect(result.runsIncomplete).toBe(false);
   });
 
   test("passes --commit flag when commitSha is provided", () => {
@@ -286,15 +288,15 @@ describe("fetchCiRuns", () => {
     const result = fetchCiRuns("org", "repo", "main", "abc123");
 
     // Workflow run + CodeQL check run (github-actions filtered out).
-    expect(result).toHaveLength(2);
-    expect(result[0]).toEqual(
+    expect(result.runs).toHaveLength(2);
+    expect(result.runs[0]).toEqual(
       expect.objectContaining({
         databaseId: 1,
         name: "CI",
         source: "workflow",
       }),
     );
-    expect(result[1]).toEqual(
+    expect(result.runs[1]).toEqual(
       expect.objectContaining({
         databaseId: 500,
         name: "CodeQL",
@@ -304,6 +306,7 @@ describe("fetchCiRuns", () => {
         annotationsCount: 0,
       }),
     );
+    expect(result.runsIncomplete).toBe(false);
   });
 
   test("uses commitSha as ref for check runs API", () => {
@@ -389,8 +392,50 @@ describe("fetchCiRuns", () => {
       .mockReturnValueOnce(JSON.stringify(checkRunsResponse));
 
     const result = fetchCiRuns("org", "repo", "main");
-    expect(result).toHaveLength(1);
-    expect(result[0].name).toBe("External check");
+    expect(result.runs).toHaveLength(1);
+    expect(result.runs[0].name).toBe("External check");
+  });
+
+  test("flags runsIncomplete when check-run total_count exceeds first page", () => {
+    // First page returns 100 entries with total_count = 150.
+    const entries = Array.from({ length: 100 }, (_, i) => ({
+      id: 1000 + i,
+      name: `check-${i}`,
+      status: "completed",
+      conclusion: "success",
+      head_sha: "abc",
+      output: { title: null, summary: null, text: null },
+      annotations_count: 0,
+      app: { slug: "external" },
+    }));
+    const response = { total_count: 150, check_runs: entries };
+
+    mockExecFileSync
+      .mockReturnValueOnce("[]")
+      .mockReturnValueOnce(JSON.stringify(response));
+
+    const result = fetchCiRuns("org", "repo", "main");
+    expect(result.runs).toHaveLength(100);
+    expect(result.runsIncomplete).toBe(true);
+  });
+
+  test("flags runsIncomplete when workflow runs page is full", () => {
+    const workflowRuns = Array.from({ length: 100 }, (_, i) => ({
+      databaseId: 5000 + i,
+      name: `workflow-${i}`,
+      status: "completed",
+      conclusion: "success",
+      headBranch: "main",
+      headSha: "abc",
+    }));
+
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify(workflowRuns))
+      .mockReturnValueOnce(JSON.stringify({ total_count: 0, check_runs: [] }));
+
+    const result = fetchCiRuns("org", "repo", "main");
+    expect(result.runs).toHaveLength(100);
+    expect(result.runsIncomplete).toBe(true);
   });
 });
 
@@ -905,11 +950,13 @@ describe("edge cases", () => {
     expect(normaliseCiConclusion(r)).toBe("failure");
   });
 
-  test("fetchCiRuns returns empty array on malformed workflow JSON", () => {
+  test("fetchCiRuns returns empty runs on malformed workflow JSON", () => {
     mockExecFileSync
       .mockReturnValueOnce("not json")
       .mockReturnValueOnce(JSON.stringify({ check_runs: [] }));
-    expect(fetchCiRuns("org", "repo", "main")).toEqual([]);
+    const result = fetchCiRuns("org", "repo", "main");
+    expect(result.runs).toEqual([]);
+    expect(result.runsIncomplete).toBe(false);
   });
 
   test("fetchCiRuns throws on malformed check-runs JSON", () => {
@@ -1290,6 +1337,22 @@ describe("buildCiInspectionContext", () => {
     expect(ctx.checkRunIds).toEqual([600]);
     expect(ctx.hasAnnotations).toBe(true);
     expect(ctx.workflowRuns).toEqual([]);
+  });
+
+  test("propagates ciStatus.runsIncomplete to annotationsIncomplete", () => {
+    // No `gh api .../jobs` call needed because runs is empty — the
+    // helper should still surface the truncation flag from the
+    // upstream listing.
+    const ctx = buildCiInspectionContext("org", "repo", "abc", {
+      verdict: "pass",
+      runs: [],
+      runsIncomplete: true,
+    });
+
+    expect(ctx.annotationsIncomplete).toBe(true);
+    // Truncation also implies "annotations may exist on a later
+    // page" so the findings-review path stays engaged.
+    expect(ctx.hasAnnotations).toBe(true);
   });
 
   test("never reaches gh run view --log-failed", () => {

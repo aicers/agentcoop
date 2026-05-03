@@ -312,14 +312,19 @@ export async function pollCiAndFix(
     }
 
     const ref = commitSha ?? ctx.branch;
+    // When the run listing was truncated, conservatively assume
+    // annotations may exist on a later page so the findings-review
+    // path runs (rather than treating an incomplete listing as a
+    // clean pass).
     const hasAnnotations =
       ciStatus.verdict === "pass" &&
-      ciStatus.runs.some(
-        (r) =>
-          r.source === "check" &&
-          r.annotationsCount != null &&
-          r.annotationsCount > 0,
-      );
+      (ciStatus.runsIncomplete === true ||
+        ciStatus.runs.some(
+          (r) =>
+            r.source === "check" &&
+            r.annotationsCount != null &&
+            r.annotationsCount > 0,
+        ));
 
     if (ciStatus.verdict === "pass" && !hasAnnotations) {
       return { passed: true, message: t()["ci.passed"] };

@@ -466,12 +466,20 @@ export function createCiCheckStageHandler(
         // it's a clean pass.  We avoid building the full inspection
         // context (which fetches per-run job listings) until we know
         // we'll use it.
-        const hasAnnotations = ciStatus.runs.some(
-          (r) =>
-            r.source === "check" &&
-            r.annotationsCount != null &&
-            r.annotationsCount > 0,
-        );
+        //
+        // If the CI run listing itself was truncated (e.g. >100 check
+        // runs on the commit), annotations on later pages would be
+        // invisible here — treat that as "annotations may exist" so
+        // the agent gets a chance to paginate, instead of declaring
+        // a clean pass on incomplete data.
+        const hasAnnotations =
+          ciStatus.runsIncomplete === true ||
+          ciStatus.runs.some(
+            (r) =>
+              r.source === "check" &&
+              r.annotationsCount != null &&
+              r.annotationsCount > 0,
+          );
         if (!hasAnnotations) {
           return { outcome: "completed", message: t()["ci.passed"] };
         }

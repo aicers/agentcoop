@@ -23,7 +23,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and `correlateFindings` remain as utilities but are no longer called
   during prompt construction by `buildCiFixPrompt`,
   `buildCiFixResumePrompt`, `buildCiFindingsPrompt`, or
-  `buildCiFindingsResumePrompt`.
+  `buildCiFindingsResumePrompt`.  `CiStatus` gained a
+  `runsIncomplete` flag that is set when the upstream workflow-run
+  page or check-runs API page is truncated; `buildCiInspectionContext`
+  propagates it to `annotationsIncomplete` (and forces `hasAnnotations`
+  on) so callers do not treat a partial listing as a clean pass when
+  annotations could exist on a later page.  `fetchCiRuns` now returns
+  `{ runs, runsIncomplete }` instead of `CiRun[]`.
 
 ## [0.3.0] - 2026-05-02
 

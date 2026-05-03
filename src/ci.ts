@@ -63,6 +63,18 @@ export interface CiStatus {
   verdict: CiVerdict;
   /** Individual check runs used to compute the verdict. */
   runs: CiRun[];
+  /**
+   * True when one or more CI run listings could not be fully obtained
+   * (workflow run page hit its size cap, the check-run list endpoint
+   * reported `total_count` greater than the first page, or the
+   * underlying API call failed silently).  When set, `runs` is **not**
+   * authoritative — additional runs (and therefore annotations) may
+   * exist beyond what is enumerated here.  Callers that decide
+   * whether to run findings review based on `annotationsCount` should
+   * treat `runsIncomplete: true` as "annotations may be present" so
+   * the agent gets a chance to paginate the listing itself.
+   */
+  runsIncomplete?: boolean;
 }
 
 /**
@@ -151,6 +163,16 @@ interface CheckRunApiEntry {
   app?: { slug?: string };
 }
 
+interface CheckRunListResponse {
+  total_count?: number;
+  check_runs?: CheckRunApiEntry[];
+}
+
+/** Page size used for the check-run listing endpoint. */
+const CHECK_RUNS_PAGE_LIMIT = 100;
+/** Page size used for the workflow run listing. */
+const WORKFLOW_RUNS_PAGE_LIMIT = 100;
+
 interface CheckRunAnnotation {
   path: string;
   start_line: number;
@@ -237,23 +259,32 @@ export function collectFindings(
  * Fetch check runs from the GitHub Checks API for a given ref.
  * Filters out check runs created by GitHub Actions (already covered
  * by `gh run list`).
+ *
+ * Reads only the first page (`per_page=100`).  When the API reports
+ * `total_count > per_page` (or the returned page is full), `truncated`
+ * is set so callers can mark the overall CI listing as incomplete.
+ * Pagination of the remaining pages is left to the agent.
  */
 function fetchCheckRunsFromApi(
   owner: string,
   repo: string,
   ref: string,
-): CiRun[] {
+): { runs: CiRun[]; truncated: boolean } {
   const output = ghExec([
     "api",
-    `repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}/check-runs?per_page=100`,
+    `repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}/check-runs?per_page=${CHECK_RUNS_PAGE_LIMIT}`,
   ]);
 
-  const parsed = JSON.parse(output);
+  const parsed = JSON.parse(output) as CheckRunListResponse;
   const entries: CheckRunApiEntry[] = parsed.check_runs ?? [];
+  const totalCount = parsed.total_count ?? entries.length;
+  const truncated =
+    totalCount > CHECK_RUNS_PAGE_LIMIT ||
+    entries.length >= CHECK_RUNS_PAGE_LIMIT;
 
   // Exclude check runs created by GitHub Actions — those are already
   // covered by the workflow run list.
-  return entries
+  const runs = entries
     .filter((entry) => entry.app?.slug !== "github-actions")
     .map((entry) => ({
       databaseId: entry.id,
@@ -266,6 +297,8 @@ function fetchCheckRunsFromApi(
       checkOutput: entry.output,
       annotationsCount: entry.annotations_count,
     }));
+
+  return { runs, truncated };
 }
 
 /**
@@ -336,13 +369,17 @@ function collectCheckRunLogs(owner: string, repo: string, run: CiRun): string {
  *
  * When `commitSha` is provided, uses `gh run list --commit` and
  * `commits/{sha}/check-runs` to filter by SHA.
+ *
+ * Both listings are bounded to the first page (size `100`).  When
+ * either page is full the resulting `runsIncomplete` flag is set so
+ * callers know the listing is truncated.
  */
 export function fetchCiRuns(
   owner: string,
   repo: string,
   branch: string,
   commitSha?: string,
-): CiRun[] {
+): { runs: CiRun[]; runsIncomplete: boolean } {
   // ---- workflow runs via gh CLI -------------------------------------------
   const args = [
     "run",
@@ -354,7 +391,7 @@ export function fetchCiRuns(
     "--json",
     "databaseId,name,status,conclusion,headBranch,headSha",
     "--limit",
-    "100",
+    String(WORKFLOW_RUNS_PAGE_LIMIT),
   ];
   if (commitSha) {
     args.push("--commit", commitSha);
@@ -369,12 +406,23 @@ export function fetchCiRuns(
   } catch {
     workflowRuns = [];
   }
+  // `gh run list --limit N` simply caps; it does not surface
+  // total_count, so the only signal we have is whether the page is
+  // full.  Treat a full page as potentially truncated.
+  const workflowsTruncated = workflowRuns.length >= WORKFLOW_RUNS_PAGE_LIMIT;
 
   // ---- check runs via Checks API ------------------------------------------
   const ref = commitSha ?? branch;
-  const checkRuns = fetchCheckRunsFromApi(owner, repo, ref);
+  const { runs: checkRuns, truncated: checksTruncated } = fetchCheckRunsFromApi(
+    owner,
+    repo,
+    ref,
+  );
 
-  return [...workflowRuns, ...checkRuns];
+  return {
+    runs: [...workflowRuns, ...checkRuns],
+    runsIncomplete: workflowsTruncated || checksTruncated,
+  };
 }
 
 /**
@@ -394,9 +442,9 @@ export function getCiStatus(
   branch: string,
   commitSha?: string,
 ): CiStatus {
-  const runs = fetchCiRuns(owner, repo, branch, commitSha);
+  const { runs, runsIncomplete } = fetchCiRuns(owner, repo, branch, commitSha);
   const verdict = evaluateCiRuns(runs);
-  return { verdict, runs };
+  return { verdict, runs, runsIncomplete };
 }
 
 // ---- bounded inspection context (pointers only) --------------------------
@@ -538,7 +586,16 @@ export function buildCiInspectionContext(
   const workflowRuns: WorkflowRunInspection[] = [];
   const checkRunIds: number[] = [];
   let hasAnnotations = false;
-  let annotationsIncomplete = false;
+  // When the source CI listing was already truncated (workflow run
+  // page was full, or the check-runs endpoint reported more results
+  // than fit in one page), the pointer set we can build is itself
+  // incomplete — additional runs (and therefore annotations) may
+  // exist beyond what `ciStatus.runs` enumerates.
+  let annotationsIncomplete = ciStatus.runsIncomplete === true;
+  // If the runs listing was truncated, conservatively assume there
+  // *may* be annotations on a later page.  This keeps the findings
+  // review path engaged so the agent gets a chance to paginate.
+  if (annotationsIncomplete) hasAnnotations = true;
 
   for (const run of ciStatus.runs) {
     const conclusion = normaliseCiConclusion(run);
