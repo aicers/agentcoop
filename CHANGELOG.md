@@ -4,6 +4,43 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- CI fix, findings-review, and dismiss-alerts prompts no longer inline
+  raw `gh run view --log-failed` output, serialised annotation lists,
+  or code scanning alert payloads.  The pipeline now emits a small,
+  bounded `CiInspectionContext` (failing workflow run/job IDs,
+  check-run IDs, an `annotationsIncomplete` flag, and the ref) and
+  the agent fetches the actual failure logs, annotations, and alerts
+  itself with `gh`.  This fixes the `Prompt is too long` failures
+  observed when a Stage 7 fix attempt encountered a 27,000-line E2E
+  log.  `CiStatus` no longer carries `findings: CiFinding[]` or
+  `findingsIncomplete`; consumers of the prompt-feeding shape should
+  switch to `buildCiInspectionContext(owner, repo, ref, ciStatus)`.
+  `collectFindings`, `collectFailureLogs`, `fetchCodeScanningAlerts`,
+  and `correlateFindings` remain as utilities but are no longer called
+  during prompt construction by `buildCiFixPrompt`,
+  `buildCiFixResumePrompt`, `buildCiFindingsPrompt`, or
+  `buildCiFindingsResumePrompt`.  `CiStatus` gained a
+  `runsIncomplete` flag that is set when the upstream workflow-run
+  page or check-runs API page is truncated; `buildCiInspectionContext`
+  propagates it to `annotationsIncomplete` (and forces `hasAnnotations`
+  on) so callers do not treat a partial listing as a clean pass when
+  annotations could exist on a later page.  `fetchCiRuns` now returns
+  `{ runs, runsIncomplete }` instead of `CiRun[]`.  The CI prompts'
+  code-scanning fetch hint targets the **branch** (`ref={branch}`)
+  instead of `inspection.ref`, since GitHub's code-scanning `ref`
+  filter accepts a Git ref (branch or PR merge ref) and not a commit
+  SHA — using the inspection ref pointed the agent at the wrong
+  ref when a SHA was known.  The `runsIncomplete` recovery hint now
+  paginates the Actions API directly (`gh api .../actions/runs?
+  branch=<branch>&per_page=100&page=<n>`, with a `head_sha=<sha>`
+  variant) rather than re-running `gh run list --limit 100`, which
+  was the bounded read whose 100-cap originally set the truncation
+  flag and which also dropped the commit filter.
+
 ## [0.3.0] - 2026-05-02
 
 ### Changed

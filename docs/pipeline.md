@@ -566,19 +566,38 @@ subsequent stages depend on the PR.
 ### Stage 5: CI check loop
 
 **Agent:** A (only on failure or findings review)\
-**Purpose:** Wait for CI to pass. If CI fails, collect failure
-logs and send them to Agent A for a fix. If CI passes but check
-runs report findings (annotations), present them to Agent A for
-review.
+**Purpose:** Wait for CI to pass. If CI fails, build a bounded
+pointer-based inspection context (failing run/job IDs, check-run
+IDs, the commit SHA, and incomplete-metadata flags) and send it to
+Agent A so the agent can fetch the failure logs itself. If CI passes
+but check runs report findings (annotations), pass the same pointer
+context to Agent A for review — the agent reads annotation bodies
+and code scanning alerts on demand rather than receiving them
+inlined.
 
 The orchestrator polls CI status at 30-second intervals. The CI
 verdict includes both **workflow runs** (Actions API) and **check
-runs** (Checks API). A run's `source` field (`"workflow"` or
-`"check"`) determines how failure logs are collected. While CI
-is pending, the handler waits internally without consuming the
-loop budget.
+runs** (Checks API). The bounded inspection context keeps these
+two sources separate: failing/cancelled workflow runs surface as
+`workflowRuns[]` (each carrying a `runId` and the IDs of its failed
+jobs), while check runs the agent should consult surface as
+`checkRunIds[]`. Per-run `source` metadata from `CiRun` is **not**
+forwarded to the prompt — the agent picks the right `gh` command
+(`gh run view ...` for workflow runs, `gh api .../check-runs/...`
+for check runs) based on which list the ID came from. While CI is
+pending, the handler waits internally without consuming the loop
+budget.
 
-When CI passes with no findings, the stage completes immediately.
+When CI passes and no check run reports annotations, the stage
+completes immediately.
+
+**Read-side delegation:** Failure logs, annotation bodies, and
+code scanning alert payloads are **not** pre-fetched and inlined
+into the CI prompts.  A 27,000-line failure log easily overflowed
+the model context window when inlined; instead the orchestrator
+emits a small `CiInspectionContext` (failing run/job IDs, check-run
+IDs, an `annotationsIncomplete` flag, and the ref) and the agent
+fetches the relevant content itself with `gh`.
 
 **CI fix prompt** (sent only when CI fails):
 
@@ -589,14 +608,52 @@ You are fixing CI failures for the following GitHub issue.
 
 {issue_body}
 
-## CI Failure Logs
+## CI Inspection Context
 
-{ci_failure_logs}
+Repository: {owner}/{repo}
+Branch: {branch}
+ref: {sha-or-branch}
+hasAnnotations: {true|false}
+annotationsIncomplete: {true|false}
+
+Failing workflow runs:
+- runId: {runId}
+  failedJobs:
+    - {jobId} "{jobName}"
+
+Check runs to inspect:
+- {checkRunId}
+
+## Fetching CI details
+
+Failure logs, annotation bodies, and code scanning alert payloads
+are **not** inlined here — fetch them yourself with `gh` as you
+narrow down the failure.  Useful commands:
+
+    gh run view <runId> --repo {owner}/{repo} --log-failed --job <jobId>
+    gh run view <runId> --repo {owner}/{repo} --log-failed
+    gh api "repos/{owner}/{repo}/check-runs/<checkRunId>"
+    gh api "repos/{owner}/{repo}/check-runs/<checkRunId>/annotations"
+    gh api "repos/{owner}/{repo}/code-scanning/alerts?ref={branch}&state=open&per_page=100"
+
+The code-scanning `ref` filter takes a Git ref (a branch ref or
+PR merge ref) — _not_ a commit SHA — so the hint uses `{branch}`,
+not `inspection.ref`.
+
+When `annotationsIncomplete: true`, the prompt also includes
+pagination hints so the agent can recover regardless of which
+listing was truncated:
+
+    gh api "repos/{owner}/{repo}/actions/runs/<runId>/jobs?per_page=100&page=<n>"
+    gh api "repos/{owner}/{repo}/actions/runs?branch={branch}&per_page=100&page=<n>"
+    gh api "repos/{owner}/{repo}/actions/runs?head_sha=<commit-sha>&per_page=100&page=<n>"
+    gh api "repos/{owner}/{repo}/commits/{ref}/check-runs?per_page=100&page=<n>"
 
 ## Instructions
 
-Diagnose and fix the CI failures shown above.  After making your
-changes:
+Use the pointers above and the `gh` commands to read the actual
+failure context, diagnose the failures, and fix them.  After making
+your changes:
 
 If your changes affect documentation, update it accordingly —
 code comments, inline API docs (JSDoc/TSDoc/docstrings), README
@@ -632,36 +689,63 @@ When the budget is exhausted, the user is asked whether to continue.
 
 #### CI findings review
 
-When CI passes but check runs have **annotations** (e.g., lint
-warnings, CodeQL alerts), the orchestrator enters a findings-review
-sub-path instead of completing immediately. The findings are
-presented to Agent A for review.
+When CI passes but at least one check run carries **annotations**
+(e.g., lint warnings, CodeQL alerts), the orchestrator enters a
+findings-review sub-path instead of completing immediately.  As on
+the failure path, annotation bodies and code scanning alert payloads
+are **not** inlined — Agent A receives the same pointer-only
+`CiInspectionContext` and fetches the actual content itself with
+`gh`.
 
 **Findings-review prompt:**
 
 ````text
-CI passed but check runs reported findings (annotations).
-Review the findings below and decide whether any should be addressed.
+CI passed but check runs reported annotations.  Inspect them
+yourself and decide whether any should be addressed.
 
 ## Issue #{number}: {title}
 
 {issue_body}
 
-## CI Findings
+## CI Inspection Context
 
-{formatted_findings}
+Repository: {owner}/{repo}
+Branch: {branch}
+ref: {sha-or-branch}
+hasAnnotations: true
+annotationsIncomplete: {true|false}
 
-{if annotations incomplete →}
-**Note:** Some check run annotations could not be fetched.
-The findings above may be incomplete.  Check the PR's Checks
-tab for the full list of annotations.
+Check runs to inspect:
+- {checkRunId}
 
-{if correlated alerts →}
+## Fetching CI details
 
-## CodeQL Triage
+Annotations and alert details are not inlined — fetch them with
+`gh`:
 
-For each finding marked with an alert number (`[alert #N]`), evaluate
-whether it is a **real issue** or a **false positive**.
+    gh api "repos/{owner}/{repo}/check-runs/<checkRunId>"
+    gh api "repos/{owner}/{repo}/check-runs/<checkRunId>/annotations"
+    gh api "repos/{owner}/{repo}/code-scanning/alerts?ref={branch}&state=open&per_page=100"
+
+(Code scanning's `ref` filter takes a Git ref — branch or PR
+merge ref — not a commit SHA, so the hint uses `{branch}`, not
+`inspection.ref`.)
+
+When `annotationsIncomplete: true`, the prompt also includes
+pagination hints (jobs / workflow-run list / check-runs listing) —
+particularly important when `checkRunIds` is empty, which happens
+when the upstream check-runs page was truncated and the visible
+runs carry no annotations.
+
+## Triage of code scanning alerts
+
+Some annotations may correspond to open code scanning alerts.
+Fetch the alerts list for the **branch** (or PR merge ref —
+`refs/pull/<n>/merge`) using the `gh api .../code-scanning/alerts?ref={branch}`
+command above; do **not** pass `inspection.ref` to that endpoint,
+because GitHub's code-scanning `ref` filter accepts only a Git ref
+(branch name or `refs/...`), not a commit SHA. Then for each alert
+decide whether it is a **real issue** or a **false positive**.
 
 ### Evaluation criteria
 
@@ -674,7 +758,8 @@ A finding is a **real issue** when:
 
 A finding is a **false positive** when:
 - The data is already sanitised or validated before it reaches the
-  flagged location, but CodeQL cannot see through the sanitiser.
+  flagged location, but the analyser cannot see through the
+  sanitiser.
 - The flagged code is dead, test-only, or unreachable in production.
 - The "source" is not actually attacker-controlled (e.g. a hardcoded
   constant, an environment variable set at deploy time).
@@ -684,8 +769,8 @@ A finding is a **false positive** when:
 ### Actions
 
 - **Real issue:** Fix the code.  After fixing, commit and push.
-- **False positive:** For each false-positive alert, run these
-  commands (one pair per alert):
+- **False positive:** For each false-positive alert, dismiss it via
+  the API:
 
   ```
   gh api -X PATCH "repos/{owner}/{repo}/code-scanning/alerts/{number}" \
@@ -707,14 +792,11 @@ A finding is a **false positive** when:
   gh pr comment --repo {owner}/{repo} <pr_number> --body "..."
   ```
 
-### Dismissible alerts
-
-- Alert #{N}: {rule} at {file}:{line}
-
 ## Instructions
 
-For each finding, decide whether it should be fixed or can be
-safely ignored.  If you fix any findings:
+Read the annotations and any code scanning alerts via the `gh`
+commands above.  For each finding, decide whether it should be
+fixed or can be safely ignored.  If you fix any findings:
 
 If your changes affect documentation, update it accordingly —
 code comments, inline API docs (JSDoc/TSDoc/docstrings), README
@@ -743,20 +825,48 @@ Then commit and push the branch so a new CI run is triggered.
 If all findings are acceptable as-is, explain your reasoning.
 ````
 
-The two conditional insertions shown in the template are:
+**`annotationsIncomplete` flag:** Surfaces in the prompt as a line
+of the inspection context.  It means the _pointer metadata_ itself
+could not be fully determined, not that annotation bodies are
+missing — those are fetched by the agent on demand.  Three things
+can set the flag:
 
-- **Incomplete-annotations note** — appended after `## CI
-  Findings` when some check run annotations could not be fetched.
-- **CodeQL Triage section** — appended before `## Instructions`
-  when findings are correlated with CodeQL code-scanning alerts.
-  The full section is shown verbatim in the template above; the
-  `### Dismissible alerts` list is populated at runtime with the
-  specific alerts found.
+- A `gh api .../jobs` call failed for one of the failing workflow
+  runs.
+- The job listing for a failing run hit its first-page cap of 100
+  entries (matrix builds with many jobs).
+- The upstream CI run listing itself was truncated (the workflow
+  run page was full, or the check-runs endpoint reported
+  `total_count > 100`).  In this case `hasAnnotations` is also
+  forced to `true` so the findings-review path stays engaged
+  instead of treating an incomplete listing as a clean pass.
 
-**Findings format:** Annotations are grouped by check run and
-listed as `- file:line: [level] message (rule) [alert #N]`. The
-`[alert #N]` suffix appears only for findings correlated with
-CodeQL alerts.
+When `true`, the prompt includes pagination hints for all three
+truncation sources so the agent can recover regardless of which
+source was truncated:
+
+- Failing-jobs listing for a workflow run:
+  `gh api .../actions/runs/<runId>/jobs?per_page=100&page=<n>`.
+- Workflow-run listing — paginate the Actions API directly with
+  `gh api .../actions/runs?branch=<branch>&per_page=100&page=<n>`
+  (or `head_sha=<sha>` to narrow to one commit).  The hint
+  deliberately does _not_ recommend re-running `gh run list
+  --limit 100`: that's the bounded read whose 100-cap originally
+  set the truncation flag, so repeating it cannot reach the
+  hidden runs and would also drop the commit filter the
+  pipeline applied.
+- Check-runs listing for the ref:
+  `gh api .../commits/<ref>/check-runs?per_page=100&page=<n>`.
+
+This matters in particular when the upstream check-runs page was
+truncated: the visible `checkRunIds` set may be empty even though
+additional check runs (and annotations) exist on later pages.
+
+**Pointer-only design:** The pipeline never serialises annotation
+bodies, alert payloads, or correlated `[alert #N]` lists into the
+prompt.  The agent receives bounded check-run IDs and uses
+`gh api` to read the actual content.  This keeps prompts at a
+small constant size regardless of CI volume.
 
 **Findings-review budget:** Tracked independently from the
 failure-fix budget. The maximum number of findings reviews is
@@ -774,12 +884,15 @@ before and after the review:
 
 #### CodeQL triage
 
-When findings are correlated with CodeQL code-scanning alerts, the
-`## CodeQL Triage` section shown verbatim in the findings-review
-prompt template above is appended to the prompt.  The section
-includes evaluation criteria, dismiss commands, and a
-`### Dismissible alerts` list populated at runtime with the specific
-alerts found.  See the prompt template for the exact wording.
+The findings-review prompt always includes a `## Triage of code
+scanning alerts` section with evaluation criteria and dismiss
+instructions (see the prompt template above).  The list of
+dismissible alerts is **not** built on the pipeline side — the
+agent fetches the open alerts itself with `gh api .../code-scanning/
+alerts?ref={branch}&state=open&per_page=100` (the API's `ref`
+filter accepts a branch or PR merge ref, not a commit SHA),
+correlates them to the annotations it just read, and dismisses
+any false positives via `gh api -X PATCH .../alerts/{number}`.
 
 ---
 
@@ -1770,10 +1883,13 @@ details.
 
 - **PR number extraction:** After Agent A creates a PR, extract
   the number via `gh pr list --head {branch} --json number`.
-- **CI status polling:** Check CI status and collect failure
-  details. A CI check is considered passed when all required
-  checks succeed. `pending` -> wait and re-poll. `skipped` ->
-  ignore. `cancelled` -> treat as failure.
+- **CI status polling:** Check CI status and build a bounded
+  pointer-based inspection context (failing run/job IDs,
+  check-run IDs, ref/SHA, incomplete-metadata flags) — never
+  raw failure logs, annotation bodies, or alert payloads, which
+  the agent fetches itself. A CI check is considered passed
+  when all required checks succeed. `pending` -> wait and
+  re-poll. `skipped` -> ignore. `cancelled` -> treat as failure.
 - **Mergeable status checking:** Query the GitHub API with
   exponential backoff to handle the `UNKNOWN` state that occurs
   while GitHub computes mergeability.

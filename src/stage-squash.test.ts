@@ -53,7 +53,7 @@ function makeCiRun(overrides: Partial<CiRun> = {}): CiRun {
 }
 
 function makeCiStatus(verdict: CiVerdict, runs: CiRun[] = []): CiStatus {
-  return { verdict, runs, findings: [] };
+  return { verdict, runs };
 }
 
 const BASE_CTX: StageContext = {
@@ -91,7 +91,6 @@ function makeOpts(
     issueBody: "The widget is broken.",
     defaultBranch: "main",
     getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
-    collectFailureLogs: vi.fn().mockReturnValue(""),
     getHeadSha: vi.fn().mockReturnValue("abc123"),
     delay: vi.fn().mockResolvedValue(undefined),
     pollIntervalMs: 100,
@@ -300,7 +299,6 @@ describe("createSquashStageHandler", () => {
           makeCiRun({ conclusion: "failure", databaseId: 200 }),
         ]),
       );
-    const collectFailureLogs = vi.fn().mockReturnValue("test failed");
 
     // Agent fix invocations (for CI fix loop)
     const invokeResults = [
@@ -329,7 +327,6 @@ describe("createSquashStageHandler", () => {
     const opts = makeOpts({
       agent,
       getCiStatus,
-      collectFailureLogs,
       maxFixAttempts: 3,
     });
     const stage = createSquashStageHandler(opts);
@@ -348,7 +345,6 @@ describe("createSquashStageHandler", () => {
         ]),
       )
       .mockReturnValueOnce(makeCiStatus("pass"));
-    const collectFailureLogs = vi.fn().mockReturnValue("test failed");
 
     const invokeResults = [
       makeStream(
@@ -369,7 +365,7 @@ describe("createSquashStageHandler", () => {
         ),
     };
 
-    const opts = makeOpts({ agent, getCiStatus, collectFailureLogs });
+    const opts = makeOpts({ agent, getCiStatus });
     const stage = createSquashStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
 
@@ -555,9 +551,9 @@ describe("createSquashStageHandler", () => {
     vi.restoreAllMocks();
   });
 
-  // -- multiple failed CI runs with logs --------------------------------------
+  // -- multiple failed CI runs surface as pointers ----------------------------
 
-  test("collects logs from multiple failed CI runs", async () => {
+  test("invokes buildCiInspectionContext with the full failing status", async () => {
     const runs = [
       makeCiRun({ databaseId: 200, name: "lint", conclusion: "failure" }),
       makeCiRun({ databaseId: 201, name: "test", conclusion: "failure" }),
@@ -567,10 +563,16 @@ describe("createSquashStageHandler", () => {
       .fn()
       .mockReturnValueOnce(makeCiStatus("fail", runs))
       .mockReturnValueOnce(makeCiStatus("pass"));
-    const collectFailureLogs = vi
-      .fn()
-      .mockReturnValueOnce("lint: unused var")
-      .mockReturnValueOnce("test: assertion failed");
+    const buildCiInspectionContext = vi.fn().mockReturnValue({
+      workflowRuns: [
+        { runId: 200, failedJobs: [] },
+        { runId: 201, failedJobs: [] },
+      ],
+      checkRunIds: [],
+      hasAnnotations: false,
+      annotationsIncomplete: false,
+      ref: "abc123",
+    });
 
     const invokeResults = [
       makeStream(
@@ -591,21 +593,31 @@ describe("createSquashStageHandler", () => {
         ),
     };
 
-    const opts = makeOpts({ agent, getCiStatus, collectFailureLogs });
+    const opts = makeOpts({
+      agent,
+      getCiStatus,
+      buildCiInspectionContext,
+    });
     const stage = createSquashStageHandler(opts);
     await stage.handler(BASE_CTX);
 
-    expect(collectFailureLogs).toHaveBeenCalledTimes(2);
-    expect(collectFailureLogs).toHaveBeenCalledWith(
+    expect(buildCiInspectionContext).toHaveBeenCalledWith(
       "org",
       "repo",
-      expect.objectContaining({ databaseId: 200 }),
+      "abc123",
+      expect.objectContaining({ verdict: "fail" }),
     );
-    expect(collectFailureLogs).toHaveBeenCalledWith(
-      "org",
-      "repo",
-      expect.objectContaining({ databaseId: 201 }),
-    );
+    const allPrompts = [
+      ...(agent.invoke as ReturnType<typeof vi.fn>).mock.calls.map(
+        (c) => c[0] as string,
+      ),
+      ...(agent.resume as ReturnType<typeof vi.fn>).mock.calls.map(
+        (c) => c[1] as string,
+      ),
+    ];
+    const fixPrompt = allPrompts.find((p) => p.includes("CI Inspection"));
+    expect(fixPrompt).toBeDefined();
+    expect(fixPrompt).not.toContain("CI Failure Logs");
   });
 
   // -- non-terminal non-blocked completion outcome ----------------------------
@@ -709,7 +721,6 @@ describe("createSquashStageHandler", () => {
       .mockReturnValue(
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       );
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
 
     // The squash work prompt persists `sess-squash`; the verdict
     // follow-up resumes that session and returns SQUASHED_MULTI, then
@@ -740,7 +751,7 @@ describe("createSquashStageHandler", () => {
       resume: vi.fn().mockImplementation(() => resumeResults[resumeCall++]),
     };
 
-    const opts = makeOpts({ agent, getCiStatus, collectFailureLogs });
+    const opts = makeOpts({ agent, getCiStatus });
     const stage = createSquashStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
 

@@ -9,17 +9,13 @@
 
 import type { AgentAdapter } from "./agent.js";
 import type {
-  CiRun,
+  BuildCiInspectionContextFn,
   CiStatus,
-  FetchCodeScanningAlertsFn,
   GetCiStatusFn,
 } from "./ci.js";
 import {
-  correlateFindings,
-  collectFailureLogs as defaultCollectFailureLogs,
-  fetchCodeScanningAlerts as defaultFetchAlerts,
+  buildCiInspectionContext as defaultBuildCiInspectionContext,
   getCiStatus as defaultGetCiStatus,
-  normaliseCiConclusion,
 } from "./ci.js";
 import { t } from "./i18n/index.js";
 import type { StageContext } from "./pipeline.js";
@@ -57,16 +53,19 @@ export interface CiPollOptions {
   issueBody: string;
   /** Injected for testability. Defaults to `ci.getCiStatus`. */
   getCiStatus?: GetCiStatusFn;
-  /** Injected for testability. Defaults to `ci.collectFailureLogs`. */
-  collectFailureLogs?: (owner: string, repo: string, run: CiRun) => string;
   /**
    * Read the current HEAD SHA from the worktree.  Called before each
    * CI poll so that fix pushes automatically target the new commit.
    * Injected for testability.  Defaults to `worktree.getHeadSha`.
    */
   getHeadSha?: (cwd: string) => string;
-  /** Injected for testability. Defaults to `ci.fetchCodeScanningAlerts`. */
-  fetchCodeScanningAlerts?: FetchCodeScanningAlertsFn;
+  /**
+   * Injected for testability.  Defaults to `ci.buildCiInspectionContext`.
+   * Used to derive bounded pointer metadata about the failing CI
+   * surfaces so the agent can fetch the actual logs/annotations/alerts
+   * itself with `gh`.
+   */
+  buildCiInspectionContext?: BuildCiInspectionContextFn;
   /** Delay in ms between polls when CI is pending. Default 30 000. */
   pollIntervalMs?: number;
   /** Max time in ms to wait for pending CI. Default 600 000 (10 min). */
@@ -182,8 +181,6 @@ async function waitForCi(
           ciStatus: {
             verdict: "pending" as const,
             runs: [],
-            findings: [],
-            findingsIncomplete: false,
           },
         };
       }
@@ -230,7 +227,8 @@ export async function pollCiAndFix(
   options: CiPollOptions,
 ): Promise<CiPollResult> {
   const getCiStatus = options.getCiStatus ?? defaultGetCiStatus;
-  const collectLogs = options.collectFailureLogs ?? defaultCollectFailureLogs;
+  const buildInspection =
+    options.buildCiInspectionContext ?? defaultBuildCiInspectionContext;
   const pollInterval = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const pollTimeout = options.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS;
   const maxFix = options.maxFixAttempts ?? DEFAULT_MAX_FIX_ATTEMPTS;
@@ -238,7 +236,6 @@ export async function pollCiAndFix(
 
   const { ctx, agent, issueTitle, issueBody } = options;
   const readHeadSha = options.getHeadSha ?? defaultGetHeadSha;
-  const fetchAlerts = options.fetchCodeScanningAlerts ?? defaultFetchAlerts;
   const emptyGrace =
     options.emptyRunsGracePeriodMs ?? DEFAULT_EMPTY_RUNS_GRACE_PERIOD_MS;
   const events = options.events ?? ctx.events;
@@ -314,15 +311,26 @@ export async function pollCiAndFix(
       return { passed: false, message: timeoutMessage };
     }
 
-    if (
+    const ref = commitSha ?? ctx.branch;
+    // When the run listing was truncated, conservatively assume
+    // annotations may exist on a later page so the findings-review
+    // path runs (rather than treating an incomplete listing as a
+    // clean pass).
+    const hasAnnotations =
       ciStatus.verdict === "pass" &&
-      ciStatus.findings.length === 0 &&
-      !ciStatus.findingsIncomplete
-    ) {
+      (ciStatus.runsIncomplete === true ||
+        ciStatus.runs.some(
+          (r) =>
+            r.source === "check" &&
+            r.annotationsCount != null &&
+            r.annotationsCount > 0,
+        ));
+
+    if (ciStatus.verdict === "pass" && !hasAnnotations) {
       return { passed: true, message: t()["ci.passed"] };
     }
 
-    // CI passed with findings — present for agent review.
+    // CI passed with annotations — present pointers for agent review.
     if (ciStatus.verdict === "pass") {
       if (findingsReviews >= maxFindingsReviews) {
         // Findings-review budget exhausted — accept as passed.
@@ -332,27 +340,14 @@ export async function pollCiAndFix(
 
       const shaBeforeReview = readHeadSha(ctx.worktreePath);
 
-      // Fetch code scanning alerts and correlate to findings so
-      // the agent can dismiss false positives by alert number.
-      const alerts = fetchAlerts(ctx.owner, ctx.repo, ctx.branch);
-      const correlated =
-        alerts.length > 0
-          ? correlateFindings(ciStatus.findings, alerts)
-          : undefined;
+      const inspection = buildInspection(ctx.owner, ctx.repo, ref, ciStatus);
 
       const freshFindingsPrompt = buildCiFindingsPrompt(
         ctx,
         { issueTitle, issueBody },
-        ciStatus.findings,
-        ciStatus.findingsIncomplete,
-        correlated,
+        inspection,
       );
-      const resumeFindingsPrompt = buildCiFindingsResumePrompt(
-        ctx,
-        ciStatus.findings,
-        ciStatus.findingsIncomplete,
-        correlated,
-      );
+      const resumeFindingsPrompt = buildCiFindingsResumePrompt(ctx, inspection);
       const findingsUseResume = currentSessionId !== undefined;
       const findingsPrompt = findingsUseResume
         ? resumeFindingsPrompt
@@ -431,31 +426,16 @@ export async function pollCiAndFix(
     }
     fixAttempts++;
 
-    // Collect failure logs and send fix prompt to the agent.
-    const failedRuns = ciStatus.runs.filter((r) => {
-      const conclusion = normaliseCiConclusion(r);
-      return conclusion === "failure" || conclusion === "cancelled";
-    });
-
-    const logSections: string[] = [];
-    for (const run of failedRuns) {
-      const logs = collectLogs(ctx.owner, ctx.repo, run);
-      if (logs) {
-        logSections.push(`### ${run.name} (run ${run.databaseId})\n\n${logs}`);
-      }
-    }
-
-    const failureLogs =
-      logSections.length > 0
-        ? logSections.join("\n\n")
-        : "No detailed failure logs available.";
+    // Build a bounded pointer-only context.  The agent fetches the
+    // raw failure logs / annotations / alerts itself with `gh`.
+    const inspection = buildInspection(ctx.owner, ctx.repo, ref, ciStatus);
 
     const freshFixPrompt = buildCiFixPrompt(
       ctx,
-      { agent, issueTitle, issueBody },
-      failureLogs,
+      { issueTitle, issueBody },
+      inspection,
     );
-    const resumeFixPrompt = buildCiFixResumePrompt(ctx, failureLogs);
+    const resumeFixPrompt = buildCiFixResumePrompt(ctx, inspection);
     const fixUseResume = currentSessionId !== undefined;
     const fixPrompt = fixUseResume ? resumeFixPrompt : freshFixPrompt;
     ctx.promptSinks?.a?.(fixPrompt, "ci-fix");

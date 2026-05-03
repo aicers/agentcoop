@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
-import type { CiFinding, CiRun, CiStatus, CiVerdict } from "./ci.js";
+import type { CiInspectionContext, CiRun, CiStatus, CiVerdict } from "./ci.js";
 import type { StageContext } from "./pipeline.js";
 import {
   buildCiFindingsPrompt,
@@ -45,13 +45,21 @@ function makeCiRun(overrides: Partial<CiRun> = {}): CiRun {
   };
 }
 
-function makeCiStatus(
-  verdict: CiVerdict,
-  runs: CiRun[] = [],
-  findings: CiFinding[] = [],
-  findingsIncomplete = false,
-): CiStatus {
-  return { verdict, runs, findings, findingsIncomplete };
+function makeCiStatus(verdict: CiVerdict, runs: CiRun[] = []): CiStatus {
+  return { verdict, runs };
+}
+
+function makeInspection(
+  overrides: Partial<CiInspectionContext> = {},
+): CiInspectionContext {
+  return {
+    workflowRuns: [],
+    checkRunIds: [],
+    hasAnnotations: false,
+    annotationsIncomplete: false,
+    ref: "abc123",
+    ...overrides,
+  };
 }
 
 const BASE_CTX: StageContext = {
@@ -76,9 +84,8 @@ function makeOpts(
     issueTitle: "Fix the widget",
     issueBody: "The widget is broken.",
     getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
-    collectFailureLogs: vi.fn().mockReturnValue(""),
     getHeadSha: vi.fn().mockReturnValue("abc123"),
-    fetchCodeScanningAlerts: vi.fn().mockReturnValue([]),
+    buildCiInspectionContext: vi.fn().mockReturnValue(makeInspection()),
     delay: vi.fn().mockResolvedValue(undefined),
     pollIntervalMs: 100,
     pollTimeoutMs: 1000,
@@ -90,52 +97,109 @@ function makeOpts(
 // ---- buildCiFixPrompt ------------------------------------------------------
 
 describe("buildCiFixPrompt", () => {
-  test("omits redundant repo headers", () => {
-    const prompt = buildCiFixPrompt(BASE_CTX, makeOpts(), "error log");
-    expect(prompt).not.toContain("Owner: org");
-    expect(prompt).not.toContain("Repo: repo");
-    expect(prompt).not.toContain("Branch: issue-42");
-    expect(prompt).not.toContain("Worktree:");
-  });
-
   test("includes issue details", () => {
-    const prompt = buildCiFixPrompt(BASE_CTX, makeOpts(), "error log");
+    const prompt = buildCiFixPrompt(BASE_CTX, makeOpts(), makeInspection());
     expect(prompt).toContain("Issue #42: Fix the widget");
     expect(prompt).toContain("The widget is broken.");
   });
 
-  test("includes failure logs", () => {
-    const prompt = buildCiFixPrompt(BASE_CTX, makeOpts(), "npm test failed");
-    expect(prompt).toContain("CI Failure Logs");
-    expect(prompt).toContain("npm test failed");
+  test("includes the inspection context block, not raw failure logs", () => {
+    const inspection = makeInspection({
+      workflowRuns: [
+        { runId: 12345, failedJobs: [{ id: 555, name: "build" }] },
+      ],
+      ref: "deadbeef",
+    });
+    const prompt = buildCiFixPrompt(BASE_CTX, makeOpts(), inspection);
+    expect(prompt).toContain("CI Inspection Context");
+    expect(prompt).toContain("12345");
+    expect(prompt).toContain("555");
+    expect(prompt).toContain("deadbeef");
+    expect(prompt).not.toContain("CI Failure Logs");
   });
 
-  test("handles empty failure logs", () => {
-    const prompt = buildCiFixPrompt(BASE_CTX, makeOpts(), "");
-    expect(prompt).toContain("No detailed failure logs available");
+  test("does not embed raw log content even when given a large status", () => {
+    // Even though no logs are passed in, this guards the structural
+    // contract: the builder takes only pointers and never log bodies.
+    const inspection = makeInspection({
+      workflowRuns: Array.from({ length: 10 }, (_, i) => ({
+        runId: i,
+        failedJobs: [{ id: 1000 + i, name: `job-${i}` }],
+      })),
+    });
+    const prompt = buildCiFixPrompt(BASE_CTX, makeOpts(), inspection);
+    // Bounded prompt: well under the 4 KiB threshold from the spec
+    // because no log bodies are inlined.
+    expect(prompt.length).toBeLessThan(4096);
+  });
+
+  test("hints at gh run view --log-failed for the agent to fetch logs", () => {
+    const prompt = buildCiFixPrompt(BASE_CTX, makeOpts(), makeInspection());
+    expect(prompt).toContain("gh run view");
+    expect(prompt).toContain("--log-failed");
+  });
+
+  test("code-scanning hint uses the branch, not the commit SHA", () => {
+    // Code scanning's `ref` filter accepts only a Git ref (e.g. branch
+    // ref or PR merge ref) — not a commit SHA — so the hint must use
+    // `ctx.branch` and not `inspection.ref` when the inspection ref
+    // is a SHA.
+    const prompt = buildCiFixPrompt(
+      BASE_CTX,
+      makeOpts(),
+      makeInspection({ ref: "deadbeefcafe1234567890abcdef1234567890ab" }),
+    );
+    expect(prompt).toContain(
+      `/code-scanning/alerts?ref=${BASE_CTX.branch}&state=open`,
+    );
+    expect(prompt).not.toContain(
+      "/code-scanning/alerts?ref=deadbeefcafe1234567890abcdef1234567890ab",
+    );
   });
 
   test("instructs to commit and push", () => {
-    const prompt = buildCiFixPrompt(BASE_CTX, makeOpts(), "error");
+    const prompt = buildCiFixPrompt(BASE_CTX, makeOpts(), makeInspection());
     expect(prompt).toContain("commit and push");
   });
 
   test("includes doc consistency instructions", () => {
-    const prompt = buildCiFixPrompt(BASE_CTX, makeOpts(), "error");
+    const prompt = buildCiFixPrompt(BASE_CTX, makeOpts(), makeInspection());
     expect(prompt).toContain("CHANGELOG");
     expect(prompt).toContain("MkDocs");
   });
 
   test("includes user instruction when present", () => {
     const ctx = { ...BASE_CTX, userInstruction: "Ignore lint warnings" };
-    const prompt = buildCiFixPrompt(ctx, makeOpts(), "error");
+    const prompt = buildCiFixPrompt(ctx, makeOpts(), makeInspection());
     expect(prompt).toContain("Additional feedback");
     expect(prompt).toContain("Ignore lint warnings");
   });
 
   test("omits feedback section when no instruction", () => {
-    const prompt = buildCiFixPrompt(BASE_CTX, makeOpts(), "error");
+    const prompt = buildCiFixPrompt(BASE_CTX, makeOpts(), makeInspection());
     expect(prompt).not.toContain("Additional feedback");
+  });
+
+  test("surfaces annotationsIncomplete with a re-fetch hint", () => {
+    const prompt = buildCiFixPrompt(
+      BASE_CTX,
+      makeOpts(),
+      makeInspection({ annotationsIncomplete: true }),
+    );
+    expect(prompt).toContain("annotationsIncomplete");
+    expect(prompt).toContain("partial");
+    // Pagination hints for all three truncation sources: jobs,
+    // workflow-run list, and check-runs listing.
+    expect(prompt).toContain("/actions/runs/<runId>/jobs?per_page=100");
+    // The workflow-run list recovery uses the Actions API directly
+    // (paginated, with the same branch filter the pipeline applied)
+    // because `gh run list --limit 100` is the read that set the
+    // truncation flag in the first place — repeating it would not
+    // recover the runs beyond the 100-cap.
+    expect(prompt).toContain("/actions/runs?branch=");
+    expect(prompt).toContain("/actions/runs?head_sha=");
+    expect(prompt).not.toContain("gh run list --repo");
+    expect(prompt).toContain("/check-runs?per_page=100");
   });
 });
 
@@ -191,7 +255,6 @@ describe("createCiCheckStageHandler", () => {
 
   test("returns error when pending exceeds timeout", async () => {
     const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pending"));
-    // Simulate time passing by advancing Date.now on each delay call.
     let elapsed = 0;
     const originalNow = Date.now;
     const startTime = originalNow();
@@ -217,7 +280,7 @@ describe("createCiCheckStageHandler", () => {
 
   // -- CI fails — agent fix flow ---------------------------------------------
 
-  test("collects failure logs and invokes agent on CI failure", async () => {
+  test("builds inspection context and invokes agent on CI failure", async () => {
     const failedRun = makeCiRun({
       databaseId: 200,
       name: "test-suite",
@@ -226,56 +289,39 @@ describe("createCiCheckStageHandler", () => {
     const getCiStatus = vi
       .fn()
       .mockReturnValue(makeCiStatus("fail", [failedRun]));
-    const collectFailureLogs = vi
-      .fn()
-      .mockReturnValue("Error: test failed at line 42");
+    const buildCiInspectionContext = vi.fn().mockReturnValue(
+      makeInspection({
+        workflowRuns: [{ runId: 200, failedJobs: [{ id: 999, name: "test" }] }],
+      }),
+    );
 
     const agent: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
       resume: vi.fn().mockReturnValue(makeStream(makeResult())),
     };
 
-    const opts = makeOpts({ agent, getCiStatus, collectFailureLogs });
+    const opts = makeOpts({ agent, getCiStatus, buildCiInspectionContext });
     const stage = createCiCheckStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
 
-    expect(collectFailureLogs).toHaveBeenCalledWith(
+    expect(buildCiInspectionContext).toHaveBeenCalledWith(
       "org",
       "repo",
-      expect.objectContaining({ databaseId: 200 }),
+      "abc123",
+      expect.objectContaining({ verdict: "fail" }),
     );
     expect(agent.invoke).toHaveBeenCalledWith(
-      expect.stringContaining("CI Failure Logs"),
+      expect.stringContaining("CI Inspection Context"),
       { cwd: "/tmp/wt" },
     );
-    expect(result.outcome).toBe("not_approved");
-  });
-
-  test("fix prompt includes failure log content", async () => {
-    const failedRun = makeCiRun({
-      databaseId: 300,
-      name: "lint",
-      conclusion: "failure",
-    });
-    const getCiStatus = vi
-      .fn()
-      .mockReturnValue(makeCiStatus("fail", [failedRun]));
-    const collectFailureLogs = vi
-      .fn()
-      .mockReturnValue("lint error: unused variable");
-
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
-      resume: vi.fn().mockReturnValue(makeStream(makeResult())),
-    };
-
-    const opts = makeOpts({ agent, getCiStatus, collectFailureLogs });
-    const stage = createCiCheckStageHandler(opts);
-    await stage.handler(BASE_CTX);
-
     const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as string;
-    expect(invokedPrompt).toContain("lint error: unused variable");
+    // Pointer block is present.
+    expect(invokedPrompt).toContain("200");
+    expect(invokedPrompt).toContain("999");
+    // No raw log content was inlined.
+    expect(invokedPrompt).not.toContain("CI Failure Logs");
+    expect(result.outcome).toBe("not_approved");
   });
 
   test("returns not_approved after agent fix to trigger engine loop", async () => {
@@ -284,9 +330,8 @@ describe("createCiCheckStageHandler", () => {
       .mockReturnValue(
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       );
-    const collectFailureLogs = vi.fn().mockReturnValue("error log");
 
-    const opts = makeOpts({ getCiStatus, collectFailureLogs });
+    const opts = makeOpts({ getCiStatus });
     const stage = createCiCheckStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
 
@@ -298,7 +343,6 @@ describe("createCiCheckStageHandler", () => {
     const getCiStatus = vi
       .fn()
       .mockReturnValue(makeCiStatus("fail", [failedRun]));
-    const collectFailureLogs = vi.fn().mockReturnValue("error");
 
     const agent: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
@@ -306,7 +350,7 @@ describe("createCiCheckStageHandler", () => {
     };
 
     const ctx = { ...BASE_CTX, userInstruction: "Skip the flaky e2e test" };
-    const opts = makeOpts({ agent, getCiStatus, collectFailureLogs });
+    const opts = makeOpts({ agent, getCiStatus });
     const stage = createCiCheckStageHandler(opts);
     await stage.handler(ctx);
 
@@ -323,7 +367,6 @@ describe("createCiCheckStageHandler", () => {
       .mockReturnValue(
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       );
-    const collectFailureLogs = vi.fn().mockReturnValue("error");
 
     const agent: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(
@@ -339,94 +382,13 @@ describe("createCiCheckStageHandler", () => {
       resume: vi.fn(),
     };
 
-    const opts = makeOpts({ agent, getCiStatus, collectFailureLogs });
+    const opts = makeOpts({ agent, getCiStatus });
     const stage = createCiCheckStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
 
     expect(result.outcome).toBe("error");
     expect(result.message).toContain("crash");
     expect(result.message).toContain("CI fix");
-  });
-
-  test("handles no detailed logs gracefully", async () => {
-    const failedRun = makeCiRun({ conclusion: "failure" });
-    const getCiStatus = vi
-      .fn()
-      .mockReturnValue(makeCiStatus("fail", [failedRun]));
-    const collectFailureLogs = vi.fn().mockReturnValue("");
-
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
-      resume: vi.fn().mockReturnValue(makeStream(makeResult())),
-    };
-
-    const opts = makeOpts({ agent, getCiStatus, collectFailureLogs });
-    const stage = createCiCheckStageHandler(opts);
-    await stage.handler(BASE_CTX);
-
-    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
-      .calls[0][0] as string;
-    expect(invokedPrompt).toContain("No detailed failure logs available");
-  });
-
-  test("collects logs from multiple failed runs", async () => {
-    const runs = [
-      makeCiRun({ databaseId: 200, name: "lint", conclusion: "failure" }),
-      makeCiRun({ databaseId: 201, name: "test", conclusion: "failure" }),
-      makeCiRun({ databaseId: 202, name: "build", conclusion: "success" }),
-    ];
-    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("fail", runs));
-    const collectFailureLogs = vi
-      .fn()
-      .mockReturnValueOnce("lint: unused var")
-      .mockReturnValueOnce("test: assertion failed");
-
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
-      resume: vi.fn(),
-    };
-
-    const opts = makeOpts({ agent, getCiStatus, collectFailureLogs });
-    const stage = createCiCheckStageHandler(opts);
-    await stage.handler(BASE_CTX);
-
-    // Should collect from the two failed runs only
-    expect(collectFailureLogs).toHaveBeenCalledTimes(2);
-    expect(collectFailureLogs).toHaveBeenCalledWith(
-      "org",
-      "repo",
-      expect.objectContaining({ databaseId: 200 }),
-    );
-    expect(collectFailureLogs).toHaveBeenCalledWith(
-      "org",
-      "repo",
-      expect.objectContaining({ databaseId: 201 }),
-    );
-
-    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
-      .calls[0][0] as string;
-    expect(invokedPrompt).toContain("lint: unused var");
-    expect(invokedPrompt).toContain("test: assertion failed");
-  });
-
-  test("handles fail verdict with no matching failed runs gracefully", async () => {
-    // Cancelled runs: verdict is "fail" but conclusion is "cancelled"
-    const runs = [makeCiRun({ conclusion: "cancelled" })];
-    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("fail", runs));
-    const collectFailureLogs = vi.fn().mockReturnValue("");
-
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
-      resume: vi.fn(),
-    };
-
-    const opts = makeOpts({ agent, getCiStatus, collectFailureLogs });
-    const stage = createCiCheckStageHandler(opts);
-    await stage.handler(BASE_CTX);
-
-    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
-      .calls[0][0] as string;
-    expect(invokedPrompt).toContain("No detailed failure logs available");
   });
 
   test("retries on transient getCiStatus error then succeeds", async () => {
@@ -475,22 +437,6 @@ describe("createCiCheckStageHandler", () => {
 
     warnSpy.mockRestore();
     vi.restoreAllMocks();
-  });
-
-  test("propagates collectFailureLogs exception as thrown error", async () => {
-    const getCiStatus = vi
-      .fn()
-      .mockReturnValue(
-        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
-      );
-    const collectFailureLogs = vi.fn().mockImplementation(() => {
-      throw new Error("gh CLI failed");
-    });
-
-    const opts = makeOpts({ getCiStatus, collectFailureLogs });
-    const stage = createCiCheckStageHandler(opts);
-
-    await expect(stage.handler(BASE_CTX)).rejects.toThrow("gh CLI failed");
   });
 
   // -- message preservation --------------------------------------------------
@@ -608,7 +554,6 @@ describe("createCiCheckStageHandler", () => {
       .mockReturnValue(
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       );
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
     const fixResponse = "Fixed the linting issue and pushed.";
 
     const agent: AgentAdapter = {
@@ -618,76 +563,77 @@ describe("createCiCheckStageHandler", () => {
       resume: vi.fn(),
     };
 
-    const opts = makeOpts({ agent, getCiStatus, collectFailureLogs });
+    const opts = makeOpts({ agent, getCiStatus });
     const stage = createCiCheckStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
 
     expect(result.message).toBe(fixResponse);
   });
 
-  // -- CI passes with findings — agent reviews --------------------------------
+  // -- CI passes with annotations — agent reviews -----------------------------
 
-  test("presents findings to agent when CI passes with annotations", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "Unused variable",
-        file: "src/app.ts",
-        line: 10,
-        rule: "no-unused-vars",
-        checkRunId: 500,
-        checkRunName: "ESLint",
-        commitSha: "abc123",
-      },
-    ];
+  test("presents pointer-only review prompt when CI passes with annotations", async () => {
+    const checkRun = makeCiRun({
+      databaseId: 500,
+      name: "ESLint",
+      source: "check",
+      annotationsCount: 3,
+    });
     const getCiStatus = vi
       .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+      .mockReturnValue(makeCiStatus("pass", [checkRun]));
     const getHeadSha = vi.fn().mockReturnValue("same-sha");
+    const buildCiInspectionContext = vi.fn().mockReturnValue(
+      makeInspection({
+        checkRunIds: [500],
+        hasAnnotations: true,
+      }),
+    );
 
     const agent: AgentAdapter = {
       invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
       resume: vi.fn().mockReturnValue(makeStream(makeResult())),
     };
 
-    const opts = makeOpts({ agent, getCiStatus, getHeadSha });
+    const opts = makeOpts({
+      agent,
+      getCiStatus,
+      getHeadSha,
+      buildCiInspectionContext,
+    });
     const stage = createCiCheckStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
 
-    // Agent was invoked with the findings prompt (not the fix prompt).
     expect(agent.invoke).toHaveBeenCalledWith(
-      expect.stringContaining("CI Findings"),
+      expect.stringContaining("CI Inspection Context"),
       expect.any(Object),
     );
     const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as string;
-    expect(invokedPrompt).toContain("Unused variable");
-    expect(invokedPrompt).toContain("src/app.ts:10");
-    expect(invokedPrompt).toContain("no-unused-vars");
+    // Check run ID is referenced for the agent to fetch.
+    expect(invokedPrompt).toContain("500");
+    // No serialised findings inlined.
+    expect(invokedPrompt).not.toContain("CI Findings");
+    // Triage block present (since we always emit it on the findings prompt).
+    expect(invokedPrompt).toContain("Triage of code scanning alerts");
+    expect(invokedPrompt).toContain("dismissed_reason=false positive");
 
-    // SHA unchanged → findings acknowledged, completed.
     expect(result.outcome).toBe("completed");
     expect(result.message).toContain("Findings were reviewed");
   });
 
   test("returns not_approved when agent pushes a fix for findings", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "Unused import",
-        file: "src/index.ts",
-        line: 1,
-        checkRunId: 600,
-        checkRunName: "Lint",
-        commitSha: "abc123",
-      },
-    ];
+    const checkRun = makeCiRun({
+      databaseId: 600,
+      source: "check",
+      annotationsCount: 1,
+    });
     const getCiStatus = vi
       .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+      .mockReturnValue(makeCiStatus("pass", [checkRun]));
 
     let shaCall = 0;
-    const shas = ["before-sha", "after-sha"];
+    const shas = ["before-sha", "before-sha", "after-sha"];
     const getHeadSha = vi.fn().mockImplementation(() => shas[shaCall++]);
 
     const agent: AgentAdapter = {
@@ -708,20 +654,14 @@ describe("createCiCheckStageHandler", () => {
   });
 
   test("returns error when agent fails during findings review", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "Unused variable",
-        file: "src/app.ts",
-        line: 10,
-        checkRunId: 500,
-        checkRunName: "ESLint",
-        commitSha: "abc123",
-      },
-    ];
+    const checkRun = makeCiRun({
+      databaseId: 500,
+      source: "check",
+      annotationsCount: 2,
+    });
     const getCiStatus = vi
       .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+      .mockReturnValue(makeCiStatus("pass", [checkRun]));
     const getHeadSha = vi.fn().mockReturnValue("sha");
 
     const agent: AgentAdapter = {
@@ -746,7 +686,7 @@ describe("createCiCheckStageHandler", () => {
     expect(result.message).toContain("findings review");
   });
 
-  test("returns completed with clean pass when no findings", async () => {
+  test("returns completed with clean pass when no annotations", async () => {
     const getCiStatus = vi
       .fn()
       .mockReturnValue(makeCiStatus("pass", [makeCiRun()]));
@@ -765,50 +705,15 @@ describe("createCiCheckStageHandler", () => {
     expect(agent.invoke).not.toHaveBeenCalled();
   });
 
-  test("routes to findings review when findingsIncomplete even with no findings", async () => {
-    const getCiStatus = vi
-      .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], [], true));
-    const getHeadSha = vi.fn().mockReturnValue("same-sha");
-
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
-      resume: vi.fn().mockReturnValue(makeStream(makeResult())),
-    };
-
-    const opts = makeOpts({ agent, getCiStatus, getHeadSha });
-    const stage = createCiCheckStageHandler(opts);
-    const result = await stage.handler(BASE_CTX);
-
-    // Agent was invoked — not the clean-pass exit.
-    expect(agent.invoke).toHaveBeenCalledWith(
-      expect.stringContaining("CI Findings"),
-      expect.any(Object),
-    );
-    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
-      .calls[0][0] as string;
-    expect(invokedPrompt).toContain("annotations could not be fetched");
-
-    // SHA unchanged → findings acknowledged.
-    expect(result.outcome).toBe("completed");
-    expect(result.message).toContain("Findings were reviewed");
-  });
-
   test("includes user instruction in findings prompt", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "Unused variable",
-        file: "src/app.ts",
-        line: 10,
-        checkRunId: 500,
-        checkRunName: "ESLint",
-        commitSha: "abc123",
-      },
-    ];
+    const checkRun = makeCiRun({
+      databaseId: 500,
+      source: "check",
+      annotationsCount: 1,
+    });
     const getCiStatus = vi
       .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+      .mockReturnValue(makeCiStatus("pass", [checkRun]));
     const getHeadSha = vi.fn().mockReturnValue("same-sha");
 
     const agent: AgentAdapter = {
@@ -833,352 +738,117 @@ describe("createCiCheckStageHandler", () => {
 // ---- buildCiFindingsPrompt --------------------------------------------------
 
 describe("buildCiFindingsPrompt", () => {
-  const sampleFindings: CiFinding[] = [
-    {
-      level: "warning",
-      message: "Unused variable 'x'",
-      file: "src/app.ts",
-      line: 10,
-      rule: "no-unused-vars",
-      checkRunId: 500,
-      checkRunName: "ESLint",
-      commitSha: "abc123",
-    },
-    {
-      level: "notice",
-      message: "Consider simplifying",
-      file: "src/util.ts",
-      line: 25,
-      checkRunId: 500,
-      checkRunName: "ESLint",
-      commitSha: "abc123",
-    },
-  ];
-
-  test("omits redundant repo headers", () => {
-    const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), sampleFindings);
-    expect(prompt).not.toContain("Owner: org");
-    expect(prompt).not.toContain("Repo: repo");
-    expect(prompt).not.toContain("Branch: issue-42");
-    expect(prompt).not.toContain("Worktree:");
-  });
-
   test("includes issue details", () => {
-    const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), sampleFindings);
+    const prompt = buildCiFindingsPrompt(
+      BASE_CTX,
+      makeOpts(),
+      makeInspection({ hasAnnotations: true, checkRunIds: [500] }),
+    );
     expect(prompt).toContain("Issue #42: Fix the widget");
     expect(prompt).toContain("The widget is broken.");
   });
 
-  test("includes structured findings", () => {
-    const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), sampleFindings);
-    expect(prompt).toContain("CI Findings");
-    expect(prompt).toContain(
-      "src/app.ts:10: [warning] Unused variable 'x' (no-unused-vars)",
+  test("includes the inspection context block, not a serialised findings list", () => {
+    const prompt = buildCiFindingsPrompt(
+      BASE_CTX,
+      makeOpts(),
+      makeInspection({ hasAnnotations: true, checkRunIds: [100, 200] }),
     );
-    expect(prompt).toContain("src/util.ts:25: [notice] Consider simplifying");
+    expect(prompt).toContain("CI Inspection Context");
+    expect(prompt).toContain("100");
+    expect(prompt).toContain("200");
+    // Old "CI Findings" header is gone — replaced by pointer + fetch hints.
+    expect(prompt).not.toContain("## CI Findings");
   });
 
-  test("groups findings by check run", () => {
-    const mixed: CiFinding[] = [
-      {
-        level: "warning",
-        message: "Issue A",
-        file: "a.ts",
-        line: 1,
-        checkRunId: 100,
-        checkRunName: "Lint",
-        commitSha: "abc123",
-      },
-      {
-        level: "warning",
-        message: "Issue B",
-        file: "b.ts",
-        line: 2,
-        checkRunId: 200,
-        checkRunName: "CodeQL",
-        commitSha: "abc123",
-      },
-    ];
-    const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), mixed);
-    expect(prompt).toContain("Lint (check run 100)");
-    expect(prompt).toContain("CodeQL (check run 200)");
+  test("hints at gh fetch commands so the agent reads annotations itself", () => {
+    const prompt = buildCiFindingsPrompt(
+      BASE_CTX,
+      makeOpts(),
+      makeInspection({ hasAnnotations: true, checkRunIds: [42] }),
+    );
+    expect(prompt).toContain("gh api");
+    expect(prompt).toContain("/check-runs/");
+    expect(prompt).toContain("/annotations");
+    expect(prompt).toContain("/code-scanning/alerts");
   });
 
-  test("includes doc consistency instructions", () => {
-    const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), sampleFindings);
-    expect(prompt).toContain("CHANGELOG");
-    expect(prompt).toContain("MkDocs");
-  });
-
-  test("includes PR sync instructions", () => {
-    const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), sampleFindings);
+  test("includes triage block with dismiss instructions", () => {
+    const prompt = buildCiFindingsPrompt(
+      BASE_CTX,
+      makeOpts(),
+      makeInspection({ hasAnnotations: true, checkRunIds: [42] }),
+    );
+    expect(prompt).toContain("Triage of code scanning alerts");
+    expect(prompt).toContain("Evaluation criteria");
+    expect(prompt).toContain("real issue");
+    expect(prompt).toContain("false positive");
+    expect(prompt).toContain("gh api -X PATCH");
+    expect(prompt).toContain("dismissed_reason=false positive");
     expect(prompt).toContain("gh pr view");
-    expect(prompt).toContain("gh pr edit");
   });
 
-  test("includes incomplete note when findingsIncomplete is true", () => {
+  test("flags annotationsIncomplete with a re-fetch hint", () => {
     const prompt = buildCiFindingsPrompt(
       BASE_CTX,
       makeOpts(),
-      sampleFindings,
-      true,
+      makeInspection({
+        hasAnnotations: true,
+        annotationsIncomplete: true,
+        checkRunIds: [10],
+      }),
     );
-    expect(prompt).toContain("annotations could not be fetched");
-    expect(prompt).toContain("may be incomplete");
+    expect(prompt).toContain("annotationsIncomplete");
+    expect(prompt).toContain("partial");
+    // Pagination hints for all three truncation sources: jobs,
+    // workflow-run list, and check-runs listing.
+    expect(prompt).toContain("/actions/runs/<runId>/jobs?per_page=100");
+    expect(prompt).toContain("/actions/runs?branch=");
+    expect(prompt).toContain("/actions/runs?head_sha=");
+    expect(prompt).not.toContain("gh run list --repo");
+    expect(prompt).toContain("/check-runs?per_page=100");
   });
 
-  test("omits incomplete note when findingsIncomplete is false", () => {
+  test("hint covers check-run listing truncation when checkRunIds is empty", () => {
+    // Reproduces the case where ciStatus.runsIncomplete came from a
+    // truncated check-runs page: visible runs have no annotations,
+    // buildCiInspectionContext forces hasAnnotations: true and
+    // annotationsIncomplete: true with checkRunIds: [].  The agent
+    // needs the check-runs pagination hint to recover.
     const prompt = buildCiFindingsPrompt(
       BASE_CTX,
       makeOpts(),
-      sampleFindings,
-      false,
+      makeInspection({
+        hasAnnotations: true,
+        annotationsIncomplete: true,
+        checkRunIds: [],
+      }),
     );
-    expect(prompt).not.toContain("annotations could not be fetched");
+    expect(prompt).toContain("/check-runs?per_page=100");
   });
 
   test("includes user instruction when present", () => {
     const ctx = { ...BASE_CTX, userInstruction: "Focus on warnings only" };
-    const prompt = buildCiFindingsPrompt(ctx, makeOpts(), sampleFindings);
+    const prompt = buildCiFindingsPrompt(
+      ctx,
+      makeOpts(),
+      makeInspection({ hasAnnotations: true, checkRunIds: [1] }),
+    );
     expect(prompt).toContain("Additional feedback");
     expect(prompt).toContain("Focus on warnings only");
   });
 
-  test("omits feedback section when no instruction", () => {
-    const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), sampleFindings);
-    expect(prompt).not.toContain("Additional feedback");
-  });
-
-  test("includes triage instructions when correlated findings have alerts", () => {
-    const correlated = [
-      {
-        finding: sampleFindings[0],
-        alertNumber: 42,
-        alertUrl: "https://github.com/org/repo/security/code-scanning/42",
-      },
-      { finding: sampleFindings[1] },
-    ];
+  test("stays bounded for many check runs", () => {
     const prompt = buildCiFindingsPrompt(
       BASE_CTX,
       makeOpts(),
-      sampleFindings,
-      false,
-      correlated,
+      makeInspection({
+        hasAnnotations: true,
+        checkRunIds: Array.from({ length: 200 }, (_, i) => i),
+      }),
     );
-    expect(prompt).toContain("CodeQL Triage");
-    expect(prompt).toContain("Evaluation criteria");
-    expect(prompt).toContain("real issue");
-    expect(prompt).toContain("false positive");
-    expect(prompt).toContain("Alert #42");
-    expect(prompt).toContain("[alert #42]");
-    expect(prompt).toContain("gh api -X PATCH");
-    expect(prompt).toContain("dismissed_reason=false positive");
-  });
-
-  test("omits triage instructions when no alerts are correlated", () => {
-    const correlated = [
-      { finding: sampleFindings[0] },
-      { finding: sampleFindings[1] },
-    ];
-    const prompt = buildCiFindingsPrompt(
-      BASE_CTX,
-      makeOpts(),
-      sampleFindings,
-      false,
-      correlated,
-    );
-    expect(prompt).not.toContain("CodeQL Triage");
-    expect(prompt).not.toContain("gh api -X PATCH");
-  });
-
-  test("omits triage section when correlated is undefined", () => {
-    const prompt = buildCiFindingsPrompt(BASE_CTX, makeOpts(), sampleFindings);
-    expect(prompt).not.toContain("CodeQL Triage");
-  });
-
-  test("includes alert number in findings list when correlated", () => {
-    const correlated = [
-      {
-        finding: sampleFindings[0],
-        alertNumber: 7,
-        alertUrl: "https://example.com",
-      },
-    ];
-    const prompt = buildCiFindingsPrompt(
-      BASE_CTX,
-      makeOpts(),
-      [sampleFindings[0]],
-      false,
-      correlated,
-    );
-    expect(prompt).toContain("[alert #7]");
-  });
-});
-
-// ---- createCiCheckStageHandler — triage integration -------------------------
-
-describe("createCiCheckStageHandler — triage", () => {
-  test("fetches code scanning alerts when CI passes with findings", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "SQL injection",
-        file: "src/db.ts",
-        line: 42,
-        rule: "js/sql-injection",
-        checkRunId: 500,
-        checkRunName: "CodeQL",
-        commitSha: "abc123",
-      },
-    ];
-    const getCiStatus = vi
-      .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
-    const getHeadSha = vi.fn().mockReturnValue("same-sha");
-    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([]);
-
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
-      resume: vi.fn().mockReturnValue(makeStream(makeResult())),
-    };
-
-    const opts = makeOpts({
-      agent,
-      getCiStatus,
-      getHeadSha,
-      fetchCodeScanningAlerts,
-    });
-    const stage = createCiCheckStageHandler(opts);
-    await stage.handler(BASE_CTX);
-
-    expect(fetchCodeScanningAlerts).toHaveBeenCalledWith(
-      "org",
-      "repo",
-      "issue-42",
-    );
-  });
-
-  test("includes triage instructions when alerts are correlated", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "SQL injection",
-        file: "src/db.ts",
-        line: 42,
-        rule: "js/sql-injection",
-        checkRunId: 500,
-        checkRunName: "CodeQL",
-        commitSha: "abc123",
-      },
-    ];
-    const getCiStatus = vi
-      .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
-    const getHeadSha = vi.fn().mockReturnValue("same-sha");
-    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([
-      {
-        number: 10,
-        rule: { id: "js/sql-injection" },
-        tool: { name: "CodeQL" },
-        most_recent_instance: {
-          location: { path: "src/db.ts", start_line: 42 },
-          commit_sha: "abc123",
-        },
-        state: "open",
-        html_url: "https://github.com/org/repo/security/code-scanning/10",
-      },
-    ]);
-
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
-      resume: vi.fn().mockReturnValue(makeStream(makeResult())),
-    };
-
-    const opts = makeOpts({
-      agent,
-      getCiStatus,
-      getHeadSha,
-      fetchCodeScanningAlerts,
-    });
-    const stage = createCiCheckStageHandler(opts);
-    await stage.handler(BASE_CTX);
-
-    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
-      .calls[0][0] as string;
-    expect(invokedPrompt).toContain("CodeQL Triage");
-    expect(invokedPrompt).toContain("Alert #10");
-    expect(invokedPrompt).toContain("[alert #10]");
-    expect(invokedPrompt).toContain("dismissed_reason=false positive");
-  });
-
-  test("omits triage when no code scanning alerts are found", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "Unused variable",
-        file: "src/app.ts",
-        line: 10,
-        rule: "no-unused-vars",
-        checkRunId: 500,
-        checkRunName: "ESLint",
-        commitSha: "abc123",
-      },
-    ];
-    const getCiStatus = vi
-      .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
-    const getHeadSha = vi.fn().mockReturnValue("same-sha");
-    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([]);
-
-    const agent: AgentAdapter = {
-      invoke: vi.fn().mockReturnValue(makeStream(makeResult())),
-      resume: vi.fn().mockReturnValue(makeStream(makeResult())),
-    };
-
-    const opts = makeOpts({
-      agent,
-      getCiStatus,
-      getHeadSha,
-      fetchCodeScanningAlerts,
-    });
-    const stage = createCiCheckStageHandler(opts);
-    await stage.handler(BASE_CTX);
-
-    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
-      .calls[0][0] as string;
-    expect(invokedPrompt).not.toContain("CodeQL Triage");
-  });
-
-  test("does not fetch alerts on clean pass", async () => {
-    const getCiStatus = vi
-      .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()]));
-    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([]);
-
-    const opts = makeOpts({ getCiStatus, fetchCodeScanningAlerts });
-    const stage = createCiCheckStageHandler(opts);
-    await stage.handler(BASE_CTX);
-
-    expect(fetchCodeScanningAlerts).not.toHaveBeenCalled();
-  });
-
-  test("does not fetch alerts on CI failure", async () => {
-    const getCiStatus = vi
-      .fn()
-      .mockReturnValue(
-        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
-      );
-    const collectFailureLogs = vi.fn().mockReturnValue("error");
-    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([]);
-
-    const opts = makeOpts({
-      getCiStatus,
-      collectFailureLogs,
-      fetchCodeScanningAlerts,
-    });
-    const stage = createCiCheckStageHandler(opts);
-    await stage.handler(BASE_CTX);
-
-    expect(fetchCodeScanningAlerts).not.toHaveBeenCalled();
+    // 200 check-run IDs should still be small compared to inlining
+    // 200 alert payloads.
+    expect(prompt.length).toBeLessThan(8000);
   });
 });

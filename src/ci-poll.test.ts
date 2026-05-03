@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
-import type { CiFinding, CiRun, CiStatus, CiVerdict } from "./ci.js";
+import type { CiInspectionContext, CiRun, CiStatus, CiVerdict } from "./ci.js";
 import { type CiPollOptions, pollCiAndFix } from "./ci-poll.js";
 import type { StageContext } from "./pipeline.js";
 import {
@@ -44,13 +44,36 @@ function makeCiRun(overrides: Partial<CiRun> = {}): CiRun {
   };
 }
 
-function makeCiStatus(
-  verdict: CiVerdict,
-  runs: CiRun[] = [],
-  findings: CiFinding[] = [],
-  findingsIncomplete = false,
-): CiStatus {
-  return { verdict, runs, findings, findingsIncomplete };
+function makeCiStatus(verdict: CiVerdict, runs: CiRun[] = []): CiStatus {
+  return { verdict, runs };
+}
+
+function makeInspection(
+  overrides: Partial<CiInspectionContext> = {},
+): CiInspectionContext {
+  return {
+    workflowRuns: [],
+    checkRunIds: [],
+    hasAnnotations: false,
+    annotationsIncomplete: false,
+    ref: "abc123",
+    ...overrides,
+  };
+}
+
+/** Helper: a check run that has at least one annotation. */
+function annotatedCheckRun(overrides: Partial<CiRun> = {}): CiRun {
+  return {
+    databaseId: 500,
+    name: "ESLint",
+    status: "completed",
+    conclusion: "success",
+    headBranch: "issue-42",
+    headSha: "abc123",
+    source: "check",
+    annotationsCount: 1,
+    ...overrides,
+  };
 }
 
 const BASE_CTX: StageContext = {
@@ -104,9 +127,8 @@ function makeOpts(overrides: Partial<CiPollOptions> = {}): CiPollOptions {
     issueTitle: "Fix the widget",
     issueBody: "The widget is broken.",
     getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
-    collectFailureLogs: vi.fn().mockReturnValue(""),
     getHeadSha: vi.fn().mockReturnValue("abc123"),
-    fetchCodeScanningAlerts: vi.fn().mockReturnValue([]),
+    buildCiInspectionContext: vi.fn().mockReturnValue(makeInspection()),
     delay: vi.fn().mockResolvedValue(undefined),
     pollIntervalMs: 100,
     pollTimeoutMs: 1000,
@@ -177,7 +199,7 @@ describe("pollCiAndFix", () => {
 
   // -- CI fails then fix succeeds ---------------------------------------------
 
-  test("invokes agent to fix on CI failure, passes on next poll", async () => {
+  test("invokes agent with pointer-only context on CI failure, passes on next poll", async () => {
     const failedRun = makeCiRun({
       databaseId: 200,
       name: "test-suite",
@@ -187,26 +209,32 @@ describe("pollCiAndFix", () => {
       .fn()
       .mockReturnValueOnce(makeCiStatus("fail", [failedRun]))
       .mockReturnValueOnce(makeCiStatus("pass"));
-    const collectFailureLogs = vi
-      .fn()
-      .mockReturnValue("Error: test failed at line 42");
+    const buildCiInspectionContext = vi.fn().mockReturnValue(
+      makeInspection({
+        workflowRuns: [{ runId: 200, failedJobs: [{ id: 999, name: "test" }] }],
+      }),
+    );
 
     const agent = makeAgent();
     const result = await pollCiAndFix(
-      makeOpts({ agent, getCiStatus, collectFailureLogs }),
+      makeOpts({ agent, getCiStatus, buildCiInspectionContext }),
     );
 
     expect(result.passed).toBe(true);
     expect(agent.invoke).toHaveBeenCalledTimes(1);
-    expect(collectFailureLogs).toHaveBeenCalledWith(
+    expect(buildCiInspectionContext).toHaveBeenCalledWith(
       "org",
       "repo",
-      expect.objectContaining({ databaseId: 200 }),
+      "abc123",
+      expect.objectContaining({ verdict: "fail" }),
     );
     const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as string;
-    expect(invokedPrompt).toContain("CI Failure Logs");
-    expect(invokedPrompt).toContain("Error: test failed at line 42");
+    expect(invokedPrompt).toContain("CI Inspection Context");
+    expect(invokedPrompt).toContain("200");
+    expect(invokedPrompt).toContain("999");
+    // No raw logs are inlined.
+    expect(invokedPrompt).not.toContain("CI Failure Logs");
   });
 
   // -- initialAgentASessionId seeds the loop's session tracker --------------
@@ -218,14 +246,12 @@ describe("pollCiAndFix", () => {
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       )
       .mockReturnValueOnce(makeCiStatus("pass"));
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
 
     const agent = makeAgent();
     await pollCiAndFix(
       makeOpts({
         agent,
         getCiStatus,
-        collectFailureLogs,
         initialAgentASessionId: "sess-live",
       }),
     );
@@ -247,7 +273,6 @@ describe("pollCiAndFix", () => {
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       )
       .mockReturnValueOnce(makeCiStatus("pass"));
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
 
     const agent = makeAgent();
     await pollCiAndFix(
@@ -255,7 +280,6 @@ describe("pollCiAndFix", () => {
         ctx: { ...BASE_CTX, savedAgentASessionId: "sess-stale" },
         agent,
         getCiStatus,
-        collectFailureLogs,
         initialAgentASessionId: "sess-live",
       }),
     );
@@ -273,16 +297,15 @@ describe("pollCiAndFix", () => {
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       )
       .mockReturnValueOnce(makeCiStatus("pass"));
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
 
     const agent = makeAgent();
-    await pollCiAndFix(makeOpts({ agent, getCiStatus, collectFailureLogs }));
+    await pollCiAndFix(makeOpts({ agent, getCiStatus }));
 
     expect(agent.invoke).toHaveBeenCalledTimes(1);
     expect(agent.resume).not.toHaveBeenCalled();
     const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as string;
-    expect(invokedPrompt).toContain("CI Failure Logs");
+    expect(invokedPrompt).toContain("CI Inspection Context");
   });
 
   // -- CI fails, all fix attempts exhausted -----------------------------------
@@ -293,7 +316,6 @@ describe("pollCiAndFix", () => {
       .mockReturnValue(
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       );
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
 
     const { agent, totalCalls } = makeSequencedAgent([
       makeResult({ responseText: "Fix 1." }),
@@ -302,7 +324,7 @@ describe("pollCiAndFix", () => {
     ]);
 
     const result = await pollCiAndFix(
-      makeOpts({ agent, getCiStatus, collectFailureLogs, maxFixAttempts: 3 }),
+      makeOpts({ agent, getCiStatus, maxFixAttempts: 3 }),
     );
 
     expect(result.passed).toBe(false);
@@ -318,7 +340,6 @@ describe("pollCiAndFix", () => {
       .mockReturnValue(
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       );
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
     const agent = makeAgent(
       makeResult({
         status: "error",
@@ -328,9 +349,7 @@ describe("pollCiAndFix", () => {
       }),
     );
 
-    const result = await pollCiAndFix(
-      makeOpts({ agent, getCiStatus, collectFailureLogs }),
-    );
+    const result = await pollCiAndFix(makeOpts({ agent, getCiStatus }));
 
     expect(result.passed).toBe(false);
     expect(result.message).toContain("Agent error during CI fix");
@@ -345,7 +364,6 @@ describe("pollCiAndFix", () => {
       .mockReturnValue(
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       );
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
     const agent = makeAgent(
       makeResult({
         status: "error",
@@ -359,7 +377,7 @@ describe("pollCiAndFix", () => {
 
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await pollCiAndFix(makeOpts({ agent, getCiStatus, collectFailureLogs }));
+    await pollCiAndFix(makeOpts({ agent, getCiStatus }));
 
     expect(errorSpy).toHaveBeenCalledTimes(1);
     const logged = errorSpy.mock.calls[0][0] as string;
@@ -372,9 +390,9 @@ describe("pollCiAndFix", () => {
     errorSpy.mockRestore();
   });
 
-  // -- multiple failed runs with logs -----------------------------------------
+  // -- multiple failed runs are surfaced as pointers --------------------------
 
-  test("collects logs from multiple failed runs", async () => {
+  test("inspection context is built once per failure round, with the full status", async () => {
     const runs = [
       makeCiRun({ databaseId: 200, name: "lint", conclusion: "failure" }),
       makeCiRun({ databaseId: 201, name: "test", conclusion: "failure" }),
@@ -384,73 +402,32 @@ describe("pollCiAndFix", () => {
       .fn()
       .mockReturnValueOnce(makeCiStatus("fail", runs))
       .mockReturnValueOnce(makeCiStatus("pass"));
-    const collectFailureLogs = vi
-      .fn()
-      .mockReturnValueOnce("lint: unused var")
-      .mockReturnValueOnce("test: assertion failed");
+    const buildCiInspectionContext = vi.fn().mockReturnValue(
+      makeInspection({
+        workflowRuns: [
+          { runId: 200, failedJobs: [{ id: 1, name: "lint" }] },
+          { runId: 201, failedJobs: [{ id: 2, name: "test" }] },
+        ],
+      }),
+    );
 
     const agent = makeAgent();
-    await pollCiAndFix(makeOpts({ agent, getCiStatus, collectFailureLogs }));
-
-    expect(collectFailureLogs).toHaveBeenCalledTimes(2);
-    expect(collectFailureLogs).toHaveBeenCalledWith(
-      "org",
-      "repo",
-      expect.objectContaining({ databaseId: 200 }),
-    );
-    expect(collectFailureLogs).toHaveBeenCalledWith(
-      "org",
-      "repo",
-      expect.objectContaining({ databaseId: 201 }),
+    await pollCiAndFix(
+      makeOpts({ agent, getCiStatus, buildCiInspectionContext }),
     );
 
+    expect(buildCiInspectionContext).toHaveBeenCalledTimes(1);
     const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as string;
-    expect(invokedPrompt).toContain("lint: unused var");
-    expect(invokedPrompt).toContain("test: assertion failed");
-  });
-
-  // -- no detailed failure logs -----------------------------------------------
-
-  test("handles empty failure logs gracefully", async () => {
-    const runs = [makeCiRun({ conclusion: "failure" })];
-    const getCiStatus = vi
-      .fn()
-      .mockReturnValueOnce(makeCiStatus("fail", runs))
-      .mockReturnValueOnce(makeCiStatus("pass"));
-    const collectFailureLogs = vi.fn().mockReturnValue("");
-
-    const agent = makeAgent();
-    await pollCiAndFix(makeOpts({ agent, getCiStatus, collectFailureLogs }));
-
-    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
-      .calls[0][0] as string;
-    expect(invokedPrompt).toContain("No detailed failure logs available");
-  });
-
-  // -- cancelled runs are treated as failures ---------------------------------
-
-  test("collects logs from cancelled runs", async () => {
-    const runs = [makeCiRun({ databaseId: 300, conclusion: "cancelled" })];
-    const getCiStatus = vi
-      .fn()
-      .mockReturnValueOnce(makeCiStatus("fail", runs))
-      .mockReturnValueOnce(makeCiStatus("pass"));
-    const collectFailureLogs = vi.fn().mockReturnValue("cancelled log");
-
-    const agent = makeAgent();
-    await pollCiAndFix(makeOpts({ agent, getCiStatus, collectFailureLogs }));
-
-    expect(collectFailureLogs).toHaveBeenCalledWith(
-      "org",
-      "repo",
-      expect.objectContaining({ databaseId: 300 }),
-    );
+    expect(invokedPrompt).toContain("200");
+    expect(invokedPrompt).toContain("201");
+    // Build never inlines log text.
+    expect(invokedPrompt).not.toContain("CI Failure Logs");
   });
 
   // -- check run failure triggers fix -----------------------------------------
 
-  test("collects logs from failed check runs with source check", async () => {
+  test("check-run failures are surfaced through buildCiInspectionContext", async () => {
     const runs = [
       makeCiRun({
         databaseId: 500,
@@ -463,21 +440,24 @@ describe("pollCiAndFix", () => {
       .fn()
       .mockReturnValueOnce(makeCiStatus("fail", runs))
       .mockReturnValueOnce(makeCiStatus("pass"));
-    const collectFailureLogs = vi
+    const buildCiInspectionContext = vi
       .fn()
-      .mockReturnValue("CodeQL: SQL injection found");
+      .mockReturnValue(makeInspection({ checkRunIds: [500] }));
 
     const agent = makeAgent();
-    await pollCiAndFix(makeOpts({ agent, getCiStatus, collectFailureLogs }));
+    await pollCiAndFix(
+      makeOpts({ agent, getCiStatus, buildCiInspectionContext }),
+    );
 
-    expect(collectFailureLogs).toHaveBeenCalledWith(
+    expect(buildCiInspectionContext).toHaveBeenCalledWith(
       "org",
       "repo",
-      expect.objectContaining({ databaseId: 500, source: "check" }),
+      "abc123",
+      expect.objectContaining({ verdict: "fail" }),
     );
     const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as string;
-    expect(invokedPrompt).toContain("CodeQL: SQL injection found");
+    expect(invokedPrompt).toContain("500");
   });
 
   // -- fix attempt 1 fails, attempt 2 succeeds -------------------------------
@@ -493,16 +473,12 @@ describe("pollCiAndFix", () => {
       )
       .mockReturnValueOnce(makeCiStatus("pass"));
 
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
-
     const { agent, totalCalls } = makeSequencedAgent([
       makeResult({ responseText: "Fix 1." }),
       makeResult({ responseText: "Fix 2." }),
     ]);
 
-    const result = await pollCiAndFix(
-      makeOpts({ agent, getCiStatus, collectFailureLogs }),
-    );
+    const result = await pollCiAndFix(makeOpts({ agent, getCiStatus }));
 
     expect(result.passed).toBe(true);
     expect(totalCalls()).toBe(2);
@@ -516,7 +492,6 @@ describe("pollCiAndFix", () => {
       .mockReturnValue(
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       );
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
     const agent = makeAgent();
     const confirmRetry = vi.fn().mockResolvedValue(false);
 
@@ -524,7 +499,6 @@ describe("pollCiAndFix", () => {
       makeOpts({
         agent,
         getCiStatus,
-        collectFailureLogs,
         maxFixAttempts: 2,
         confirmRetry,
       }),
@@ -550,7 +524,6 @@ describe("pollCiAndFix", () => {
       }
       return makeCiStatus("pass");
     });
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
     const agent = makeAgent();
     const confirmRetry = vi.fn().mockResolvedValue(true);
 
@@ -558,7 +531,6 @@ describe("pollCiAndFix", () => {
       makeOpts({
         agent,
         getCiStatus,
-        collectFailureLogs,
         maxFixAttempts: 1,
         confirmRetry,
       }),
@@ -574,14 +546,12 @@ describe("pollCiAndFix", () => {
       .mockReturnValue(
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       );
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
     const agent = makeAgent();
 
     const result = await pollCiAndFix(
       makeOpts({
         agent,
         getCiStatus,
-        collectFailureLogs,
         maxFixAttempts: 1,
         // confirmRetry deliberately omitted.
       }),
@@ -699,20 +669,9 @@ describe("pollCiAndFix", () => {
     // First findings-review attempt fails with an agent error;
     // confirmRetry true re-runs the same review step.  The second
     // attempt succeeds without pushing, so findings are acknowledged.
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "Unused variable",
-        file: "src/app.ts",
-        line: 10,
-        checkRunId: 500,
-        checkRunName: "ESLint",
-        commitSha: "abc123",
-      },
-    ];
     const getCiStatus = vi
       .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+      .mockReturnValue(makeCiStatus("pass", [annotatedCheckRun()]));
     const getHeadSha = vi.fn().mockReturnValue("same-sha");
 
     const { agent, totalCalls } = makeSequencedAgent([
@@ -754,20 +713,9 @@ describe("pollCiAndFix", () => {
   });
 
   test("confirmRetry false on findings-review agent error returns passed: false", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "x",
-        file: "f",
-        line: 1,
-        checkRunId: 1,
-        checkRunName: "lint",
-        commitSha: "abc",
-      },
-    ];
     const getCiStatus = vi
       .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+      .mockReturnValue(makeCiStatus("pass", [annotatedCheckRun()]));
     const getHeadSha = vi.fn().mockReturnValue("sha");
 
     const agent = makeAgent(
@@ -805,7 +753,6 @@ describe("pollCiAndFix", () => {
       .mockReturnValueOnce(makeCiStatus("fail", [failedRun]))
       .mockReturnValueOnce(makeCiStatus("fail", [failedRun]))
       .mockReturnValueOnce(makeCiStatus("pass"));
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
 
     const { agent, totalCalls } = makeSequencedAgent([
       makeResult({
@@ -827,7 +774,6 @@ describe("pollCiAndFix", () => {
       makeOpts({
         agent,
         getCiStatus,
-        collectFailureLogs,
         maxFixAttempts: 1,
         confirmRetry,
       }),
@@ -847,7 +793,6 @@ describe("pollCiAndFix", () => {
       .mockReturnValue(
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       );
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
     const agent = makeAgent(
       makeResult({
         status: "error",
@@ -861,7 +806,7 @@ describe("pollCiAndFix", () => {
     const confirmRetry = vi.fn().mockResolvedValue(false);
 
     const result = await pollCiAndFix(
-      makeOpts({ agent, getCiStatus, collectFailureLogs, confirmRetry }),
+      makeOpts({ agent, getCiStatus, confirmRetry }),
     );
 
     expect(confirmRetry).toHaveBeenCalledOnce();
@@ -979,12 +924,9 @@ describe("pollCiAndFix", () => {
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       )
       .mockReturnValueOnce(makeCiStatus("pass"));
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
 
     const agent = makeAgent();
-    await pollCiAndFix(
-      makeOpts({ agent, getCiStatus, collectFailureLogs, getHeadSha }),
-    );
+    await pollCiAndFix(makeOpts({ agent, getCiStatus, getHeadSha }));
 
     expect(getHeadSha).toHaveBeenCalledTimes(2);
     expect(getCiStatus).toHaveBeenNthCalledWith(
@@ -1078,13 +1020,11 @@ describe("pollCiAndFix", () => {
     });
     vi.spyOn(Date, "now").mockImplementation(() => startTime + elapsed);
 
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
     const agent = makeAgent();
     const result = await pollCiAndFix(
       makeOpts({
         agent,
         getCiStatus,
-        collectFailureLogs,
         delay,
         pollIntervalMs: 100,
         pollTimeoutMs: 1000,
@@ -1097,24 +1037,12 @@ describe("pollCiAndFix", () => {
     vi.restoreAllMocks();
   });
 
-  // -- CI passes with findings — agent reviews --------------------------------
+  // -- CI passes with annotations — agent reviews -----------------------------
 
-  test("presents findings to agent and returns passed when agent acknowledges", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "Unused variable",
-        file: "src/app.ts",
-        line: 10,
-        rule: "no-unused-vars",
-        checkRunId: 500,
-        checkRunName: "ESLint",
-        commitSha: "abc123",
-      },
-    ];
+  test("presents pointer-based review prompt when CI passes with annotations", async () => {
     const getCiStatus = vi
       .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+      .mockReturnValue(makeCiStatus("pass", [annotatedCheckRun()]));
     const getHeadSha = vi.fn().mockReturnValue("same-sha");
 
     const agent = makeAgent();
@@ -1125,28 +1053,20 @@ describe("pollCiAndFix", () => {
     expect(result.passed).toBe(true);
     expect(result.message).toContain("Findings were reviewed");
     expect(agent.invoke).toHaveBeenCalledWith(
-      expect.stringContaining("CI Findings"),
+      expect.stringContaining("CI Inspection Context"),
       expect.any(Object),
     );
+    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    // No serialised findings list inlined.
+    expect(invokedPrompt).not.toContain("## CI Findings");
   });
 
   test("re-polls CI when agent pushes a fix for findings", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "Unused import",
-        file: "src/index.ts",
-        line: 1,
-        checkRunId: 600,
-        checkRunName: "Lint",
-        commitSha: "abc123",
-      },
-    ];
-
     // First poll: pass with findings. After agent fix: pass clean.
     const getCiStatus = vi
       .fn()
-      .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()], findings))
+      .mockReturnValueOnce(makeCiStatus("pass", [annotatedCheckRun()]))
       .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()]));
 
     // SHA sequence: top-of-loop, shaBeforeReview, shaAfterReview (changed),
@@ -1168,20 +1088,9 @@ describe("pollCiAndFix", () => {
   });
 
   test("returns error when agent fails during findings review", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "Unused variable",
-        file: "src/app.ts",
-        line: 10,
-        checkRunId: 500,
-        checkRunName: "ESLint",
-        commitSha: "abc123",
-      },
-    ];
     const getCiStatus = vi
       .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+      .mockReturnValue(makeCiStatus("pass", [annotatedCheckRun()]));
     const getHeadSha = vi.fn().mockReturnValue("sha");
 
     const agent = makeAgent(
@@ -1205,30 +1114,32 @@ describe("pollCiAndFix", () => {
     errorSpy.mockRestore();
   });
 
-  test("routes to findings review when findingsIncomplete even with no findings", async () => {
+  test("surfaces annotationsIncomplete from the inspection context in the prompt", async () => {
     const getCiStatus = vi
       .fn()
-      .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()], [], true))
-      .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()]));
-
-    // SHA sequence: top-of-loop, shaBeforeReview, shaAfterReview (unchanged).
+      .mockReturnValue(makeCiStatus("pass", [annotatedCheckRun()]));
     const getHeadSha = vi.fn().mockReturnValue("same-sha");
+    const buildCiInspectionContext = vi.fn().mockReturnValue(
+      makeInspection({
+        hasAnnotations: true,
+        annotationsIncomplete: true,
+        checkRunIds: [500],
+      }),
+    );
 
     const agent = makeAgent();
     const result = await pollCiAndFix(
-      makeOpts({ agent, getCiStatus, getHeadSha }),
+      makeOpts({ agent, getCiStatus, getHeadSha, buildCiInspectionContext }),
     );
 
-    // Agent was invoked with the findings prompt (not the clean-pass exit).
     expect(agent.invoke).toHaveBeenCalledWith(
-      expect.stringContaining("CI Findings"),
+      expect.stringContaining("CI Inspection Context"),
       expect.any(Object),
     );
     const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as string;
-    expect(invokedPrompt).toContain("annotations could not be fetched");
+    expect(invokedPrompt).toContain("annotationsIncomplete: true");
 
-    // SHA unchanged → findings acknowledged.
     expect(result.passed).toBe(true);
     expect(result.message).toContain("Findings were reviewed");
   });
@@ -1236,20 +1147,9 @@ describe("pollCiAndFix", () => {
   // -- findings-review counter is decoupled from fix-attempt counter --------
 
   test("maxFixAttempts=0 still allows findings review", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "Unused variable",
-        file: "src/app.ts",
-        line: 10,
-        checkRunId: 500,
-        checkRunName: "ESLint",
-        commitSha: "abc123",
-      },
-    ];
     const getCiStatus = vi
       .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+      .mockReturnValue(makeCiStatus("pass", [annotatedCheckRun()]));
     const getHeadSha = vi.fn().mockReturnValue("same-sha");
 
     const agent = makeAgent();
@@ -1263,21 +1163,10 @@ describe("pollCiAndFix", () => {
   });
 
   test("maxFixAttempts=0 re-polls after findings-driven push", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "Unused import",
-        file: "src/index.ts",
-        line: 1,
-        checkRunId: 600,
-        checkRunName: "Lint",
-        commitSha: "abc123",
-      },
-    ];
-    // First poll: pass with findings. After agent fix: pass clean.
+    // First poll: pass with annotations. After agent fix: pass clean.
     const getCiStatus = vi
       .fn()
-      .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()], findings))
+      .mockReturnValueOnce(makeCiStatus("pass", [annotatedCheckRun()]))
       .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()]));
 
     let shaCall = 0;
@@ -1296,28 +1185,15 @@ describe("pollCiAndFix", () => {
   });
 
   test("findings reviews do not consume failure-fix budget", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "Unused variable",
-        file: "src/app.ts",
-        line: 10,
-        checkRunId: 500,
-        checkRunName: "ESLint",
-        commitSha: "abc123",
-      },
-    ];
-
-    // Sequence: pass with findings → agent pushes →
+    // Sequence: pass with annotations → agent pushes →
     // CI fails → agent fixes → CI passes.
     const getCiStatus = vi
       .fn()
-      .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()], findings))
+      .mockReturnValueOnce(makeCiStatus("pass", [annotatedCheckRun()]))
       .mockReturnValueOnce(
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       )
       .mockReturnValueOnce(makeCiStatus("pass", [makeCiRun()]));
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
 
     // SHA sequence: top-of-loop (sha-1), shaBeforeReview (sha-1),
     // shaAfterReview (sha-2, agent pushed), top-of-loop (sha-2),
@@ -1335,7 +1211,6 @@ describe("pollCiAndFix", () => {
       makeOpts({
         agent,
         getCiStatus,
-        collectFailureLogs,
         getHeadSha,
         maxFixAttempts: 1,
       }),
@@ -1349,22 +1224,10 @@ describe("pollCiAndFix", () => {
   });
 
   test("caps findings-review re-polls at maxFixAttempts", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "Unused variable",
-        file: "src/app.ts",
-        line: 10,
-        checkRunId: 500,
-        checkRunName: "ESLint",
-        commitSha: "abc123",
-      },
-    ];
-
-    // Agent keeps pushing but findings persist.
+    // Agent keeps pushing but annotations persist.
     const getCiStatus = vi
       .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+      .mockReturnValue(makeCiStatus("pass", [annotatedCheckRun()]));
 
     // SHA changes after every review to simulate agent pushing.
     let shaCounter = 0;
@@ -1397,145 +1260,151 @@ describe("pollCiAndFix", () => {
     expect(totalCalls()).toBe(2);
   });
 
-  test("findings prompt includes structured finding details", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "Unused variable 'x'",
-        file: "src/app.ts",
-        line: 10,
-        rule: "no-unused-vars",
-        checkRunId: 500,
-        checkRunName: "ESLint",
-        commitSha: "abc123",
-      },
-    ];
-    const getCiStatus = vi
-      .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+  test("findings prompt references the check-run pointer, not annotation bodies", async () => {
+    const getCiStatus = vi.fn().mockReturnValue(
+      makeCiStatus("pass", [
+        annotatedCheckRun({
+          databaseId: 500,
+          name: "ESLint",
+          annotationsCount: 4,
+        }),
+      ]),
+    );
     const getHeadSha = vi.fn().mockReturnValue("same-sha");
-
-    const agent = makeAgent();
-    await pollCiAndFix(makeOpts({ agent, getCiStatus, getHeadSha }));
-
-    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
-      .calls[0][0] as string;
-    expect(invokedPrompt).toContain("Unused variable 'x'");
-    expect(invokedPrompt).toContain("src/app.ts:10");
-    expect(invokedPrompt).toContain("no-unused-vars");
-    expect(invokedPrompt).toContain("ESLint (check run 500)");
-  });
-
-  // -- triage: code scanning alert correlation --------------------------------
-
-  test("fetches code scanning alerts when CI passes with findings", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "SQL injection",
-        file: "src/db.ts",
-        line: 42,
-        rule: "js/sql-injection",
-        checkRunId: 500,
-        checkRunName: "CodeQL",
-        commitSha: "abc123",
-      },
-    ];
-    const getCiStatus = vi
+    const buildCiInspectionContext = vi
       .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
-    const getHeadSha = vi.fn().mockReturnValue("same-sha");
-    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([]);
+      .mockReturnValue(
+        makeInspection({ hasAnnotations: true, checkRunIds: [500] }),
+      );
 
     const agent = makeAgent();
     await pollCiAndFix(
-      makeOpts({ agent, getCiStatus, getHeadSha, fetchCodeScanningAlerts }),
-    );
-
-    expect(fetchCodeScanningAlerts).toHaveBeenCalledWith(
-      "org",
-      "repo",
-      "issue-42",
-    );
-  });
-
-  test("includes triage instructions when alerts are correlated", async () => {
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "SQL injection",
-        file: "src/db.ts",
-        line: 42,
-        rule: "js/sql-injection",
-        checkRunId: 500,
-        checkRunName: "CodeQL",
-        commitSha: "abc123",
-      },
-    ];
-    const getCiStatus = vi
-      .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
-    const getHeadSha = vi.fn().mockReturnValue("same-sha");
-    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([
-      {
-        number: 10,
-        rule: { id: "js/sql-injection" },
-        tool: { name: "CodeQL" },
-        most_recent_instance: {
-          location: { path: "src/db.ts", start_line: 42 },
-          commit_sha: "abc123",
-        },
-        state: "open",
-        html_url: "https://github.com/org/repo/security/code-scanning/10",
-      },
-    ]);
-
-    const agent = makeAgent();
-    await pollCiAndFix(
-      makeOpts({ agent, getCiStatus, getHeadSha, fetchCodeScanningAlerts }),
+      makeOpts({ agent, getCiStatus, getHeadSha, buildCiInspectionContext }),
     );
 
     const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as string;
-    expect(invokedPrompt).toContain("CodeQL Triage");
-    expect(invokedPrompt).toContain("Alert #10");
-    expect(invokedPrompt).toContain("[alert #10]");
+    // Pointer-only: the check run ID is referenced and the gh hint is
+    // present, but no annotation message bodies are inlined.
+    expect(invokedPrompt).toContain("500");
+    expect(invokedPrompt).toContain("/check-runs/<checkRunId>/annotations");
   });
 
-  test("does not fetch alerts on clean pass", async () => {
+  // -- pointer-based read delegation -----------------------------------------
+
+  test("does not fetch code scanning alerts during prompt construction", async () => {
+    // The prompt-feed path must never pull alert payloads up front.
+    // The agent reads them itself via the gh hint in the prompt.
     const getCiStatus = vi
       .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()]));
-    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([]);
-
-    await pollCiAndFix(makeOpts({ getCiStatus, fetchCodeScanningAlerts }));
-
-    expect(fetchCodeScanningAlerts).not.toHaveBeenCalled();
-  });
-
-  test("does not fetch alerts on CI failure", async () => {
-    const getCiStatus = vi
+      .mockReturnValue(makeCiStatus("pass", [annotatedCheckRun()]));
+    const getHeadSha = vi.fn().mockReturnValue("same-sha");
+    const buildCiInspectionContext = vi
       .fn()
-      .mockReturnValueOnce(
-        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
-      )
-      .mockReturnValueOnce(makeCiStatus("pass"));
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
-    const fetchCodeScanningAlerts = vi.fn().mockReturnValue([]);
+      .mockReturnValue(
+        makeInspection({ hasAnnotations: true, checkRunIds: [500] }),
+      );
 
     const agent = makeAgent();
     await pollCiAndFix(
-      makeOpts({
-        agent,
-        getCiStatus,
-        collectFailureLogs,
-        fetchCodeScanningAlerts,
+      makeOpts({ agent, getCiStatus, getHeadSha, buildCiInspectionContext }),
+    );
+
+    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    // Prompt mentions the gh command for the agent to use itself.
+    expect(invokedPrompt).toContain("/code-scanning/alerts");
+    // No serialised "[alert #N]" payload from the pipeline side.
+    expect(invokedPrompt).not.toContain("[alert #");
+    expect(invokedPrompt).not.toContain("CodeQL Triage");
+  });
+
+  test("hands the bounded pointer prompt to the agent for findings review", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [annotatedCheckRun()]));
+    const getHeadSha = vi.fn().mockReturnValue("same-sha");
+    const buildCiInspectionContext = vi.fn().mockReturnValue(
+      makeInspection({
+        hasAnnotations: true,
+        checkRunIds: Array.from({ length: 200 }, (_, i) => i),
       }),
     );
 
-    // fetchCodeScanningAlerts should not be called during the failure fix
-    // phase — only during findings review.
-    expect(fetchCodeScanningAlerts).not.toHaveBeenCalled();
+    const agent = makeAgent();
+    await pollCiAndFix(
+      makeOpts({ agent, getCiStatus, getHeadSha, buildCiInspectionContext }),
+    );
+
+    const invokedPrompt = (agent.invoke as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    // Even with 200 check-run IDs the prompt stays small; nothing
+    // resembling alert payloads or full annotation bodies.
+    expect(invokedPrompt.length).toBeLessThan(8000);
+  });
+
+  test("default pipeline-side gh path never reads logs or alerts during a fix round", async () => {
+    // Use the real default `buildCiInspectionContext` and intercept
+    // `ghExec` (via the underlying `execFileSync`) to record every
+    // gh command the pipeline issues during a fix round.  None of
+    // them should be a log fetch, annotations fetch, or alert
+    // pagination — those are delegated to the agent.
+    vi.resetModules();
+    const mockExecFileSync = vi.fn().mockImplementation(() => {
+      // Default response: an empty jobs page.  Sufficient because
+      // the helper only inspects the parsed `.jobs` array.
+      return JSON.stringify({ total_count: 0, jobs: [] });
+    });
+    vi.doMock("node:child_process", () => ({
+      execFileSync: mockExecFileSync,
+    }));
+
+    const { pollCiAndFix: realPollCiAndFix } = await import("./ci-poll.js");
+
+    const failedRun = makeCiRun({ databaseId: 200, conclusion: "failure" });
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValueOnce(makeCiStatus("fail", [failedRun]))
+      .mockReturnValueOnce(makeCiStatus("pass"));
+
+    const agent = makeAgent();
+    await realPollCiAndFix({
+      ctx: BASE_CTX,
+      agent,
+      issueTitle: "t",
+      issueBody: "b",
+      getCiStatus,
+      // Intentionally omit buildCiInspectionContext → uses the default.
+      getHeadSha: vi.fn().mockReturnValue("abc123"),
+      delay: vi.fn().mockResolvedValue(undefined),
+      pollIntervalMs: 100,
+      pollTimeoutMs: 1000,
+      maxFixAttempts: 3,
+      emptyRunsGracePeriodMs: 0,
+    });
+
+    const ghCalls = mockExecFileSync.mock.calls.map((c) =>
+      (c[1] as string[]).join(" "),
+    );
+    expect(ghCalls.some((c) => c.includes("--log-failed"))).toBe(false);
+    expect(ghCalls.some((c) => c.includes("/annotations"))).toBe(false);
+    expect(ghCalls.some((c) => c.includes("/code-scanning/alerts"))).toBe(
+      false,
+    );
+
+    vi.doUnmock("node:child_process");
+    vi.resetModules();
+  });
+
+  test("buildCiInspectionContext is not invoked on clean pass", async () => {
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(makeCiStatus("pass", [makeCiRun()]));
+    const buildCiInspectionContext = vi.fn().mockReturnValue(makeInspection());
+
+    await pollCiAndFix(makeOpts({ getCiStatus, buildCiInspectionContext }));
+
+    expect(buildCiInspectionContext).not.toHaveBeenCalled();
   });
 
   // -- pipeline:ci-poll event emission ----------------------------------------
@@ -1596,12 +1465,9 @@ describe("pollCiAndFix", () => {
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       )
       .mockReturnValueOnce(makeCiStatus("pass"));
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
     const agent = makeAgent();
 
-    await pollCiAndFix(
-      makeOpts({ events, agent, getCiStatus, collectFailureLogs }),
-    );
+    await pollCiAndFix(makeOpts({ events, agent, getCiStatus }));
 
     // Each polling round gets start → status → done, even when
     // transitioning into a fix loop.
@@ -1633,7 +1499,6 @@ describe("pollCiAndFix", () => {
       .mockReturnValue(
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       );
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
 
     const invokeResults = [makeStream(makeResult())];
     let call = 0;
@@ -1647,7 +1512,6 @@ describe("pollCiAndFix", () => {
         events,
         agent,
         getCiStatus,
-        collectFailureLogs,
         maxFixAttempts: 1,
       }),
     );
@@ -1667,7 +1531,6 @@ describe("pollCiAndFix", () => {
       .mockReturnValue(
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       );
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
     const agent = makeAgent(
       makeResult({
         status: "error",
@@ -1679,9 +1542,7 @@ describe("pollCiAndFix", () => {
 
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await pollCiAndFix(
-      makeOpts({ events, agent, getCiStatus, collectFailureLogs }),
-    );
+    await pollCiAndFix(makeOpts({ events, agent, getCiStatus }));
 
     const done = collected[collected.length - 1];
     expect(done.action).toBe("done");
@@ -1695,20 +1556,9 @@ describe("pollCiAndFix", () => {
     const collected: PipelineCiPollEvent[] = [];
     events.on("pipeline:ci-poll", (e) => collected.push(e));
 
-    const findings: CiFinding[] = [
-      {
-        level: "warning",
-        message: "Unused variable",
-        file: "src/app.ts",
-        line: 10,
-        checkRunId: 500,
-        checkRunName: "ESLint",
-        commitSha: "abc123",
-      },
-    ];
     const getCiStatus = vi
       .fn()
-      .mockReturnValue(makeCiStatus("pass", [makeCiRun()], findings));
+      .mockReturnValue(makeCiStatus("pass", [annotatedCheckRun()]));
     const agent = makeAgent(
       makeResult({
         status: "error",
