@@ -124,6 +124,7 @@ function buildFetchHints(
 ): string {
   const repo = `${ctx.owner}/${ctx.repo}`;
   const ref = inspection.ref;
+  const branch = ctx.branch;
   const lines = [
     `## Fetching CI details`,
     ``,
@@ -143,8 +144,10 @@ function buildFetchHints(
     `gh api "repos/${repo}/check-runs/<checkRunId>"`,
     `gh api "repos/${repo}/check-runs/<checkRunId>/annotations"`,
     ``,
-    `# Open code scanning alerts for the ref:`,
-    `gh api "repos/${repo}/code-scanning/alerts?ref=${ref}&state=open&per_page=100"`,
+    `# Open code scanning alerts for the branch (the code scanning`,
+    `# \`ref\` filter expects a branch ref or PR merge ref — not a`,
+    `# commit SHA — so use the branch above, not \`inspection.ref\`):`,
+    `gh api "repos/${repo}/code-scanning/alerts?ref=${branch}&state=open&per_page=100"`,
     "```",
   ];
   if (inspection.annotationsIncomplete) {
@@ -162,8 +165,14 @@ function buildFetchHints(
       `# Failing jobs for a workflow run (per_page caps at 100):`,
       `gh api "repos/${repo}/actions/runs/<runId>/jobs?per_page=100&page=<n>"`,
       ``,
-      `# Workflow runs for the branch:`,
-      `gh run list --repo ${repo} --branch ${ctx.branch} --limit 100`,
+      `# Workflow runs for the branch — paginate the Actions API`,
+      `# directly so you can reach runs beyond the 100-cap that`,
+      `# \`gh run list --limit 100\` set when this flag was raised.`,
+      `# The branch filter matches what the pipeline used; narrow`,
+      `# further to a single commit with \`head_sha=<sha>\` when only`,
+      `# the run for the current commit matters:`,
+      `gh api "repos/${repo}/actions/runs?branch=${branch}&per_page=100&page=<n>"`,
+      `gh api "repos/${repo}/actions/runs?head_sha=<commit-sha>&per_page=100&page=<n>"`,
       ``,
       `# Check runs for the ref (additional IDs may live on later pages):`,
       `gh api "repos/${repo}/commits/${ref}/check-runs?per_page=100&page=<n>"`,
@@ -179,8 +188,10 @@ function buildDismissAlertsBlock(ctx: StageContext): string {
     `## Triage of code scanning alerts`,
     ``,
     `Some annotations may correspond to open code scanning alerts.`,
-    `Fetch the alerts list for the ref above, then for each alert`,
-    `decide whether it is a **real issue** or a **false positive**.`,
+    `Fetch the alerts list for the branch (\`ref=${ctx.branch}\` —`,
+    `code scanning's \`ref\` filter expects a branch ref, not a`,
+    `commit SHA), then for each alert decide whether it is a`,
+    `**real issue** or a **false positive**.`,
     ``,
     `### Evaluation criteria`,
     ``,

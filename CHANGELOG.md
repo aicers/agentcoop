@@ -29,7 +29,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   propagates it to `annotationsIncomplete` (and forces `hasAnnotations`
   on) so callers do not treat a partial listing as a clean pass when
   annotations could exist on a later page.  `fetchCiRuns` now returns
-  `{ runs, runsIncomplete }` instead of `CiRun[]`.
+  `{ runs, runsIncomplete }` instead of `CiRun[]`.  The CI prompts'
+  code-scanning fetch hint targets the **branch** (`ref={branch}`)
+  instead of `inspection.ref`, since GitHub's code-scanning `ref`
+  filter accepts a Git ref (branch or PR merge ref) and not a commit
+  SHA — using the inspection ref pointed the agent at the wrong
+  ref when a SHA was known.  The `runsIncomplete` recovery hint now
+  paginates the Actions API directly (`gh api .../actions/runs?
+  branch=<branch>&per_page=100&page=<n>`, with a `head_sha=<sha>`
+  variant) rather than re-running `gh run list --limit 100`, which
+  was the bounded read whose 100-cap originally set the truncation
+  flag and which also dropped the commit filter.
 
 ## [0.3.0] - 2026-05-02
 

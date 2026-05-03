@@ -493,8 +493,16 @@ export interface CiInspectionContext {
    */
   annotationsIncomplete: boolean;
   /**
-   * Ref to use for code scanning alert queries — the commit SHA when
-   * known, otherwise the branch name.
+   * Commit-keyed ref — the commit SHA when known, otherwise the
+   * branch name.  Used for commit-scoped lookups such as
+   * `commits/{ref}/check-runs`.
+   *
+   * Note: not for the code-scanning alerts API.  GitHub's
+   * code-scanning `ref` filter accepts only a Git ref (e.g.
+   * `refs/heads/<branch>` or `refs/pull/<n>/merge`) or a plain
+   * branch name, not a commit SHA — callers feeding the alerts
+   * endpoint should use the branch from the surrounding stage
+   * context instead of this field.
    */
   ref: string;
 }

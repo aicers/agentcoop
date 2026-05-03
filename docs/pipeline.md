@@ -625,14 +625,19 @@ narrow down the failure.  Useful commands:
     gh run view <runId> --repo {owner}/{repo} --log-failed
     gh api "repos/{owner}/{repo}/check-runs/<checkRunId>"
     gh api "repos/{owner}/{repo}/check-runs/<checkRunId>/annotations"
-    gh api "repos/{owner}/{repo}/code-scanning/alerts?ref={ref}&state=open&per_page=100"
+    gh api "repos/{owner}/{repo}/code-scanning/alerts?ref={branch}&state=open&per_page=100"
+
+The code-scanning `ref` filter takes a Git ref (a branch ref or
+PR merge ref) — _not_ a commit SHA — so the hint uses `{branch}`,
+not `inspection.ref`.
 
 When `annotationsIncomplete: true`, the prompt also includes
 pagination hints so the agent can recover regardless of which
 listing was truncated:
 
     gh api "repos/{owner}/{repo}/actions/runs/<runId>/jobs?per_page=100&page=<n>"
-    gh run list --repo {owner}/{repo} --branch {branch} --limit 100
+    gh api "repos/{owner}/{repo}/actions/runs?branch={branch}&per_page=100&page=<n>"
+    gh api "repos/{owner}/{repo}/actions/runs?head_sha=<commit-sha>&per_page=100&page=<n>"
     gh api "repos/{owner}/{repo}/commits/{ref}/check-runs?per_page=100&page=<n>"
 
 ## Instructions
@@ -711,7 +716,11 @@ Annotations and alert details are not inlined — fetch them with
 
     gh api "repos/{owner}/{repo}/check-runs/<checkRunId>"
     gh api "repos/{owner}/{repo}/check-runs/<checkRunId>/annotations"
-    gh api "repos/{owner}/{repo}/code-scanning/alerts?ref={ref}&state=open&per_page=100"
+    gh api "repos/{owner}/{repo}/code-scanning/alerts?ref={branch}&state=open&per_page=100"
+
+(Code scanning's `ref` filter takes a Git ref — branch or PR
+merge ref — not a commit SHA, so the hint uses `{branch}`, not
+`inspection.ref`.)
 
 When `annotationsIncomplete: true`, the prompt also includes
 pagination hints (jobs / workflow-run list / check-runs listing) —
@@ -820,12 +829,22 @@ can set the flag:
   instead of treating an incomplete listing as a clean pass.
 
 When `true`, the prompt includes pagination hints for all three
-truncation sources — the failing-jobs listing for a workflow run
-(`gh api .../actions/runs/<runId>/jobs?per_page=100&page=<n>`),
-the workflow-run list (`gh run list --limit 100`), and the
-check-runs listing for the ref
-(`gh api .../commits/<ref>/check-runs?per_page=100&page=<n>`) —
-so the agent can recover regardless of which source was truncated.
+truncation sources so the agent can recover regardless of which
+source was truncated:
+
+- Failing-jobs listing for a workflow run:
+  `gh api .../actions/runs/<runId>/jobs?per_page=100&page=<n>`.
+- Workflow-run listing — paginate the Actions API directly with
+  `gh api .../actions/runs?branch=<branch>&per_page=100&page=<n>`
+  (or `head_sha=<sha>` to narrow to one commit).  The hint
+  deliberately does _not_ recommend re-running `gh run list
+  --limit 100`: that's the bounded read whose 100-cap originally
+  set the truncation flag, so repeating it cannot reach the
+  hidden runs and would also drop the commit filter the
+  pipeline applied.
+- Check-runs listing for the ref:
+  `gh api .../commits/<ref>/check-runs?per_page=100&page=<n>`.
+
 This matters in particular when the upstream check-runs page was
 truncated: the visible `checkRunIds` set may be empty even though
 additional check runs (and annotations) exist on later pages.
@@ -857,9 +876,10 @@ scanning alerts` section with evaluation criteria and dismiss
 instructions (see the prompt template above).  The list of
 dismissible alerts is **not** built on the pipeline side — the
 agent fetches the open alerts itself with `gh api .../code-scanning/
-alerts?ref={ref}&state=open&per_page=100`, correlates them to the
-annotations it just read, and dismisses any false positives via
-`gh api -X PATCH .../alerts/{number}`.
+alerts?ref={branch}&state=open&per_page=100` (the API's `ref`
+filter accepts a branch or PR merge ref, not a commit SHA),
+correlates them to the annotations it just read, and dismisses
+any false positives via `gh api -X PATCH .../alerts/{number}`.
 
 ---
 

@@ -139,6 +139,24 @@ describe("buildCiFixPrompt", () => {
     expect(prompt).toContain("--log-failed");
   });
 
+  test("code-scanning hint uses the branch, not the commit SHA", () => {
+    // Code scanning's `ref` filter accepts only a Git ref (e.g. branch
+    // ref or PR merge ref) — not a commit SHA — so the hint must use
+    // `ctx.branch` and not `inspection.ref` when the inspection ref
+    // is a SHA.
+    const prompt = buildCiFixPrompt(
+      BASE_CTX,
+      makeOpts(),
+      makeInspection({ ref: "deadbeefcafe1234567890abcdef1234567890ab" }),
+    );
+    expect(prompt).toContain(
+      `/code-scanning/alerts?ref=${BASE_CTX.branch}&state=open`,
+    );
+    expect(prompt).not.toContain(
+      "/code-scanning/alerts?ref=deadbeefcafe1234567890abcdef1234567890ab",
+    );
+  });
+
   test("instructs to commit and push", () => {
     const prompt = buildCiFixPrompt(BASE_CTX, makeOpts(), makeInspection());
     expect(prompt).toContain("commit and push");
@@ -173,7 +191,14 @@ describe("buildCiFixPrompt", () => {
     // Pagination hints for all three truncation sources: jobs,
     // workflow-run list, and check-runs listing.
     expect(prompt).toContain("/actions/runs/<runId>/jobs?per_page=100");
-    expect(prompt).toContain("gh run list");
+    // The workflow-run list recovery uses the Actions API directly
+    // (paginated, with the same branch filter the pipeline applied)
+    // because `gh run list --limit 100` is the read that set the
+    // truncation flag in the first place — repeating it would not
+    // recover the runs beyond the 100-cap.
+    expect(prompt).toContain("/actions/runs?branch=");
+    expect(prompt).toContain("/actions/runs?head_sha=");
+    expect(prompt).not.toContain("gh run list --repo");
     expect(prompt).toContain("/check-runs?per_page=100");
   });
 });
@@ -778,7 +803,9 @@ describe("buildCiFindingsPrompt", () => {
     // Pagination hints for all three truncation sources: jobs,
     // workflow-run list, and check-runs listing.
     expect(prompt).toContain("/actions/runs/<runId>/jobs?per_page=100");
-    expect(prompt).toContain("gh run list");
+    expect(prompt).toContain("/actions/runs?branch=");
+    expect(prompt).toContain("/actions/runs?head_sha=");
+    expect(prompt).not.toContain("gh run list --repo");
     expect(prompt).toContain("/check-runs?per_page=100");
   });
 
