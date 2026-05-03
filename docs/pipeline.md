@@ -627,6 +627,14 @@ narrow down the failure.  Useful commands:
     gh api "repos/{owner}/{repo}/check-runs/<checkRunId>/annotations"
     gh api "repos/{owner}/{repo}/code-scanning/alerts?ref={ref}&state=open&per_page=100"
 
+When `annotationsIncomplete: true`, the prompt also includes
+pagination hints so the agent can recover regardless of which
+listing was truncated:
+
+    gh api "repos/{owner}/{repo}/actions/runs/<runId>/jobs?per_page=100&page=<n>"
+    gh run list --repo {owner}/{repo} --branch {branch} --limit 100
+    gh api "repos/{owner}/{repo}/commits/{ref}/check-runs?per_page=100&page=<n>"
+
 ## Instructions
 
 Use the pointers above and the `gh` commands to read the actual
@@ -704,6 +712,12 @@ Annotations and alert details are not inlined — fetch them with
     gh api "repos/{owner}/{repo}/check-runs/<checkRunId>"
     gh api "repos/{owner}/{repo}/check-runs/<checkRunId>/annotations"
     gh api "repos/{owner}/{repo}/code-scanning/alerts?ref={ref}&state=open&per_page=100"
+
+When `annotationsIncomplete: true`, the prompt also includes
+pagination hints (jobs / workflow-run list / check-runs listing) —
+particularly important when `checkRunIds` is empty, which happens
+when the upstream check-runs page was truncated and the visible
+runs carry no annotations.
 
 ## Triage of code scanning alerts
 
@@ -805,9 +819,16 @@ can set the flag:
   forced to `true` so the findings-review path stays engaged
   instead of treating an incomplete listing as a clean pass.
 
-When `true`, the prompt includes a hint to paginate the relevant
-listing (`gh api ...?page=2&per_page=100`) before drawing
-conclusions.
+When `true`, the prompt includes pagination hints for all three
+truncation sources — the failing-jobs listing for a workflow run
+(`gh api .../actions/runs/<runId>/jobs?per_page=100&page=<n>`),
+the workflow-run list (`gh run list --limit 100`), and the
+check-runs listing for the ref
+(`gh api .../commits/<ref>/check-runs?per_page=100&page=<n>`) —
+so the agent can recover regardless of which source was truncated.
+This matters in particular when the upstream check-runs page was
+truncated: the visible `checkRunIds` set may be empty even though
+additional check runs (and annotations) exist on later pages.
 
 **Pointer-only design:** The pipeline never serialises annotation
 bodies, alert payloads, or correlated `[alert #N]` lists into the

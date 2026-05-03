@@ -170,6 +170,11 @@ describe("buildCiFixPrompt", () => {
     );
     expect(prompt).toContain("annotationsIncomplete");
     expect(prompt).toContain("partial");
+    // Pagination hints for all three truncation sources: jobs,
+    // workflow-run list, and check-runs listing.
+    expect(prompt).toContain("/actions/runs/<runId>/jobs?per_page=100");
+    expect(prompt).toContain("gh run list");
+    expect(prompt).toContain("/check-runs?per_page=100");
   });
 });
 
@@ -770,6 +775,29 @@ describe("buildCiFindingsPrompt", () => {
     );
     expect(prompt).toContain("annotationsIncomplete");
     expect(prompt).toContain("partial");
+    // Pagination hints for all three truncation sources: jobs,
+    // workflow-run list, and check-runs listing.
+    expect(prompt).toContain("/actions/runs/<runId>/jobs?per_page=100");
+    expect(prompt).toContain("gh run list");
+    expect(prompt).toContain("/check-runs?per_page=100");
+  });
+
+  test("hint covers check-run listing truncation when checkRunIds is empty", () => {
+    // Reproduces the case where ciStatus.runsIncomplete came from a
+    // truncated check-runs page: visible runs have no annotations,
+    // buildCiInspectionContext forces hasAnnotations: true and
+    // annotationsIncomplete: true with checkRunIds: [].  The agent
+    // needs the check-runs pagination hint to recover.
+    const prompt = buildCiFindingsPrompt(
+      BASE_CTX,
+      makeOpts(),
+      makeInspection({
+        hasAnnotations: true,
+        annotationsIncomplete: true,
+        checkRunIds: [],
+      }),
+    );
+    expect(prompt).toContain("/check-runs?per_page=100");
   });
 
   test("includes user instruction when present", () => {
