@@ -566,10 +566,14 @@ subsequent stages depend on the PR.
 ### Stage 5: CI check loop
 
 **Agent:** A (only on failure or findings review)\
-**Purpose:** Wait for CI to pass. If CI fails, collect failure
-logs and send them to Agent A for a fix. If CI passes but check
-runs report findings (annotations), present them to Agent A for
-review.
+**Purpose:** Wait for CI to pass. If CI fails, build a bounded
+pointer-based inspection context (failing run/job IDs, check-run
+IDs, the commit SHA, and incomplete-metadata flags) and send it to
+Agent A so the agent can fetch the failure logs itself. If CI passes
+but check runs report findings (annotations), pass the same pointer
+context to Agent A for review — the agent reads annotation bodies
+and code scanning alerts on demand rather than receiving them
+inlined.
 
 The orchestrator polls CI status at 30-second intervals. The CI
 verdict includes both **workflow runs** (Actions API) and **check
@@ -1870,10 +1874,13 @@ details.
 
 - **PR number extraction:** After Agent A creates a PR, extract
   the number via `gh pr list --head {branch} --json number`.
-- **CI status polling:** Check CI status and collect failure
-  details. A CI check is considered passed when all required
-  checks succeed. `pending` -> wait and re-poll. `skipped` ->
-  ignore. `cancelled` -> treat as failure.
+- **CI status polling:** Check CI status and build a bounded
+  pointer-based inspection context (failing run/job IDs,
+  check-run IDs, ref/SHA, incomplete-metadata flags) — never
+  raw failure logs, annotation bodies, or alert payloads, which
+  the agent fetches itself. A CI check is considered passed
+  when all required checks succeed. `pending` -> wait and
+  re-poll. `skipped` -> ignore. `cancelled` -> treat as failure.
 - **Mergeable status checking:** Query the GitHub API with
   exponential backoff to handle the `UNKNOWN` state that occurs
   while GitHub computes mergeability.

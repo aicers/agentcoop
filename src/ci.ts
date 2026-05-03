@@ -571,10 +571,17 @@ function fetchFailedJobs(
 
 /**
  * Build a small, bounded inspection context that points the agent at
- * the failing CI surfaces (workflow runs/jobs, check runs, the ref
- * for code scanning queries).  The agent uses the pointers to fetch
- * logs, annotations, and alerts itself rather than receiving them
- * inlined in the prompt.
+ * the failing CI surfaces (workflow runs/jobs, check runs, and the
+ * commit SHA used for `commits/{ref}/check-runs`-style lookups).
+ * The agent uses the pointers to fetch logs, annotations, and alerts
+ * itself rather than receiving them inlined in the prompt.
+ *
+ * Note: the `ref` field on the resulting context is a commit SHA and
+ * is **not** the right input for the code-scanning alerts API, which
+ * filters by Git ref (branch / `refs/pull/<n>/merge`).  Code-scanning
+ * alert reads use the branch/PR ref from the stage context instead;
+ * see `buildFetchHints` in `src/stage-cicheck.ts` and the
+ * `CiInspectionContext.ref` TSDoc.
  *
  * **Contract for future edits:** this helper must NOT pull raw step
  * logs, raw alert payloads, or annotation bodies — those are exactly
