@@ -577,9 +577,14 @@ inlined.
 
 The orchestrator polls CI status at 30-second intervals. The CI
 verdict includes both **workflow runs** (Actions API) and **check
-runs** (Checks API). A run's `source` field (`"workflow"` or
-`"check"`) is preserved on the bounded inspection context that the
-agent uses to fetch logs and annotations on demand. While CI is
+runs** (Checks API). The bounded inspection context keeps these
+two sources separate: failing/cancelled workflow runs surface as
+`workflowRuns[]` (each carrying a `runId` and the IDs of its failed
+jobs), while check runs the agent should consult surface as
+`checkRunIds[]`. Per-run `source` metadata from `CiRun` is **not**
+forwarded to the prompt — the agent picks the right `gh` command
+(`gh run view ...` for workflow runs, `gh api .../check-runs/...`
+for check runs) based on which list the ID came from. While CI is
 pending, the handler waits internally without consuming the loop
 budget.
 
@@ -735,8 +740,12 @@ runs carry no annotations.
 ## Triage of code scanning alerts
 
 Some annotations may correspond to open code scanning alerts.
-Fetch the alerts list for the ref above, then for each alert decide
-whether it is a **real issue** or a **false positive**.
+Fetch the alerts list for the **branch** (or PR merge ref —
+`refs/pull/<n>/merge`) using the `gh api .../code-scanning/alerts?ref={branch}`
+command above; do **not** pass `inspection.ref` to that endpoint,
+because GitHub's code-scanning `ref` filter accepts only a Git ref
+(branch name or `refs/...`), not a commit SHA. Then for each alert
+decide whether it is a **real issue** or a **false positive**.
 
 ### Evaluation criteria
 
