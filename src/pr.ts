@@ -4,7 +4,7 @@
  * Wraps `gh` CLI commands to query PR metadata.
  */
 
-import { execFileSync } from "node:child_process";
+import { ghExec } from "./gh-exec.js";
 
 /**
  * Find the PR number associated with `branch` in `owner/repo`.
@@ -16,22 +16,18 @@ export function findPrNumber(
   repo: string,
   branch: string,
 ): number | undefined {
-  const output = execFileSync(
-    "gh",
-    [
-      "pr",
-      "list",
-      "--repo",
-      `${owner}/${repo}`,
-      "--head",
-      branch,
-      "--json",
-      "number",
-      "--limit",
-      "1",
-    ],
-    { encoding: "utf-8" },
-  );
+  const output = ghExec([
+    "pr",
+    "list",
+    "--repo",
+    `${owner}/${repo}`,
+    "--head",
+    branch,
+    "--json",
+    "number",
+    "--limit",
+    "1",
+  ]);
 
   let prs: { number: number }[];
   try {
@@ -56,21 +52,17 @@ export function getPrBody(
   branch: string,
 ): string | undefined {
   try {
-    return execFileSync(
-      "gh",
-      [
-        "pr",
-        "view",
-        "--repo",
-        `${owner}/${repo}`,
-        branch,
-        "--json",
-        "body",
-        "--jq",
-        ".body",
-      ],
-      { encoding: "utf-8" },
-    ).trim();
+    return ghExec([
+      "pr",
+      "view",
+      "--repo",
+      `${owner}/${repo}`,
+      branch,
+      "--json",
+      "body",
+      "--jq",
+      ".body",
+    ]).trim();
   } catch {
     return undefined;
   }
@@ -119,19 +111,15 @@ export function queryMergeableState(
   branch: string,
 ): MergeableState {
   try {
-    const output = execFileSync(
-      "gh",
-      [
-        "pr",
-        "view",
-        "--repo",
-        `${owner}/${repo}`,
-        branch,
-        "--json",
-        "mergeable",
-      ],
-      { encoding: "utf-8" },
-    );
+    const output = ghExec([
+      "pr",
+      "view",
+      "--repo",
+      `${owner}/${repo}`,
+      branch,
+      "--json",
+      "mergeable",
+    ]);
     const parsed = JSON.parse(output) as { mergeable: string };
     const state = parsed.mergeable;
     if (
@@ -169,11 +157,15 @@ export function queryPrState(
   branch: string,
 ): PrLifecycleState {
   try {
-    const output = execFileSync(
-      "gh",
-      ["pr", "view", "--repo", `${owner}/${repo}`, branch, "--json", "state"],
-      { encoding: "utf-8" },
-    );
+    const output = ghExec([
+      "pr",
+      "view",
+      "--repo",
+      `${owner}/${repo}`,
+      branch,
+      "--json",
+      "state",
+    ]);
     const parsed = JSON.parse(output) as { state: string };
     const state = parsed.state;
     if (state === "OPEN" || state === "CLOSED" || state === "MERGED") {

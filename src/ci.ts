@@ -5,7 +5,7 @@
  * pass for a given branch/commit.  Reusable by stages 5, 7, and 8.
  */
 
-import { execFileSync } from "node:child_process";
+import { ghExec } from "./gh-exec.js";
 
 // ---- public types --------------------------------------------------------
 
@@ -179,16 +179,12 @@ function fetchCheckRunAnnotations(
   repo: string,
   checkRunId: number,
 ): CheckRunAnnotation[] {
-  const raw = execFileSync(
-    "gh",
-    [
-      "api",
-      "--paginate",
-      "--slurp",
-      `repos/${owner}/${repo}/check-runs/${checkRunId}/annotations?per_page=100`,
-    ],
-    { encoding: "utf-8" },
-  );
+  const raw = ghExec([
+    "api",
+    "--paginate",
+    "--slurp",
+    `repos/${owner}/${repo}/check-runs/${checkRunId}/annotations?per_page=100`,
+  ]);
   const pages: CheckRunAnnotation[][] = JSON.parse(raw);
   return pages.flat();
 }
@@ -255,14 +251,10 @@ function fetchCheckRunsFromApi(
   repo: string,
   ref: string,
 ): CiRun[] {
-  const output = execFileSync(
-    "gh",
-    [
-      "api",
-      `repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}/check-runs?per_page=100`,
-    ],
-    { encoding: "utf-8" },
-  );
+  const output = ghExec([
+    "api",
+    `repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}/check-runs?per_page=100`,
+  ]);
 
   const parsed = JSON.parse(output);
   const entries: CheckRunApiEntry[] = parsed.check_runs ?? [];
@@ -303,11 +295,10 @@ function collectCheckRunLogs(owner: string, repo: string, run: CiRun): string {
   if (output === undefined) {
     let detail: CheckRunApiEntry | undefined;
     try {
-      const raw = execFileSync(
-        "gh",
-        ["api", `repos/${owner}/${repo}/check-runs/${checkRunId}`],
-        { encoding: "utf-8" },
-      );
+      const raw = ghExec([
+        "api",
+        `repos/${owner}/${repo}/check-runs/${checkRunId}`,
+      ]);
       detail = JSON.parse(raw);
     } catch {
       return "Unable to retrieve check run details.";
@@ -376,7 +367,7 @@ export function fetchCiRuns(
   if (commitSha) {
     args.push("--commit", commitSha);
   }
-  const output = execFileSync("gh", args, { encoding: "utf-8" });
+  const output = ghExec(args);
   let workflowRuns: CiRun[];
   try {
     workflowRuns = (JSON.parse(output) as Omit<CiRun, "source">[]).map((r) => ({
@@ -431,18 +422,14 @@ export function collectFailureLogs(
   if (run.source === "check") {
     return collectCheckRunLogs(owner, repo, run);
   }
-  const output = execFileSync(
-    "gh",
-    [
-      "run",
-      "view",
-      String(run.databaseId),
-      "--repo",
-      `${owner}/${repo}`,
-      "--log-failed",
-    ],
-    { encoding: "utf-8" },
-  );
+  const output = ghExec([
+    "run",
+    "view",
+    String(run.databaseId),
+    "--repo",
+    `${owner}/${repo}`,
+    "--log-failed",
+  ]);
   return typeof output === "string" ? output : "";
 }
 
@@ -494,16 +481,12 @@ export function fetchCodeScanningAlerts(
   ref: string,
 ): CodeScanningAlert[] {
   try {
-    const raw = execFileSync(
-      "gh",
-      [
-        "api",
-        "--paginate",
-        "--slurp",
-        `repos/${owner}/${repo}/code-scanning/alerts?ref=${encodeURIComponent(ref)}&state=open&per_page=100`,
-      ],
-      { encoding: "utf-8" },
-    );
+    const raw = ghExec([
+      "api",
+      "--paginate",
+      "--slurp",
+      `repos/${owner}/${repo}/code-scanning/alerts?ref=${encodeURIComponent(ref)}&state=open&per_page=100`,
+    ]);
     const pages: CodeScanningAlert[][] = JSON.parse(raw);
     return pages.flat();
   } catch {
@@ -582,20 +565,16 @@ export function dismissCodeScanningAlert(
   alertNumber: number,
   reason: string,
 ): void {
-  execFileSync(
-    "gh",
-    [
-      "api",
-      "-X",
-      "PATCH",
-      `repos/${owner}/${repo}/code-scanning/alerts/${alertNumber}`,
-      "-f",
-      "state=dismissed",
-      "-f",
-      "dismissed_reason=false positive",
-      "-f",
-      `dismissed_comment=${reason}`,
-    ],
-    { encoding: "utf-8" },
-  );
+  ghExec([
+    "api",
+    "-X",
+    "PATCH",
+    `repos/${owner}/${repo}/code-scanning/alerts/${alertNumber}`,
+    "-f",
+    "state=dismissed",
+    "-f",
+    "dismissed_reason=false positive",
+    "-f",
+    `dismissed_comment=${reason}`,
+  ]);
 }

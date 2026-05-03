@@ -11,6 +11,7 @@ import { type ExecFileSyncOptions, execFileSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { ghExec } from "./gh-exec.js";
 import { t } from "./i18n/index.js";
 import { repoLockPath, withLock } from "./lock.js";
 
@@ -83,11 +84,13 @@ export function repoPath(owner: string, repo: string): string {
  * Detect the default branch for `owner/repo` via `gh repo view`.
  */
 export function detectDefaultBranch(owner: string, repo: string): string {
-  const output = execFileSync(
-    "gh",
-    ["repo", "view", `${owner}/${repo}`, "--json", "defaultBranchRef"],
-    { encoding: "utf-8" },
-  );
+  const output = ghExec([
+    "repo",
+    "view",
+    `${owner}/${repo}`,
+    "--json",
+    "defaultBranchRef",
+  ]);
   const data = JSON.parse(output);
   return data.defaultBranchRef?.name ?? "main";
 }

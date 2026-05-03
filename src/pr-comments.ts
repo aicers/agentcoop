@@ -6,8 +6,7 @@
  * to reconcile local RunState with the PR-derived state on resume.
  */
 
-import { execFileSync } from "node:child_process";
-
+import { ghExec } from "./gh-exec.js";
 import type { ReviewSubStep, RunState } from "./run-state.js";
 
 // ---- types ---------------------------------------------------------------
@@ -71,16 +70,12 @@ export function fetchPrComments(
   repo: string,
   prNumber: number,
 ): PrComment[] {
-  const output = execFileSync(
-    "gh",
-    [
-      "api",
-      `repos/${owner}/${repo}/issues/${prNumber}/comments`,
-      "--paginate",
-      "--slurp",
-    ],
-    { encoding: "utf-8" },
-  );
+  const output = ghExec([
+    "api",
+    `repos/${owner}/${repo}/issues/${prNumber}/comments`,
+    "--paginate",
+    "--slurp",
+  ]);
   // --slurp wraps all pages in an outer array: [[page1...], [page2...]].
   // Flatten to a single array of comments.
   const pages: PrComment[][] = JSON.parse(output);
@@ -96,19 +91,15 @@ export function postPrComment(
   prNumber: number,
   body: string,
 ): void {
-  execFileSync(
-    "gh",
-    [
-      "pr",
-      "comment",
-      String(prNumber),
-      "--repo",
-      `${owner}/${repo}`,
-      "--body",
-      body,
-    ],
-    { encoding: "utf-8" },
-  );
+  ghExec([
+    "pr",
+    "comment",
+    String(prNumber),
+    "--repo",
+    `${owner}/${repo}`,
+    "--body",
+    body,
+  ]);
 }
 
 /**
@@ -125,8 +116,7 @@ export function patchPrComment(
   commentId: number,
   body: string,
 ): void {
-  execFileSync(
-    "gh",
+  ghExec(
     [
       "api",
       "--method",
@@ -135,7 +125,7 @@ export function patchPrComment(
       "--input",
       "-",
     ],
-    { encoding: "utf-8", input: JSON.stringify({ body }) },
+    { input: JSON.stringify({ body }) },
   );
 }
 

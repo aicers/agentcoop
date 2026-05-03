@@ -102,7 +102,7 @@ describe("detectDefaultBranch", () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "gh",
       ["repo", "view", "org/repo", "--json", "defaultBranchRef"],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
   });
 

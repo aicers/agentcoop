@@ -45,7 +45,7 @@ describe("findPrNumber", () => {
         "--limit",
         "1",
       ],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
   });
 
@@ -101,7 +101,7 @@ describe("getPrBody", () => {
         "--jq",
         ".body",
       ],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
   });
 
@@ -171,7 +171,7 @@ describe("queryMergeableState", () => {
         "--json",
         "mergeable",
       ],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
   });
 });
@@ -226,7 +226,7 @@ describe("queryPrState", () => {
         "--json",
         "state",
       ],
-      { encoding: "utf-8" },
+      expect.objectContaining({ encoding: "utf-8" }),
     );
   });
 });
