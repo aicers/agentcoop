@@ -53,7 +53,7 @@ function makeCiRun(overrides: Partial<CiRun> = {}): CiRun {
 }
 
 function makeCiStatus(verdict: CiVerdict, runs: CiRun[] = []): CiStatus {
-  return { verdict, runs, findings: [] };
+  return { verdict, runs };
 }
 
 const BASE_CTX: StageContext = {
@@ -114,7 +114,6 @@ function makeOpts(
     issueTitle: "Fix the widget",
     issueBody: "The widget is broken.",
     getCiStatus: vi.fn().mockReturnValue(makeCiStatus("pass")),
-    collectFailureLogs: vi.fn().mockReturnValue(""),
     getHeadSha: vi.fn().mockReturnValue("abc123"),
     delay: vi.fn().mockResolvedValue(undefined),
     pollIntervalMs: 100,
@@ -538,7 +537,6 @@ describe("createReviewStageHandler", () => {
           makeCiRun({ conclusion: "failure", databaseId: 200 }),
         ]),
       );
-    const collectFailureLogs = vi.fn().mockReturnValue("test failed");
 
     // Agent A: first call is fix, subsequent are CI fix attempts
     const invokeResults = [
@@ -559,7 +557,6 @@ describe("createReviewStageHandler", () => {
       agentA,
       agentB,
       getCiStatus,
-      collectFailureLogs,
       maxFixAttempts: 3,
     });
     const stage = createReviewStageHandler(opts);
@@ -2475,7 +2472,6 @@ describe("createReviewStageHandler", () => {
         makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
       )
       .mockReturnValueOnce(makeCiStatus("pass"));
-    const collectFailureLogs = vi.fn().mockReturnValue("err");
 
     const invokeResults = [
       makeStream(makeResult({ sessionId: "sess-a", responseText: "Fixed." })),
@@ -2493,7 +2489,6 @@ describe("createReviewStageHandler", () => {
       agentA,
       agentB,
       getCiStatus,
-      collectFailureLogs,
     });
     const stage = createReviewStageHandler(opts);
     const result = await stage.handler(BASE_CTX);
@@ -2591,7 +2586,6 @@ describe("onSessionId", () => {
       agentA,
       agentB,
       getCiStatus: vi.fn().mockReturnValue(ciPass),
-      collectFailureLogs: vi.fn(),
       getHeadSha: vi.fn().mockReturnValue("abc123"),
       delay: vi.fn(),
     });
@@ -2778,7 +2772,6 @@ describe("comment validation", () => {
       getCiStatus: () => ({
         verdict: "pass" as const,
         runs: [makeCiRun()],
-        findings: [],
       }),
     });
     const stage = createReviewStageHandler(opts);

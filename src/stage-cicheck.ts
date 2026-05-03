@@ -3,9 +3,12 @@
  *
  * Polls CI status for the branch.  When CI is pending the handler waits
  * internally (without consuming the engine's auto-budget).  When CI
- * passes the stage completes.  When CI fails the handler collects
- * failure logs, sends them to the agent for a fix, and returns
- * `"not_approved"` so the engine loops back for another CI poll.
+ * passes the stage completes.  When CI fails the handler builds a
+ * bounded {@link CiInspectionContext} (pointers to the failing runs
+ * and jobs) and sends it to the agent for a fix; the agent then
+ * fetches logs, annotations, and code scanning alerts itself with
+ * `gh`.  The handler returns `"not_approved"` so the engine loops
+ * back for another CI poll.
  *
  * The engine's auto-budget (configurable via `ciCheckAutoIterations`,
  * default 3) handles the fix iteration limit.  The poll timeout
@@ -15,19 +18,14 @@
 
 import type { AgentAdapter } from "./agent.js";
 import type {
-  CiFinding,
-  CiRun,
+  BuildCiInspectionContextFn,
+  CiInspectionContext,
   CiStatus,
-  CorrelatedFinding,
-  FetchCodeScanningAlertsFn,
   GetCiStatusFn,
 } from "./ci.js";
 import {
-  correlateFindings,
-  collectFailureLogs as defaultCollectFailureLogs,
-  fetchCodeScanningAlerts as defaultFetchAlerts,
+  buildCiInspectionContext as defaultBuildCiInspectionContext,
   getCiStatus as defaultGetCiStatus,
-  normaliseCiConclusion,
 } from "./ci.js";
 import { t } from "./i18n/index.js";
 import { buildPrSyncInstructions } from "./issue-sync.js";
@@ -57,16 +55,19 @@ export interface CiCheckStageOptions {
   issueBody: string;
   /** Injected for testability. Defaults to `ci.getCiStatus`. */
   getCiStatus?: GetCiStatusFn;
-  /** Injected for testability. Defaults to `ci.collectFailureLogs`. */
-  collectFailureLogs?: (owner: string, repo: string, run: CiRun) => string;
   /**
    * Read the current HEAD SHA from the worktree.  Called before each
    * CI poll so that fix pushes automatically target the new commit.
    * Injected for testability.  Defaults to `worktree.getHeadSha`.
    */
   getHeadSha?: (cwd: string) => string;
-  /** Injected for testability. Defaults to `ci.fetchCodeScanningAlerts`. */
-  fetchCodeScanningAlerts?: FetchCodeScanningAlertsFn;
+  /**
+   * Injected for testability.  Defaults to `ci.buildCiInspectionContext`.
+   * Used to derive bounded pointer metadata about the failing CI
+   * surfaces so the agent can fetch the actual logs/annotations/alerts
+   * itself with `gh`.
+   */
+  buildCiInspectionContext?: BuildCiInspectionContextFn;
   /** Delay in ms between polls when CI is pending. Default 30 000. */
   pollIntervalMs?: number;
   /** Max time in ms to wait for pending CI. Default 600 000 (10 min). */
@@ -80,12 +81,151 @@ export interface CiCheckStageOptions {
   delay?: (ms: number) => Promise<void>;
 }
 
+// ---- prompt body helpers ---------------------------------------------------
+
+function formatInspectionContext(inspection: CiInspectionContext): string {
+  const lines: string[] = [];
+  lines.push(`ref: ${inspection.ref}`);
+  lines.push(`hasAnnotations: ${inspection.hasAnnotations}`);
+  lines.push(`annotationsIncomplete: ${inspection.annotationsIncomplete}`);
+
+  if (inspection.workflowRuns.length > 0) {
+    lines.push(``, `Failing workflow runs:`);
+    for (const wr of inspection.workflowRuns) {
+      lines.push(`- runId: ${wr.runId}`);
+      if (wr.failedJobs.length === 0) {
+        lines.push(`  failedJobs: (unable to enumerate — fetch via gh)`);
+      } else {
+        lines.push(`  failedJobs:`);
+        for (const job of wr.failedJobs) {
+          lines.push(`    - ${job.id} ${JSON.stringify(job.name)}`);
+        }
+      }
+    }
+  } else {
+    lines.push(``, `Failing workflow runs: (none)`);
+  }
+
+  if (inspection.checkRunIds.length > 0) {
+    lines.push(``, `Check runs to inspect:`);
+    for (const id of inspection.checkRunIds) {
+      lines.push(`- ${id}`);
+    }
+  } else {
+    lines.push(``, `Check runs to inspect: (none)`);
+  }
+
+  return lines.join("\n");
+}
+
+function buildFetchHints(
+  ctx: StageContext,
+  inspection: CiInspectionContext,
+): string {
+  const repo = `${ctx.owner}/${ctx.repo}`;
+  const ref = inspection.ref;
+  const lines = [
+    `## Fetching CI details`,
+    ``,
+    `Failure logs, annotation bodies, and code scanning alert payloads`,
+    `are **not** inlined here — fetch them yourself with \`gh\` as you`,
+    `narrow down the failure.  Useful commands:`,
+    ``,
+    "```",
+    `# Failure logs for a specific job in a workflow run (preferred —`,
+    `# scopes the log to one job rather than the entire workflow):`,
+    `gh run view <runId> --repo ${repo} --log-failed --job <jobId>`,
+    ``,
+    `# Whole-run failure log (use only when no job IDs are listed):`,
+    `gh run view <runId> --repo ${repo} --log-failed`,
+    ``,
+    `# Check run output and annotations:`,
+    `gh api "repos/${repo}/check-runs/<checkRunId>"`,
+    `gh api "repos/${repo}/check-runs/<checkRunId>/annotations"`,
+    ``,
+    `# Open code scanning alerts for the ref:`,
+    `gh api "repos/${repo}/code-scanning/alerts?ref=${ref}&state=open&per_page=100"`,
+    "```",
+  ];
+  if (inspection.annotationsIncomplete) {
+    lines.push(
+      ``,
+      `**Note:** \`annotationsIncomplete\` is true — the inspection`,
+      `metadata above may be partial (a job listing failed or hit its`,
+      `page cap).  Re-fetch the jobs listing yourself if you need the`,
+      `full set:`,
+      ``,
+      "```",
+      `gh api "repos/${repo}/actions/runs/<runId>/jobs?per_page=100"`,
+      "```",
+    );
+  }
+  return lines.join("\n");
+}
+
+function buildDismissAlertsBlock(ctx: StageContext): string {
+  const repo = `${ctx.owner}/${ctx.repo}`;
+  return [
+    `## Triage of code scanning alerts`,
+    ``,
+    `Some annotations may correspond to open code scanning alerts.`,
+    `Fetch the alerts list for the ref above, then for each alert`,
+    `decide whether it is a **real issue** or a **false positive**.`,
+    ``,
+    `### Evaluation criteria`,
+    ``,
+    `A finding is a **real issue** when:`,
+    `- The flagged code path is reachable in production.`,
+    `- An attacker-controlled or untrusted input can reach the sink`,
+    `  without adequate sanitisation or validation.`,
+    `- The reported weakness (e.g. SQL injection, XSS, path traversal)`,
+    `  is exploitable given the application's threat model.`,
+    ``,
+    `A finding is a **false positive** when:`,
+    `- The data is already sanitised or validated before it reaches`,
+    `  the flagged location, but the analyser cannot see through the`,
+    `  sanitiser.`,
+    `- The flagged code is dead, test-only, or unreachable in`,
+    `  production.`,
+    `- The "source" is not actually attacker-controlled (e.g. a`,
+    `  hardcoded constant, an environment variable set at deploy time).`,
+    `- The framework or library provides built-in protection that`,
+    `  makes the flagged pattern safe (e.g. parameterised queries).`,
+    ``,
+    `### Actions`,
+    ``,
+    `- **Real issue:** Fix the code.  After fixing, commit and push.`,
+    `- **False positive:** For each false-positive alert, dismiss it`,
+    `  via the API:`,
+    ``,
+    "```",
+    `gh api -X PATCH "repos/${repo}/code-scanning/alerts/{number}" \\`,
+    `  -f state=dismissed \\`,
+    `  -f "dismissed_reason=false positive" \\`,
+    `  -f "dismissed_comment={your brief explanation}"`,
+    "```",
+    ``,
+    `  Then leave one PR comment summarising all dismissed alerts and`,
+    `  the reasoning for each.  First, find the PR number:`,
+    ``,
+    "```",
+    `gh pr view --repo ${repo} ${ctx.branch} --json number --jq .number`,
+    "```",
+    ``,
+    `  Then post the comment:`,
+    ``,
+    "```",
+    `gh pr comment --repo ${repo} <pr_number> --body "..."`,
+    "```",
+  ].join("\n");
+}
+
 // ---- prompt builders -------------------------------------------------------
 
 export function buildCiFixPrompt(
   ctx: StageContext,
-  opts: CiCheckStageOptions,
-  failureLogs: string,
+  opts: Pick<CiCheckStageOptions, "issueTitle" | "issueBody">,
+  inspection: CiInspectionContext,
 ): string {
   const lines = [
     `You are fixing CI failures for the following GitHub issue.`,
@@ -94,14 +234,19 @@ export function buildCiFixPrompt(
     ``,
     opts.issueBody,
     ``,
-    `## CI Failure Logs`,
+    `## CI Inspection Context`,
     ``,
-    failureLogs || "No detailed failure logs available.",
+    `Repository: ${ctx.owner}/${ctx.repo}`,
+    `Branch: ${ctx.branch}`,
+    formatInspectionContext(inspection),
+    ``,
+    buildFetchHints(ctx, inspection),
     ``,
     `## Instructions`,
     ``,
-    `Diagnose and fix the CI failures shown above.  After making your`,
-    `changes:`,
+    `Use the pointers above and the \`gh\` commands to read the actual`,
+    `failure context, diagnose the failures, and fix them.  After`,
+    `making your changes:`,
     ``,
     buildDocConsistencyInstructions(),
     ``,
@@ -119,24 +264,29 @@ export function buildCiFixPrompt(
 
 /**
  * Compact resume-form CI fix prompt — repository / issue context is
- * already in the live agent session, so only the failure logs and
- * instructions are re-sent.
+ * already in the live agent session, so only the inspection context
+ * and instructions are re-sent.
  */
 export function buildCiFixResumePrompt(
   ctx: StageContext,
-  failureLogs: string,
+  inspection: CiInspectionContext,
 ): string {
   const lines = [
     `Fix the CI failures for issue #${ctx.issueNumber}.`,
     ``,
-    `## CI Failure Logs`,
+    `## CI Inspection Context`,
     ``,
-    failureLogs || "No detailed failure logs available.",
+    `Repository: ${ctx.owner}/${ctx.repo}`,
+    `Branch: ${ctx.branch}`,
+    formatInspectionContext(inspection),
+    ``,
+    buildFetchHints(ctx, inspection),
     ``,
     `## Instructions`,
     ``,
-    `Diagnose and fix the CI failures shown above.  After making your`,
-    `changes:`,
+    `Use the pointers above and the \`gh\` commands to read the actual`,
+    `failure context, diagnose the failures, and fix them.  After`,
+    `making your changes:`,
     ``,
     buildDocConsistencyInstructions(),
     ``,
@@ -150,157 +300,34 @@ export function buildCiFixResumePrompt(
   return lines.join("\n");
 }
 
-/**
- * Format findings into a structured block for inclusion in the
- * findings-review prompt.  When correlated findings are available,
- * each finding includes its alert number for dismiss operations.
- */
-function formatFindings(findings: CiFinding[]): string;
-function formatFindings(correlated: CorrelatedFinding[]): string;
-function formatFindings(items: CiFinding[] | CorrelatedFinding[]): string {
-  // Normalise to CorrelatedFinding shape.
-  const correlated: CorrelatedFinding[] = items.map((item) =>
-    "finding" in item ? item : { finding: item },
-  );
-
-  const byRun = new Map<string, CorrelatedFinding[]>();
-  for (const cf of correlated) {
-    const f = cf.finding;
-    const key = `${f.checkRunName} (check run ${f.checkRunId})`;
-    const group = byRun.get(key) ?? [];
-    group.push(cf);
-    byRun.set(key, group);
-  }
-
-  const sections: string[] = [];
-  for (const [header, group] of byRun) {
-    const lines = group.map((cf) => {
-      const f = cf.finding;
-      const rule = f.rule ? ` (${f.rule})` : "";
-      const alert = cf.alertNumber != null ? ` [alert #${cf.alertNumber}]` : "";
-      return `- ${f.file}:${f.line}: [${f.level}] ${f.message}${rule}${alert}`;
-    });
-    sections.push(`### ${header}\n${lines.join("\n")}`);
-  }
-  return sections.join("\n\n");
-}
-
-/**
- * Build triage criteria and dismiss instructions for CodeQL findings.
- * Only included when at least one finding is correlated to an alert.
- */
-function buildTriageInstructions(
-  ctx: StageContext,
-  correlated: CorrelatedFinding[],
-): string {
-  const hasAlerts = correlated.some((cf) => cf.alertNumber != null);
-  if (!hasAlerts) return "";
-
-  const dismissible = correlated.filter((cf) => cf.alertNumber != null);
-
-  const lines = [
-    ``,
-    `## CodeQL Triage`,
-    ``,
-    `For each finding marked with an alert number (\`[alert #N]\`), evaluate`,
-    `whether it is a **real issue** or a **false positive**.`,
-    ``,
-    `### Evaluation criteria`,
-    ``,
-    `A finding is a **real issue** when:`,
-    `- The flagged code path is reachable in production.`,
-    `- An attacker-controlled or untrusted input can reach the sink`,
-    `  without adequate sanitisation or validation.`,
-    `- The reported weakness (e.g. SQL injection, XSS, path traversal)`,
-    `  is exploitable given the application's threat model.`,
-    ``,
-    `A finding is a **false positive** when:`,
-    `- The data is already sanitised or validated before it reaches the`,
-    `  flagged location, but CodeQL cannot see through the sanitiser.`,
-    `- The flagged code is dead, test-only, or unreachable in production.`,
-    `- The "source" is not actually attacker-controlled (e.g. a hardcoded`,
-    `  constant, an environment variable set at deploy time).`,
-    `- The framework or library provides built-in protection that makes`,
-    `  the flagged pattern safe (e.g. parameterised queries).`,
-    ``,
-    `### Actions`,
-    ``,
-    `- **Real issue:** Fix the code.  After fixing, commit and push.`,
-    `- **False positive:** For each false-positive alert, run these`,
-    `  commands (one pair per alert):`,
-    ``,
-    `  \`\`\``,
-    `  gh api -X PATCH "repos/${ctx.owner}/${ctx.repo}/code-scanning/alerts/{number}" \\`,
-    `    -f state=dismissed \\`,
-    `    -f "dismissed_reason=false positive" \\`,
-    `    -f "dismissed_comment={your brief explanation}"`,
-    `  \`\`\``,
-    ``,
-    `  Then leave one PR comment summarising all dismissed alerts and`,
-    `  the reasoning for each.  First, find the PR number:`,
-    ``,
-    `  \`\`\``,
-    `  gh pr view --repo ${ctx.owner}/${ctx.repo} ${ctx.branch} --json number --jq .number`,
-    `  \`\`\``,
-    ``,
-    `  Then post the comment:`,
-    ``,
-    `  \`\`\``,
-    `  gh pr comment --repo ${ctx.owner}/${ctx.repo} <pr_number> --body "..."`,
-    `  \`\`\``,
-    ``,
-    `### Dismissible alerts`,
-    ``,
-  ];
-
-  for (const cf of dismissible) {
-    const f = cf.finding;
-    const rule = f.rule ?? "(unknown rule)";
-    lines.push(`- Alert #${cf.alertNumber}: ${rule} at ${f.file}:${f.line}`);
-  }
-
-  return lines.join("\n");
-}
-
 export function buildCiFindingsPrompt(
   ctx: StageContext,
   opts: Pick<CiCheckStageOptions, "issueTitle" | "issueBody">,
-  findings: CiFinding[],
-  findingsIncomplete?: boolean,
-  correlated?: CorrelatedFinding[],
+  inspection: CiInspectionContext,
 ): string {
   const lines = [
-    `CI passed but check runs reported findings (annotations).`,
-    `Review the findings below and decide whether any should be addressed.`,
+    `CI passed but check runs reported annotations.  Inspect them`,
+    `yourself and decide whether any should be addressed.`,
     ``,
     `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
     ``,
     opts.issueBody,
     ``,
-    `## CI Findings`,
+    `## CI Inspection Context`,
     ``,
-    correlated ? formatFindings(correlated) : formatFindings(findings),
-  ];
-
-  if (findingsIncomplete) {
-    lines.push(
-      ``,
-      `**Note:** Some check run annotations could not be fetched.`,
-      `The findings above may be incomplete.  Check the PR's Checks`,
-      `tab for the full list of annotations.`,
-    );
-  }
-
-  if (correlated) {
-    lines.push(buildTriageInstructions(ctx, correlated));
-  }
-
-  lines.push(
+    `Repository: ${ctx.owner}/${ctx.repo}`,
+    `Branch: ${ctx.branch}`,
+    formatInspectionContext(inspection),
+    ``,
+    buildFetchHints(ctx, inspection),
+    ``,
+    buildDismissAlertsBlock(ctx),
     ``,
     `## Instructions`,
     ``,
-    `For each finding, decide whether it should be fixed or can be`,
-    `safely ignored.  If you fix any findings:`,
+    `Read the annotations and any code scanning alerts via the \`gh\``,
+    `commands above.  For each finding, decide whether it should be`,
+    `fixed or can be safely ignored.  If you fix any findings:`,
     ``,
     buildDocConsistencyInstructions(),
     ``,
@@ -308,7 +335,7 @@ export function buildCiFindingsPrompt(
     ``,
     `Then commit and push the branch so a new CI run is triggered.`,
     `If all findings are acceptable as-is, explain your reasoning.`,
-  );
+  ];
 
   if (ctx.userInstruction) {
     lines.push(``, `## Additional feedback`, ``, ctx.userInstruction);
@@ -319,45 +346,33 @@ export function buildCiFindingsPrompt(
 
 /**
  * Compact resume-form findings prompt — drops the issue body which
- * the agent's live session already has from prior stages.  Findings
- * data and the (conditional) CodeQL triage block are preserved
- * because they are dynamic per-run content.
+ * the agent's live session already has from prior stages.  The
+ * pointer metadata is preserved because it is dynamic per-run.
  */
 export function buildCiFindingsResumePrompt(
   ctx: StageContext,
-  findings: CiFinding[],
-  findingsIncomplete?: boolean,
-  correlated?: CorrelatedFinding[],
+  inspection: CiInspectionContext,
 ): string {
   const lines = [
-    `CI passed but check runs reported findings (annotations) for issue`,
-    `#${ctx.issueNumber}.  Review the findings below and decide whether`,
+    `CI passed but check runs reported annotations for issue`,
+    `#${ctx.issueNumber}.  Inspect them yourself and decide whether`,
     `any should be addressed.`,
     ``,
-    `## CI Findings`,
+    `## CI Inspection Context`,
     ``,
-    correlated ? formatFindings(correlated) : formatFindings(findings),
-  ];
-
-  if (findingsIncomplete) {
-    lines.push(
-      ``,
-      `**Note:** Some check run annotations could not be fetched.`,
-      `The findings above may be incomplete.  Check the PR's Checks`,
-      `tab for the full list of annotations.`,
-    );
-  }
-
-  if (correlated) {
-    lines.push(buildTriageInstructions(ctx, correlated));
-  }
-
-  lines.push(
+    `Repository: ${ctx.owner}/${ctx.repo}`,
+    `Branch: ${ctx.branch}`,
+    formatInspectionContext(inspection),
+    ``,
+    buildFetchHints(ctx, inspection),
+    ``,
+    buildDismissAlertsBlock(ctx),
     ``,
     `## Instructions`,
     ``,
-    `For each finding, decide whether it should be fixed or can be`,
-    `safely ignored.  If you fix any findings:`,
+    `Read the annotations and any code scanning alerts via the \`gh\``,
+    `commands above.  For each finding, decide whether it should be`,
+    `fixed or can be safely ignored.  If you fix any findings:`,
     ``,
     buildDocConsistencyInstructions(),
     ``,
@@ -365,7 +380,7 @@ export function buildCiFindingsResumePrompt(
     ``,
     `Then commit and push the branch so a new CI run is triggered.`,
     `If all findings are acceptable as-is, explain your reasoning.`,
-  );
+  ];
 
   if (ctx.userInstruction) {
     lines.push(``, `## Additional feedback`, ``, ctx.userInstruction);
@@ -380,9 +395,9 @@ export function createCiCheckStageHandler(
   opts: CiCheckStageOptions,
 ): StageDefinition {
   const getCiStatus = opts.getCiStatus ?? defaultGetCiStatus;
-  const collectLogs = opts.collectFailureLogs ?? defaultCollectFailureLogs;
+  const buildInspection =
+    opts.buildCiInspectionContext ?? defaultBuildCiInspectionContext;
   const readHeadSha = opts.getHeadSha ?? defaultGetHeadSha;
-  const fetchAlerts = opts.fetchCodeScanningAlerts ?? defaultFetchAlerts;
   const pollInterval = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const pollTimeout = opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS;
   const emptyGrace =
@@ -399,8 +414,9 @@ export function createCiCheckStageHandler(
       const startTime = Date.now();
 
       let ciStatus: CiStatus;
+      let commitSha: string | undefined;
       while (true) {
-        const commitSha = readHeadSha(ctx.worktreePath);
+        commitSha = readHeadSha(ctx.worktreePath);
 
         try {
           ciStatus = getCiStatus(ctx.owner, ctx.repo, ctx.branch, commitSha);
@@ -441,41 +457,38 @@ export function createCiCheckStageHandler(
         await delay(pollInterval);
       }
 
-      // ---- CI passed (clean) ------------------------------------------------
+      const ref = commitSha ?? ctx.branch;
 
-      if (
-        ciStatus.verdict === "pass" &&
-        ciStatus.findings.length === 0 &&
-        !ciStatus.findingsIncomplete
-      ) {
-        return { outcome: "completed", message: t()["ci.passed"] };
-      }
-
-      // ---- CI passed with findings — present for review -------------------
+      // ---- CI passed ------------------------------------------------------
 
       if (ciStatus.verdict === "pass") {
-        const shaBeforeReview = readHeadSha(ctx.worktreePath);
+        // Determine whether any check run reports annotations; if not,
+        // it's a clean pass.  We avoid building the full inspection
+        // context (which fetches per-run job listings) until we know
+        // we'll use it.
+        const hasAnnotations = ciStatus.runs.some(
+          (r) =>
+            r.source === "check" &&
+            r.annotationsCount != null &&
+            r.annotationsCount > 0,
+        );
+        if (!hasAnnotations) {
+          return { outcome: "completed", message: t()["ci.passed"] };
+        }
 
-        // Fetch code scanning alerts and correlate to findings so
-        // the agent can dismiss false positives by alert number.
-        const alerts = fetchAlerts(ctx.owner, ctx.repo, ctx.branch);
-        const correlated =
-          alerts.length > 0
-            ? correlateFindings(ciStatus.findings, alerts)
-            : undefined;
+        // ---- CI passed with annotations — present pointers for review ----
+
+        const inspection = buildInspection(ctx.owner, ctx.repo, ref, ciStatus);
+        const shaBeforeReview = readHeadSha(ctx.worktreePath);
 
         const freshFindingsPrompt = buildCiFindingsPrompt(
           ctx,
           opts,
-          ciStatus.findings,
-          ciStatus.findingsIncomplete,
-          correlated,
+          inspection,
         );
         const resumeFindingsPrompt = buildCiFindingsResumePrompt(
           ctx,
-          ciStatus.findings,
-          ciStatus.findingsIncomplete,
-          correlated,
+          inspection,
         );
         const findingsUseResume = ctx.savedAgentASessionId !== undefined;
         const findingsPrompt = findingsUseResume
@@ -517,30 +530,12 @@ export function createCiCheckStageHandler(
         return { outcome: "completed", message: t()["ci.passedWithFindings"] };
       }
 
-      // ---- CI failed — collect logs and send to agent ----------------------
+      // ---- CI failed — build pointer context and send to agent ------------
 
-      const failedRuns = ciStatus.runs.filter((r) => {
-        const conclusion = normaliseCiConclusion(r);
-        return conclusion === "failure" || conclusion === "cancelled";
-      });
+      const inspection = buildInspection(ctx.owner, ctx.repo, ref, ciStatus);
 
-      const logSections: string[] = [];
-      for (const run of failedRuns) {
-        const logs = collectLogs(ctx.owner, ctx.repo, run);
-        if (logs) {
-          logSections.push(
-            `### ${run.name} (run ${run.databaseId})\n\n${logs}`,
-          );
-        }
-      }
-
-      const failureLogs =
-        logSections.length > 0
-          ? logSections.join("\n\n")
-          : "No detailed failure logs available.";
-
-      const freshFixPrompt = buildCiFixPrompt(ctx, opts, failureLogs);
-      const resumeFixPrompt = buildCiFixResumePrompt(ctx, failureLogs);
+      const freshFixPrompt = buildCiFixPrompt(ctx, opts, inspection);
+      const resumeFixPrompt = buildCiFixResumePrompt(ctx, inspection);
       const fixUseResume = ctx.savedAgentASessionId !== undefined;
       const prompt = fixUseResume ? resumeFixPrompt : freshFixPrompt;
       ctx.promptSinks?.a?.(prompt, "ci-fix");

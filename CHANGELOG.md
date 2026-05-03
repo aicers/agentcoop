@@ -4,6 +4,27 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- CI fix, findings-review, and dismiss-alerts prompts no longer inline
+  raw `gh run view --log-failed` output, serialised annotation lists,
+  or code scanning alert payloads.  The pipeline now emits a small,
+  bounded `CiInspectionContext` (failing workflow run/job IDs,
+  check-run IDs, an `annotationsIncomplete` flag, and the ref) and
+  the agent fetches the actual failure logs, annotations, and alerts
+  itself with `gh`.  This fixes the `Prompt is too long` failures
+  observed when a Stage 7 fix attempt encountered a 27,000-line E2E
+  log.  `CiStatus` no longer carries `findings: CiFinding[]` or
+  `findingsIncomplete`; consumers of the prompt-feeding shape should
+  switch to `buildCiInspectionContext(owner, repo, ref, ciStatus)`.
+  `collectFindings`, `collectFailureLogs`, `fetchCodeScanningAlerts`,
+  and `correlateFindings` remain as utilities but are no longer called
+  during prompt construction by `buildCiFixPrompt`,
+  `buildCiFixResumePrompt`, `buildCiFindingsPrompt`, or
+  `buildCiFindingsResumePrompt`.
+
 ## [0.3.0] - 2026-05-02
 
 ### Changed

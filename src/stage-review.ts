@@ -23,11 +23,8 @@
  */
 
 import type { AgentAdapter, AgentResult } from "./agent.js";
-import type { CiRun, GetCiStatusFn } from "./ci.js";
-import {
-  collectFailureLogs as defaultCollectFailureLogs,
-  getCiStatus as defaultGetCiStatus,
-} from "./ci.js";
+import type { BuildCiInspectionContextFn, GetCiStatusFn } from "./ci.js";
+import { getCiStatus as defaultGetCiStatus } from "./ci.js";
 import { pollCiAndFix } from "./ci-poll.js";
 import { t } from "./i18n/index.js";
 import { buildPrSyncInstructions } from "./issue-sync.js";
@@ -71,8 +68,8 @@ export interface ReviewStageOptions {
   issueBody: string;
   /** Injected for testability. */
   getCiStatus?: GetCiStatusFn;
-  /** Injected for testability. */
-  collectFailureLogs?: (owner: string, repo: string, run: CiRun) => string;
+  /** Injected for testability. Defaults to `ci.buildCiInspectionContext`. */
+  buildCiInspectionContext?: BuildCiInspectionContextFn;
   /** Injected for testability. Defaults to `worktree.getHeadSha`. */
   getHeadSha?: (cwd: string) => string;
   pollIntervalMs?: number;
@@ -1179,8 +1176,7 @@ export function createReviewStageHandler(
           issueBody: opts.issueBody,
           initialAgentASessionId,
           getCiStatus: opts.getCiStatus ?? defaultGetCiStatus,
-          collectFailureLogs:
-            opts.collectFailureLogs ?? defaultCollectFailureLogs,
+          buildCiInspectionContext: opts.buildCiInspectionContext,
           getHeadSha: opts.getHeadSha,
           emptyRunsGracePeriodMs: opts.emptyRunsGracePeriodMs,
           pollIntervalMs: opts.pollIntervalMs,

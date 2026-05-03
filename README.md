@@ -111,9 +111,12 @@ inside the TUI; Stage 1 is orchestrator-managed and runs beforehand.
 - **Stage 2 — Implement:** Agent A implements the issue in a git worktree
 - **Stage 3 — Self-check:** Agent A self-checks against quality criteria
 - **Stage 4 — Create PR:** Agent A opens a pull request
-- **Stage 5 — CI check:** Wait for CI; agent fixes failures automatically.
-  If CI passes with findings (e.g., CodeQL alerts), the agent
-  reviews the annotations and either fixes or triages them.
+- **Stage 5 — CI check:** Wait for CI; on failure the agent receives
+  bounded pointers (failing run/job IDs, check-run IDs, the ref) and
+  reads the actual failure logs itself with `gh run view --log-failed`.
+  If CI passes but check runs report annotations, the agent fetches
+  the annotations and any code scanning alerts on demand and either
+  fixes or triages them — never inlined into the prompt.
 - **Stage 6 — Test plan:** Agent A verifies the PR test plan
 - **Stage 7 — Review:** Agent B reviews; Agent A addresses feedback
   (multi-round)

@@ -63,14 +63,6 @@ export interface CiStatus {
   verdict: CiVerdict;
   /** Individual check runs used to compute the verdict. */
   runs: CiRun[];
-  /** Annotation findings from passing check runs. */
-  findings: CiFinding[];
-  /**
-   * True when at least one annotation fetch failed for a check run
-   * that reported a non-zero annotation count.  Consumers must not
-   * treat an empty `findings` array as "clean" when this is set.
-   */
-  findingsIncomplete?: boolean;
 }
 
 /**
@@ -390,6 +382,11 @@ export function fetchCiRuns(
  *
  * When `commitSha` is provided, only runs triggered by that commit
  * are considered.
+ *
+ * Annotation findings, code scanning alerts, and raw failure logs are
+ * deliberately *not* collected here — those are pointer-fetched by
+ * the agent on demand (see {@link buildCiInspectionContext}) so the
+ * pipeline does not pay the cost of unbounded API responses.
  */
 export function getCiStatus(
   owner: string,
@@ -399,13 +396,187 @@ export function getCiStatus(
 ): CiStatus {
   const runs = fetchCiRuns(owner, repo, branch, commitSha);
   const verdict = evaluateCiRuns(runs);
-  // Collect annotation findings only when CI passes — avoids
-  // redundant API calls during pending/failing polls.
-  const { findings, incomplete } =
-    verdict === "pass"
-      ? collectFindings(owner, repo, runs)
-      : { findings: [] as CiFinding[], incomplete: false };
-  return { verdict, runs, findings, findingsIncomplete: incomplete };
+  return { verdict, runs };
+}
+
+// ---- bounded inspection context (pointers only) --------------------------
+
+/** A failed job within a workflow run, as referenced by the agent. */
+export interface WorkflowFailedJob {
+  id: number;
+  name: string;
+}
+
+/** A failing or cancelled workflow run with the IDs of its failed jobs. */
+export interface WorkflowRunInspection {
+  runId: number;
+  failedJobs: WorkflowFailedJob[];
+}
+
+/**
+ * Bounded, pointer-only metadata describing the CI surfaces the agent
+ * should inspect itself (failure logs, annotations, code scanning
+ * alerts).  Replaces the previous habit of pre-fetching that content
+ * and inlining it into prompts, which routinely overflowed the LLM
+ * context window on large logs.
+ *
+ * This shape is what stages pass to prompt builders.  It must remain
+ * small and constant-bounded regardless of CI volume — only IDs,
+ * counts, and a ref live here.
+ */
+export interface CiInspectionContext {
+  /** Failing or cancelled workflow runs and the IDs of their failed jobs. */
+  workflowRuns: WorkflowRunInspection[];
+  /** Database IDs of check runs the agent should consult. */
+  checkRunIds: number[];
+  /**
+   * True when at least one check run reports a non-zero annotation
+   * count.  Hint to the agent that there *may* be annotations to
+   * read; the agent fetches them itself.
+   */
+  hasAnnotations: boolean;
+  /**
+   * True when the inspection metadata itself could not be fully
+   * determined: a `gh api .../jobs` call failed, the jobs page hit
+   * its size cap (potential truncation), or another listing was only
+   * partially obtained.  Indicates the **pointers** are incomplete,
+   * not the contents.  The agent uses this to decide whether to
+   * retry the metadata read or proceed cautiously.
+   */
+  annotationsIncomplete: boolean;
+  /**
+   * Ref to use for code scanning alert queries — the commit SHA when
+   * known, otherwise the branch name.
+   */
+  ref: string;
+}
+
+/** Signature shared by `buildCiInspectionContext` and injectable overrides. */
+export type BuildCiInspectionContextFn = (
+  owner: string,
+  repo: string,
+  ref: string,
+  ciStatus: CiStatus,
+) => CiInspectionContext;
+
+/** Bounded cap for the failed-jobs listing per workflow run. */
+const FAILED_JOBS_PAGE_LIMIT = 100;
+
+interface WorkflowJobApiEntry {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+}
+
+interface WorkflowJobsApiResponse {
+  jobs?: WorkflowJobApiEntry[];
+  total_count?: number;
+}
+
+function fetchFailedJobs(
+  owner: string,
+  repo: string,
+  runId: number,
+): { failedJobs: WorkflowFailedJob[]; truncated: boolean } | undefined {
+  let raw: string;
+  try {
+    raw = ghExec([
+      "api",
+      `repos/${owner}/${repo}/actions/runs/${runId}/jobs?per_page=${FAILED_JOBS_PAGE_LIMIT}`,
+    ]);
+  } catch {
+    return undefined;
+  }
+  let parsed: WorkflowJobsApiResponse;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  const jobs = parsed.jobs ?? [];
+  const failedJobs: WorkflowFailedJob[] = [];
+  for (const j of jobs) {
+    const conclusion = (j.conclusion ?? "").toLowerCase();
+    if (
+      conclusion === "failure" ||
+      conclusion === "cancelled" ||
+      conclusion === "timed_out"
+    ) {
+      failedJobs.push({ id: j.id, name: j.name });
+    }
+  }
+  const totalCount = parsed.total_count ?? jobs.length;
+  const truncated =
+    totalCount > FAILED_JOBS_PAGE_LIMIT ||
+    jobs.length >= FAILED_JOBS_PAGE_LIMIT;
+  return { failedJobs, truncated };
+}
+
+/**
+ * Build a small, bounded inspection context that points the agent at
+ * the failing CI surfaces (workflow runs/jobs, check runs, the ref
+ * for code scanning queries).  The agent uses the pointers to fetch
+ * logs, annotations, and alerts itself rather than receiving them
+ * inlined in the prompt.
+ *
+ * **Contract for future edits:** this helper must NOT pull raw step
+ * logs, raw alert payloads, or annotation bodies — those are exactly
+ * what we are delegating to the agent because they grow unbounded.
+ * Only bounded metadata (failing job IDs, check-run IDs, counts,
+ * boolean flags) belongs here.  For matrix builds with many jobs,
+ * only the first page (`per_page=100`) is read and
+ * `annotationsIncomplete` is set so the agent knows to paginate
+ * itself if needed.
+ */
+export function buildCiInspectionContext(
+  owner: string,
+  repo: string,
+  ref: string,
+  ciStatus: CiStatus,
+): CiInspectionContext {
+  const workflowRuns: WorkflowRunInspection[] = [];
+  const checkRunIds: number[] = [];
+  let hasAnnotations = false;
+  let annotationsIncomplete = false;
+
+  for (const run of ciStatus.runs) {
+    const conclusion = normaliseCiConclusion(run);
+
+    if (run.source === "workflow") {
+      if (conclusion !== "failure" && conclusion !== "cancelled") {
+        continue;
+      }
+      const fetched = fetchFailedJobs(owner, repo, run.databaseId);
+      if (fetched === undefined) {
+        annotationsIncomplete = true;
+        workflowRuns.push({ runId: run.databaseId, failedJobs: [] });
+      } else {
+        if (fetched.truncated) annotationsIncomplete = true;
+        workflowRuns.push({
+          runId: run.databaseId,
+          failedJobs: fetched.failedJobs,
+        });
+      }
+      continue;
+    }
+
+    // source === "check"
+    const annotated = run.annotationsCount != null && run.annotationsCount > 0;
+    if (annotated) hasAnnotations = true;
+
+    if (conclusion === "failure" || conclusion === "cancelled" || annotated) {
+      checkRunIds.push(run.databaseId);
+    }
+  }
+
+  return {
+    workflowRuns,
+    checkRunIds,
+    hasAnnotations,
+    annotationsIncomplete,
+    ref,
+  };
 }
 
 /**
