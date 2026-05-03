@@ -790,7 +790,7 @@ If all findings are acceptable as-is, explain your reasoning.
 ````
 
 **`annotationsIncomplete` flag:** Surfaces in the prompt as a line
-of the inspection context.  It means the *pointer metadata* itself
+of the inspection context.  It means the _pointer metadata_ itself
 could not be fully determined (a job listing failed or hit its
 page cap), not that annotation bodies are missing — those are
 fetched by the agent on demand.  When `true`, the prompt also
