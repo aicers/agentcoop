@@ -29,6 +29,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- The fresh-form issue header (`## Issue #N: <title>` + blank + body)
+  is now produced by a single `buildIssueHeader` helper in
+  `src/stage-util.ts` and shared across all 11 fresh-form prompt
+  builders (implement, testplan, selfcheck, review/author-fix/PR
+  finalization, ci-fix/ci-findings, createpr, squash, issue-sync).
+  The helper also adds a long-issue guard: when an issue body
+  exceeds `ISSUE_BODY_INLINE_LIMIT` (~4 KB) it replaces the inlined
+  body with a short instruction telling the agent to fetch the body
+  itself via `gh issue view <N> --repo <owner>/<repo> --json body
+  --jq .body`, so unusually long issue bodies (e.g. tens of KB of
+  pasted logs) no longer bloat every fresh-form prompt. Behavior is
+  unchanged for issues under the threshold. Closes #318.
 - CI fix, findings-review, and dismiss-alerts prompts no longer inline
   raw `gh run view --log-failed` output, serialised annotation lists,
   or code scanning alert payloads.  The pipeline now emits a small,

@@ -43,6 +43,7 @@ import {
 import type { ReviewSubStep } from "./run-state.js";
 import {
   buildDocConsistencyInstructions,
+  buildIssueHeader,
   drainToSink,
   invokeOrResume,
   mapAgentError,
@@ -184,9 +185,7 @@ export function buildReviewPrompt(
   const lines = [
     `You are reviewing a pull request for the following GitHub issue.`,
     ``,
-    `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
-    ``,
-    opts.issueBody,
+    ...buildIssueHeader(ctx, opts),
     ``,
     `## Instructions`,
     ``,
@@ -329,9 +328,7 @@ export function buildAuthorFixPrompt(
   const lines = [
     `You are addressing review feedback for the following GitHub issue.`,
     ``,
-    `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
-    ``,
-    opts.issueBody,
+    ...buildIssueHeader(ctx, opts),
     ``,
     `## Instructions`,
     ``,
@@ -462,9 +459,7 @@ export function buildPrFinalizationPrompt(
     `merging, verify that the PR body accurately reflects the final`,
     `state of the implementation.`,
     ``,
-    `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
-    ``,
-    opts.issueBody,
+    ...buildIssueHeader(ctx, opts),
     ``,
     `## Instructions`,
     ``,

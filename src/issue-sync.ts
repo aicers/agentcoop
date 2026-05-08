@@ -13,6 +13,7 @@
 
 import { t } from "./i18n/index.js";
 import type { StageContext } from "./pipeline.js";
+import { buildIssueHeader } from "./stage-util.js";
 
 // ---- public types --------------------------------------------------------
 
@@ -39,9 +40,7 @@ export function buildIssueSyncPrompt(
     `You have completed the self-check.  Now compare the actual`,
     `implementation against the original issue description below.`,
     ``,
-    `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
-    ``,
-    opts.issueBody,
+    ...buildIssueHeader(ctx, opts),
     ``,
     `## Instructions`,
     ``,

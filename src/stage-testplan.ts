@@ -18,6 +18,7 @@ import { t } from "./i18n/index.js";
 import { buildPrSyncInstructions } from "./issue-sync.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
+  buildIssueHeader,
   invokeOrResume,
   mapAgentError,
   mapFixOrDoneResponse,
@@ -39,9 +40,7 @@ export function buildTestPlanVerifyPrompt(
   const lines = [
     `You are verifying the test plan for the following GitHub issue.`,
     ``,
-    `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
-    ``,
-    opts.issueBody,
+    ...buildIssueHeader(ctx, opts),
     ``,
     `## Instructions`,
     ``,
