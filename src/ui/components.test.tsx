@@ -2534,6 +2534,41 @@ describe("TokenBar", () => {
     expect(frame).toContain("Agent A (author)");
     expect(frame).toContain("5.0K in");
   });
+
+  test("renders auth badge from session start, before any usage data", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <TokenBar emitter={emitter} authModeA="env" authModeB="oauth" />,
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("[API]");
+    expect(frame).toContain("[OAuth]");
+  });
+
+  test("auth badge stays visible after usage events arrive", async () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(
+      <TokenBar emitter={emitter} authModeA="env" authModeB="oauth" />,
+    );
+    emitter.emit("agent:usage", {
+      agent: "a",
+      usage: { inputTokens: 1000, outputTokens: 500, cachedInputTokens: 0 },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("[API]");
+    expect(frame).toContain("[OAuth]");
+    expect(frame).toContain("1.0K in");
+  });
+
+  test("renders nothing when neither auth badge nor usage data is present", () => {
+    const emitter = new PipelineEventEmitter();
+    const { lastFrame } = render(<TokenBar emitter={emitter} />);
+    const frame = lastFrame() ?? "";
+    expect(frame).not.toContain("[API]");
+    expect(frame).not.toContain("[OAuth]");
+    expect(frame).not.toContain("Agent A");
+  });
 });
 
 describe("TokenBar width adaptation", () => {

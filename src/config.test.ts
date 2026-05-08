@@ -14,8 +14,13 @@ vi.mock("node:os", () => ({
   homedir: () => tmpHome,
 }));
 
-const { configPath, loadConfig, patchVersionCheckState, saveConfig } =
-  await import("./config.js");
+const {
+  configPath,
+  loadConfig,
+  patchAuthPolicy,
+  patchVersionCheckState,
+  saveConfig,
+} = await import("./config.js");
 
 describe("configPath", () => {
   test("returns path under ~/.agentcoop/", () => {
@@ -868,6 +873,79 @@ describe("patchVersionCheckState", () => {
       lastKnownVersions: { claude: "1.3.0" },
     });
     expect(readFileSync(configPath(), "utf-8").endsWith("\n")).toBe(true);
+  });
+
+  test("authPolicy round-trips through saveConfig/loadConfig", () => {
+    const config = loadConfig();
+    config.authPolicy = { claude: "oauth", codex: "env" };
+    saveConfig(config);
+    const reloaded = loadConfig();
+    expect(reloaded.authPolicy).toEqual({ claude: "oauth", codex: "env" });
+  });
+
+  test("authPolicy with only one CLI subfield is preserved", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        authPolicy: { codex: "oauth" },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.authPolicy).toEqual({ codex: "oauth" });
+    expect(config.authPolicy?.claude).toBeUndefined();
+  });
+
+  test("authPolicy ignores unknown values", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        authPolicy: { claude: "garbage", codex: "oauth" },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.authPolicy).toEqual({ codex: "oauth" });
+  });
+
+  test("authPolicy returns undefined when both subfields invalid", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        authPolicy: { claude: 1, codex: null },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.authPolicy).toBeUndefined();
+  });
+
+  test("patchAuthPolicy merges per-CLI without clearing the other CLI's saved value", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: [],
+        authPolicy: { claude: "env", codex: "oauth" },
+      }),
+    );
+    patchAuthPolicy({ claude: "oauth" });
+    const raw = JSON.parse(readFileSync(configPath(), "utf-8"));
+    // codex must survive when only claude was patched.
+    expect(raw.authPolicy).toEqual({ claude: "oauth", codex: "oauth" });
+  });
+
+  test("patchAuthPolicy preserves unknown top-level keys", () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        owners: ["aicers"],
+        unknownKey: { hello: "world" },
+      }),
+    );
+    patchAuthPolicy({ claude: "env" });
+    const raw = JSON.parse(readFileSync(configPath(), "utf-8"));
+    expect(raw.unknownKey).toEqual({ hello: "world" });
+    expect(raw.authPolicy).toEqual({ claude: "env" });
   });
 
   test("preserves unknown nested CLI entries inside lastKnownVersions", () => {

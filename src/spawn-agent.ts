@@ -29,6 +29,13 @@ export interface SpawnAgentOptions<TResult extends AgentResult = AgentResult> {
    * line where they can hit the OS `ARG_MAX` limit.
    */
   stdin?: string;
+  /**
+   * Environment variables for the child process.  Defaults to
+   * `process.env` (Node's default behavior).  Caller-supplied envs are
+   * passed through verbatim — see `buildChildEnv()` in `auth-policy.ts`
+   * for the policy that strips API-key vars when OAuth mode is active.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 export function spawnAgent<TResult extends AgentResult = AgentResult>(
@@ -39,6 +46,7 @@ export function spawnAgent<TResult extends AgentResult = AgentResult>(
     child = spawn(opts.command, opts.args, {
       cwd: opts.cwd,
       stdio: ["pipe", "pipe", "pipe"],
+      ...(opts.env !== undefined ? { env: opts.env } : {}),
     });
   } catch (err) {
     // spawn() can throw synchronously for errors like E2BIG (argument

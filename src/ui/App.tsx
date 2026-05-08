@@ -1,5 +1,6 @@
 import { Box, useInput, useStdout } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { AuthMode } from "../auth-policy.js";
 import type { BootstrapLogEntry } from "../bootstrap-log.js";
 import type { NotificationSettings } from "../config.js";
 import { t } from "../i18n/index.js";
@@ -294,6 +295,10 @@ export interface AppProps {
   cliVersionA?: string;
   /** Installed CLI version for Agent B, detected at pipeline start. */
   cliVersionB?: string;
+  /** Authentication mode for Agent A (env = API key, oauth = subscription). */
+  authModeA?: AuthMode;
+  /** Authentication mode for Agent B (env = API key, oauth = subscription). */
+  authModeB?: AuthMode;
   /** Notification settings (bell / desktop). */
   notifications?: NotificationSettings;
   /**
@@ -334,6 +339,8 @@ export function App({
   cliTypeB,
   cliVersionA,
   cliVersionB,
+  authModeA,
+  authModeB,
   notifications,
   onCancel,
   startedAt,
@@ -357,6 +364,11 @@ export function App({
     "row",
   );
   const [hasTokenData, setHasTokenData] = useState(false);
+  // The TokenBar should render the auth badge from session start, even
+  // before any token usage has been reported.  Treat the presence of
+  // either auth mode as content for the visibility flag computation.
+  const hasTokenBarContent =
+    hasTokenData || authModeA !== undefined || authModeB !== undefined;
   const [prNumber, setPrNumber] = useState<number | undefined>(initialPrNumber);
 
   useEffect(() => {
@@ -425,7 +437,7 @@ export function App({
     return computeVisibilityFlags(
       terminalHeight,
       inputHeight,
-      hasTokenData,
+      hasTokenBarContent,
       preferredLayout,
       {
         terminalWidth: layoutWidth,
@@ -435,7 +447,7 @@ export function App({
   }, [
     terminalHeight,
     inputHeight,
-    hasTokenData,
+    hasTokenBarContent,
     preferredLayout,
     layoutWidth,
     paneHeaderTexts,
@@ -591,6 +603,8 @@ export function App({
         layout={effectiveLayout}
         cliTypeA={cliTypeA}
         cliTypeB={cliTypeB}
+        authModeA={authModeA}
+        authModeB={authModeB}
       />
       <StatusBar
         emitter={emitter}

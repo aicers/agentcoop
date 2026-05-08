@@ -1,6 +1,7 @@
 import { Box, Text } from "ink";
 import { useEffect, useState } from "react";
 import type { TokenUsage } from "../agent.js";
+import type { AuthMode } from "../auth-policy.js";
 import { t } from "../i18n/index.js";
 import type {
   AgentUsageEvent,
@@ -55,6 +56,10 @@ interface TokenBarProps {
   cliTypeA?: string;
   /** CLI identifier for Agent B (e.g. "claude" or "codex"). */
   cliTypeB?: string;
+  /** Authentication mode for Agent A (env = API key, oauth = subscription). */
+  authModeA?: AuthMode;
+  /** Authentication mode for Agent B (env = API key, oauth = subscription). */
+  authModeB?: AuthMode;
 }
 
 export function TokenBar({
@@ -64,6 +69,8 @@ export function TokenBar({
   layout = "row",
   cliTypeA,
   cliTypeB,
+  authModeA,
+  authModeB,
 }: TokenBarProps) {
   const [usageA, setUsageA] = useState<TokenUsage>({
     inputTokens: 0,
@@ -100,8 +107,9 @@ export function TokenBar({
     usageB.inputTokens > 0 ||
     usageB.outputTokens > 0 ||
     usageB.cachedInputTokens > 0;
+  const hasBadge = authModeA !== undefined || authModeB !== undefined;
 
-  if (!visible || !hasData) return null;
+  if (!visible || (!hasData && !hasBadge)) return null;
 
   const labelA = cliTypeA
     ? `${m["agent.labelShortA"]} (${cliDisplayName(cliTypeA)})`
@@ -126,16 +134,45 @@ export function TokenBar({
     );
   }
 
-  const textA = formatUsage(labelA, usageA);
-  const textB = formatUsage(labelB, usageB);
+  function usageHasData(usage: TokenUsage): boolean {
+    return (
+      usage.inputTokens > 0 ||
+      usage.outputTokens > 0 ||
+      usage.cachedInputTokens > 0
+    );
+  }
+
+  const textA = usageHasData(usageA)
+    ? formatUsage(labelA, usageA)
+    : `${labelA}:`;
+  const textB = usageHasData(usageB)
+    ? formatUsage(labelB, usageB)
+    : `${labelB}:`;
+
+  // The badge is rendered in a separate <Text> so it can keep its own
+  // color independent of the rest of the line.
+  const reservedForBadge =
+    contentWidth !== undefined
+      ? Math.max(
+          0,
+          Math.max(
+            authModeA ? authBadgeWidth(authModeA) : 0,
+            authModeB ? authBadgeWidth(authModeB) : 0,
+          ),
+        )
+      : 0;
+  const usageContentWidth =
+    contentWidth !== undefined
+      ? Math.max(1, contentWidth - reservedForBadge)
+      : undefined;
 
   const displayA =
-    contentWidth !== undefined
-      ? truncateWithEllipsis(textA, contentWidth)
+    usageContentWidth !== undefined
+      ? truncateWithEllipsis(textA, usageContentWidth)
       : textA;
   const displayB =
-    contentWidth !== undefined
-      ? truncateWithEllipsis(textB, contentWidth)
+    usageContentWidth !== undefined
+      ? truncateWithEllipsis(textB, usageContentWidth)
       : textB;
 
   const boxHeight = contentWidth !== undefined ? 3 : undefined;
@@ -153,7 +190,11 @@ export function TokenBar({
         height={boxHeight}
         overflow="hidden"
       >
-        <Text>{displayA}</Text>
+        <Text>
+          {displayA}
+          {authModeA ? " " : ""}
+          {authModeA ? renderBadge(authModeA) : null}
+        </Text>
       </Box>
       <Box
         {...mainAxisSizing}
@@ -163,8 +204,34 @@ export function TokenBar({
         height={boxHeight}
         overflow="hidden"
       >
-        <Text>{displayB}</Text>
+        <Text>
+          {displayB}
+          {authModeB ? " " : ""}
+          {authModeB ? renderBadge(authModeB) : null}
+        </Text>
       </Box>
     </Box>
+  );
+}
+
+/**
+ * Render the auth-mode badge.  `[API]` is yellow to flag the
+ * billed-by-token mode; `[OAuth]` is green to flag the subscription
+ * mode.  The badge is wrapped in a nested `<Text>` so it inherits the
+ * outer line layout while keeping its own color.
+ */
+function renderBadge(mode: AuthMode) {
+  const m = t();
+  if (mode === "env") {
+    return <Text color="yellow">{`[${m["auth.badgeApi"]}]`}</Text>;
+  }
+  return <Text color="green">{`[${m["auth.badgeOauth"]}]`}</Text>;
+}
+
+export function authBadgeWidth(mode: AuthMode): number {
+  const m = t();
+  // Brackets + label + leading space.
+  return (
+    (mode === "env" ? m["auth.badgeApi"] : m["auth.badgeOauth"]).length + 3
   );
 }

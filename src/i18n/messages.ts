@@ -52,6 +52,15 @@ export interface Messages {
   "startup.proceedWithIssue": string;
   "startup.issueNotConfirmed": string;
   "startup.squashApplyPolicyPrompt": string;
+  "auth.promptClaude": string;
+  "auth.promptCodex": string;
+  "auth.optionEnvClaude": (envVarsList: string) => string;
+  "auth.optionEnvCodex": (envVarsList: string) => string;
+  "auth.optionOauthClaude": string;
+  "auth.optionOauthCodex": string;
+  "auth.precheckFailed": (detail: string) => string;
+  "auth.badgeApi": string;
+  "auth.badgeOauth": string;
 
   // ---- custom model entry (startup.ts) -------------------------------------
 

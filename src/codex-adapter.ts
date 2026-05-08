@@ -7,6 +7,8 @@ import type {
   TokenUsage,
 } from "./agent.js";
 import { JsonlLineTransformer } from "./agent.js";
+import type { AuthMode } from "./auth-policy.js";
+import { buildChildEnv } from "./auth-policy.js";
 import { spawnAgent } from "./spawn-agent.js";
 
 // ---------------------------------------------------------------------------
@@ -499,6 +501,13 @@ export interface CodexAdapterOptions {
   model?: string;
   reasoningEffort?: CodexReasoningEffort;
   inactivityTimeoutMs?: number;
+  /**
+   * Authentication mode for the spawned `codex` process.  When
+   * `oauth`, `OPENAI_API_KEY` and `CODEX_API_KEY` are stripped from
+   * the child's env so Codex uses its stored login credentials.
+   * Defaults to `env`.
+   */
+  authMode?: AuthMode;
 }
 
 export function buildCodexInvokeArgs(opts: {
@@ -769,6 +778,8 @@ export function createCodexAdapter(
     opts.reasoningEffort ?? "high",
   );
   const inactivityTimeoutMs = opts.inactivityTimeoutMs;
+  const authMode: AuthMode = opts.authMode ?? "env";
+  const env = buildChildEnv("codex", authMode);
 
   return {
     invoke(prompt, options?: InvokeOptions) {
@@ -785,6 +796,7 @@ export function createCodexAdapter(
         chunkTransformer: makeTransformer(),
         inactivityTimeoutMs,
         stdin: prompt,
+        env,
       });
       if (reasoningEffort !== "xhigh") return stream;
       return withXhighFallback(stream, () =>
@@ -799,6 +811,7 @@ export function createCodexAdapter(
           chunkTransformer: makeTransformer(),
           inactivityTimeoutMs,
           stdin: prompt,
+          env,
         }),
       );
     },
@@ -824,6 +837,7 @@ export function createCodexAdapter(
           chunkTransformer: makeTransformer(),
           inactivityTimeoutMs,
           stdin: prompt,
+          env,
         });
       }
 
@@ -847,6 +861,7 @@ export function createCodexAdapter(
             ),
           inactivityTimeoutMs,
           stdin: prompt,
+          env,
         });
       }
 

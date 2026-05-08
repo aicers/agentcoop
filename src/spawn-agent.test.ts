@@ -943,6 +943,166 @@ describe("inactivityTimeoutMs", () => {
 });
 
 // ---------------------------------------------------------------------------
+// env threading
+// ---------------------------------------------------------------------------
+describe("spawnAgent env option", () => {
+  test("forwards env to spawn() when provided", () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: () => ({
+        sessionId: undefined,
+        responseText: "",
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+      env: { FOO: "bar", PATH: "/usr/bin" },
+    });
+
+    const opts = mockSpawn.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(opts.env).toEqual({ FOO: "bar", PATH: "/usr/bin" });
+  });
+
+  test("omits env from spawn() options when not provided (preserves default behavior)", () => {
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    spawnAgent({
+      command: "cmd",
+      args: [],
+      parseResult: () => ({
+        sessionId: undefined,
+        responseText: "",
+        status: "success",
+        errorType: undefined,
+        stderrText: "",
+      }),
+    });
+
+    const opts = mockSpawn.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect("env" in opts).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// adapter env threading (auth-policy)
+// ---------------------------------------------------------------------------
+describe("adapter env threading", () => {
+  const origAnthropicKey = process.env.ANTHROPIC_API_KEY;
+  const origAnthropicTok = process.env.ANTHROPIC_AUTH_TOKEN;
+  const origOpenaiKey = process.env.OPENAI_API_KEY;
+  const origCodexKey = process.env.CODEX_API_KEY;
+
+  afterEach(() => {
+    if (origAnthropicKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = origAnthropicKey;
+    if (origAnthropicTok === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN;
+    else process.env.ANTHROPIC_AUTH_TOKEN = origAnthropicTok;
+    if (origOpenaiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = origOpenaiKey;
+    if (origCodexKey === undefined) delete process.env.CODEX_API_KEY;
+    else process.env.CODEX_API_KEY = origCodexKey;
+  });
+
+  test("Claude adapter in oauth mode strips ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN", () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-stale";
+    process.env.ANTHROPIC_AUTH_TOKEN = "tok-stale";
+    process.env.OPENAI_API_KEY = "sk-keep";
+
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const adapter = createClaudeAdapter({ authMode: "oauth" });
+    adapter.invoke("hello");
+
+    const opts = mockSpawn.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv };
+    expect(opts.env).toBeDefined();
+    expect(opts.env?.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(opts.env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(opts.env?.OPENAI_API_KEY).toBe("sk-keep");
+  });
+
+  test("Claude adapter in env mode preserves API key", () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-keep";
+
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const adapter = createClaudeAdapter({ authMode: "env" });
+    adapter.invoke("hello");
+
+    const opts = mockSpawn.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv };
+    expect(opts.env?.ANTHROPIC_API_KEY).toBe("sk-ant-keep");
+  });
+
+  test("Claude adapter resume in oauth mode strips both Anthropic vars", () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-stale";
+    process.env.ANTHROPIC_AUTH_TOKEN = "tok-stale";
+
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const adapter = createClaudeAdapter({ authMode: "oauth" });
+    adapter.resume("sess", "continue");
+
+    const opts = mockSpawn.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv };
+    expect(opts.env?.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(opts.env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+  });
+
+  test("Codex adapter in oauth mode strips OPENAI_API_KEY and CODEX_API_KEY", () => {
+    process.env.OPENAI_API_KEY = "sk-stale";
+    process.env.CODEX_API_KEY = "ck-stale";
+    process.env.ANTHROPIC_API_KEY = "sk-ant-keep";
+
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const adapter = createCodexAdapter({ authMode: "oauth" });
+    adapter.invoke("hello");
+
+    const opts = mockSpawn.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv };
+    expect(opts.env?.OPENAI_API_KEY).toBeUndefined();
+    expect(opts.env?.CODEX_API_KEY).toBeUndefined();
+    expect(opts.env?.ANTHROPIC_API_KEY).toBe("sk-ant-keep");
+  });
+
+  test("Codex adapter resume in oauth mode strips both Codex vars", () => {
+    process.env.OPENAI_API_KEY = "sk-stale";
+    process.env.CODEX_API_KEY = "ck-stale";
+
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const adapter = createCodexAdapter({ authMode: "oauth" });
+    adapter.resume("sess", "continue");
+
+    const opts = mockSpawn.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv };
+    expect(opts.env?.OPENAI_API_KEY).toBeUndefined();
+    expect(opts.env?.CODEX_API_KEY).toBeUndefined();
+  });
+
+  test("Codex adapter in env mode preserves API keys", () => {
+    process.env.OPENAI_API_KEY = "sk-keep";
+    process.env.CODEX_API_KEY = "ck-keep";
+
+    const child = createMockChild();
+    mockSpawn.mockReturnValue(child);
+
+    const adapter = createCodexAdapter({ authMode: "env" });
+    adapter.invoke("hello");
+
+    const opts = mockSpawn.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv };
+    expect(opts.env?.OPENAI_API_KEY).toBe("sk-keep");
+    expect(opts.env?.CODEX_API_KEY).toBe("ck-keep");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // E2E: Claude adapter full flow
 // ---------------------------------------------------------------------------
 describe("Claude adapter invoke/resume (E2E with mock spawn)", () => {

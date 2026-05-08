@@ -67,6 +67,17 @@ export const ko: Messages = {
   "startup.squashApplyPolicyPrompt":
     "단일 커밋 스쿼시가 제안될 때, 에이전트가 자동으로 적용할까요? " +
     "(아니오 = 매번 묻기)",
+  "auth.promptClaude": "이번 실행의 Claude 인증 방식:",
+  "auth.promptCodex": "이번 실행의 Codex 인증 방식:",
+  "auth.optionEnvClaude": (envVarsList) =>
+    `환경 변수의 자격 증명 사용 (${envVarsList})`,
+  "auth.optionEnvCodex": (envVarsList) =>
+    `환경 변수의 자격 증명 사용 (${envVarsList})`,
+  "auth.optionOauthClaude": "로그인된 구독 사용 (claude login)",
+  "auth.optionOauthCodex": "로그인된 구독 사용 (codex login)",
+  "auth.precheckFailed": (detail) => detail,
+  "auth.badgeApi": "API",
+  "auth.badgeOauth": "OAuth",
 
   // ---- custom model entry --------------------------------------------------
 
