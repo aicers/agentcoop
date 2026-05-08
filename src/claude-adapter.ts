@@ -6,6 +6,8 @@ import type {
   TokenUsage,
 } from "./agent.js";
 import { JsonlLineTransformer } from "./agent.js";
+import type { AuthMode } from "./auth-policy.js";
+import { buildChildEnv } from "./auth-policy.js";
 import { spawnAgent } from "./spawn-agent.js";
 
 // ---------------------------------------------------------------------------
@@ -204,6 +206,13 @@ export interface ClaudeAdapterOptions {
   effortLevel?: ClaudeEffortLevel;
   contextWindow?: string;
   inactivityTimeoutMs?: number;
+  /**
+   * Authentication mode for the spawned `claude` process.  When
+   * `oauth`, `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are
+   * stripped from the child's env so Claude Code uses its stored
+   * subscription credentials.  Defaults to `env`.
+   */
+  authMode?: AuthMode;
 }
 
 export function buildClaudeArgs(
@@ -290,6 +299,8 @@ export function createClaudeAdapter(
   const effortLevel = opts.effortLevel;
   const contextWindow = opts.contextWindow;
   const inactivityTimeoutMs = opts.inactivityTimeoutMs;
+  const authMode: AuthMode = opts.authMode ?? "env";
+  const env = buildChildEnv("claude", authMode);
 
   return {
     invoke(prompt, options?: InvokeOptions) {
@@ -307,6 +318,7 @@ export function createClaudeAdapter(
         chunkTransformer: transformer,
         inactivityTimeoutMs,
         stdin: prompt,
+        env,
       });
     },
     resume(sessionId, prompt, options?: InvokeOptions) {
@@ -320,6 +332,7 @@ export function createClaudeAdapter(
         chunkTransformer: transformer,
         inactivityTimeoutMs,
         stdin: prompt,
+        env,
       });
     },
   };

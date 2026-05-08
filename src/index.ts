@@ -3,6 +3,8 @@
 import { confirm, input, select } from "@inquirer/prompts";
 
 import type { AgentAdapter, AgentStream } from "./agent.js";
+import type { AuthMode, AuthPrompter, CliKind } from "./auth-policy.js";
+import { resolveAuthPolicyForRun, runOAuthPrechecks } from "./auth-policy.js";
 import { type BootstrapLog, createBootstrapLog } from "./bootstrap-log.js";
 import { pollCiAndFix } from "./ci-poll.js";
 import { createClaudeAdapter } from "./claude-adapter.js";
@@ -24,6 +26,7 @@ import {
   assembleReviewStage,
   assembleSquashStage,
   loadConfig,
+  patchAuthPolicy,
   patchVersionCheckState,
 } from "./config.js";
 import {
@@ -129,6 +132,7 @@ interface RunParams {
 function createAdapter(
   agentConfig: AgentConfig,
   inactivityTimeoutMs?: number,
+  authMode?: AuthMode,
 ): AgentAdapter {
   if (agentConfig.cli === "claude") {
     return createClaudeAdapter({
@@ -142,6 +146,7 @@ function createAdapter(
         | undefined,
       contextWindow: agentConfig.contextWindow,
       inactivityTimeoutMs,
+      authMode,
     });
   }
   return createCodexAdapter({
@@ -153,6 +158,7 @@ function createAdapter(
       | "xhigh"
       | undefined,
     inactivityTimeoutMs,
+    authMode,
   });
 }
 
@@ -458,6 +464,64 @@ try {
   // semantics of "not persisted" and the default-true rationale.
   params.squashApplyPolicy = await promptSquashApplyPolicy();
 
+  // Resolve the per-CLI auth policy at the same shared join point.
+  // The choice is surfaced on every launch (fresh + resume) so the
+  // user can see — and override — which credentials each agent CLI
+  // will use this run.  See issue #320.
+  const authMessages = t();
+  const authPrompter: AuthPrompter = {
+    promptAuthMode: async ({ cli, detectedEnvVars, defaultMode }) => {
+      const envVarsList = detectedEnvVars.map((n) => `$${n}`).join(", ");
+      const message =
+        cli === "claude"
+          ? authMessages["auth.promptClaude"]
+          : authMessages["auth.promptCodex"];
+      const envLabel =
+        cli === "claude"
+          ? authMessages["auth.optionEnvClaude"](envVarsList)
+          : authMessages["auth.optionEnvCodex"](envVarsList);
+      const oauthLabel =
+        cli === "claude"
+          ? authMessages["auth.optionOauthClaude"]
+          : authMessages["auth.optionOauthCodex"];
+      return select<AuthMode>({
+        message,
+        choices: [
+          { name: envLabel, value: "env" as const },
+          { name: oauthLabel, value: "oauth" as const },
+        ],
+        default: defaultMode,
+      });
+    },
+  };
+  const authPolicyConfig = loadConfig();
+  const cliSet: CliKind[] = [];
+  for (const c of [params.agentAConfig.cli, params.agentBConfig.cli]) {
+    if (!cliSet.includes(c)) cliSet.push(c);
+  }
+  const resolvedAuth = await resolveAuthPolicyForRun({
+    cliSet,
+    savedPolicy: authPolicyConfig.authPolicy,
+    prompter: authPrompter,
+  });
+  if (resolvedAuth.changed && resolvedAuth.toPersist !== undefined) {
+    patchAuthPolicy(resolvedAuth.toPersist);
+  }
+  // Verify OAuth credentials before continuing so a missing login is
+  // surfaced up-front rather than as a cryptic CLI failure mid-run.
+  for (const result of runOAuthPrechecks(resolvedAuth.effective)) {
+    if (!result.ok) {
+      console.error(
+        authMessages["auth.precheckFailed"](result.reason ?? "unknown"),
+      );
+      process.exit(1);
+    }
+  }
+  const authModeA: AuthMode =
+    resolvedAuth.effective[params.agentAConfig.cli] ?? "oauth";
+  const authModeB: AuthMode =
+    resolvedAuth.effective[params.agentBConfig.cli] ?? "oauth";
+
   // Check CLI versions against the appropriate distribution channel
   // and prompt the user to update when a newer version is available.
   // Runs after the CLIs actually used this run are known (fresh /
@@ -618,11 +682,11 @@ try {
   const inactivityTimeoutMs =
     pipelineSettings.inactivityTimeoutMinutes * 60_000;
   const agentA = trackProcesses(
-    createAdapter(agentAConfig, inactivityTimeoutMs),
+    createAdapter(agentAConfig, inactivityTimeoutMs, authModeA),
     activeStreams,
   );
   const agentB = trackProcesses(
-    createAdapter(agentBConfig, inactivityTimeoutMs),
+    createAdapter(agentBConfig, inactivityTimeoutMs, authModeB),
     activeStreams,
   );
 
@@ -1082,6 +1146,8 @@ try {
       cliTypeB: agentBConfig.cli,
       cliVersionA: agentAVersion,
       cliVersionB: agentBVersion,
+      authModeA,
+      authModeB,
       notifications,
       initialSelfCheckCount: runState.selfCheckCount,
       initialReviewCount: runState.reviewCount,

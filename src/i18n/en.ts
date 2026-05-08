@@ -51,6 +51,17 @@ export const en: Messages = {
   "startup.squashApplyPolicyPrompt":
     "When a single-commit squash is suggested, apply it automatically " +
     "via the agent? (No = ask each time)",
+  "auth.promptClaude": "Claude authentication for this run:",
+  "auth.promptCodex": "Codex authentication for this run:",
+  "auth.optionEnvClaude": (envVarsList) =>
+    `Use credentials from environment (${envVarsList})`,
+  "auth.optionEnvCodex": (envVarsList) =>
+    `Use credentials from environment (${envVarsList})`,
+  "auth.optionOauthClaude": "Use logged-in subscription (claude login)",
+  "auth.optionOauthCodex": "Use logged-in subscription (codex login)",
+  "auth.precheckFailed": (detail) => detail,
+  "auth.badgeApi": "API",
+  "auth.badgeOauth": "OAuth",
 
   // ---- custom model entry --------------------------------------------------
 

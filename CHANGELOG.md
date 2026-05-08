@@ -6,6 +6,27 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- AgentCoop now prompts on every launch to choose between the
+  child CLI's API-key environment variable and its stored OAuth
+  login, separately for Claude and Codex.  The prompt is shown
+  only when an auth-bearing env var is actually detected
+  (`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` for Claude,
+  `OPENAI_API_KEY` / `CODEX_API_KEY` for Codex), the previous
+  choice is preselected, and the result is persisted under
+  `authPolicy` in `~/.agentcoop/config.json`.  When `oauth` is
+  selected, the corresponding env vars are stripped from the
+  spawned child's environment so the CLI falls back to its
+  subscription credentials, and AgentCoop verifies that those
+  credentials exist before continuing (file check on Linux for
+  Claude, CLI-based `codex login status` probe — invoked with
+  the API-key vars stripped — for Codex).  The active mode is
+  surfaced as a coloured `[API]` / `[OAuth]` badge in the
+  TokenBar from session start, before any token usage has
+  arrived.  The persisted agent configuration is unchanged; the
+  per-run mode is runtime-only state.  Closes #320.
+
 ### Changed
 
 - CI fix, findings-review, and dismiss-alerts prompts no longer inline

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import type { AuthPolicy } from "./auth-policy.js";
 
 export interface PipelineSettings {
   selfCheckAutoIterations: number;
@@ -66,6 +67,14 @@ export interface Config {
    * throttle network calls to roughly once per 24h.
    */
   lastVersionCheckAt?: number;
+  /**
+   * Per-CLI authentication mode.  `env` passes the relevant API-key
+   * env var through to the spawned CLI; `oauth` strips it so the CLI
+   * uses its stored login credentials.  Both subfields are optional;
+   * missing subfields preserve any previously saved value when the
+   * other CLI alone was prompted.
+   */
+  authPolicy?: AuthPolicy;
 }
 
 const DEFAULT_CONFIG: Config = {
@@ -128,6 +137,20 @@ function loadLastKnownVersions(
   const result: NonNullable<Config["lastKnownVersions"]> = {};
   if (typeof r.claude === "string") result.claude = r.claude;
   if (typeof r.codex === "string") result.codex = r.codex;
+  if (result.claude === undefined && result.codex === undefined) {
+    return undefined;
+  }
+  return result;
+}
+
+function loadAuthPolicy(raw: unknown): AuthPolicy | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return undefined;
+  }
+  const r = raw as Record<string, unknown>;
+  const result: AuthPolicy = {};
+  if (r.claude === "env" || r.claude === "oauth") result.claude = r.claude;
+  if (r.codex === "env" || r.codex === "oauth") result.codex = r.codex;
   if (result.claude === undefined && result.codex === undefined) {
     return undefined;
   }
@@ -241,6 +264,7 @@ export function loadConfig(): Config {
       Number.isFinite(raw.lastVersionCheckAt)
         ? raw.lastVersionCheckAt
         : undefined,
+    authPolicy: loadAuthPolicy(raw.authPolicy),
   };
 }
 
@@ -315,6 +339,47 @@ export function saveConfig(config: Config): void {
  * added.  This helper reads the raw JSON, merges the supplied fields,
  * and writes the file back, preserving unknown keys.
  */
+/**
+ * Patch only the auth-policy field in `~/.agentcoop/config.json`
+ * without round-tripping through the normalized `Config` shape.
+ *
+ * Mirrors {@link patchVersionCheckState}: writing through `saveConfig`
+ * would drop unknown top-level keys.  This helper merges the supplied
+ * subfields into the existing nested object, so a session that only
+ * answered the prompt for one CLI does NOT clear the saved value for
+ * the other.
+ */
+export function patchAuthPolicy(updates: AuthPolicy): void {
+  const path = configPath();
+  let raw: Record<string, unknown> = {};
+  if (existsSync(path)) {
+    try {
+      const parsed = JSON.parse(readFileSync(path, "utf-8"));
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        !Array.isArray(parsed)
+      ) {
+        raw = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Unreadable or invalid JSON — fall through and write a fresh file.
+    }
+  }
+  const existing =
+    typeof raw.authPolicy === "object" &&
+    raw.authPolicy !== null &&
+    !Array.isArray(raw.authPolicy)
+      ? (raw.authPolicy as Record<string, unknown>)
+      : {};
+  const merged: Record<string, unknown> = { ...existing };
+  if (updates.claude !== undefined) merged.claude = updates.claude;
+  if (updates.codex !== undefined) merged.codex = updates.codex;
+  raw.authPolicy = merged;
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`);
+}
+
 export function patchVersionCheckState(updates: {
   lastKnownVersions?: NonNullable<Config["lastKnownVersions"]>;
   lastVersionCheckAt?: number;
