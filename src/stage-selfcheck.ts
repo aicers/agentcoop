@@ -25,6 +25,7 @@ import {
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
   buildDocConsistencyInstructions,
+  buildIssueHeader,
   invokeOrResume,
   mapAgentError,
   mapFixOrDoneResponse,
@@ -61,9 +62,7 @@ export function buildSelfCheckPrompt(
     `- Repo: ${ctx.repo}`,
     `- Branch: ${ctx.branch}`,
     ``,
-    `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
-    ``,
-    opts.issueBody,
+    ...buildIssueHeader(ctx, opts),
     ``,
     `## Self-check`,
     ``,

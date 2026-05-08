@@ -63,7 +63,12 @@ is available:
   `Branch` rule below), and stage instructions. Sent on the very
   first stage entry (cold start) and as a fallback when the resume
   helper has to fall back to a fresh `invoke` because the saved
-  session expired.
+  session expired. The shared `buildIssueHeader` helper inlines the
+  issue body verbatim up to a conservative size limit
+  (`ISSUE_BODY_INLINE_LIMIT`, ~4 KB); past that, it emits a short
+  delegation block that asks the agent to fetch the body itself
+  via `gh issue view <N> --json body --jq .body`, so an unusually
+  long issue body never bloats every fresh-form prompt.
 - **Resume form** — drops the issue body and any repo header,
   keeping only stage-specific instructions and a one-line
   `issue #N` reference. Sent whenever a saved session id is

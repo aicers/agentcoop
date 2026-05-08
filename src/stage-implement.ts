@@ -12,6 +12,7 @@ import type { AgentAdapter } from "./agent.js";
 import { t } from "./i18n/index.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
+  buildIssueHeader,
   invokeOrResume,
   mapAgentError,
   mapResponseToResult,
@@ -38,9 +39,7 @@ export function buildImplementPrompt(
     `- Repo: ${ctx.repo}`,
     `- Branch: ${ctx.branch}`,
     ``,
-    `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
-    ``,
-    opts.issueBody,
+    ...buildIssueHeader(ctx, opts),
     ``,
     `## Instructions`,
     ``,

@@ -32,6 +32,7 @@ import { buildPrSyncInstructions } from "./issue-sync.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import {
   buildDocConsistencyInstructions,
+  buildIssueHeader,
   invokeOrResume,
   mapAgentError,
 } from "./stage-util.js";
@@ -251,9 +252,7 @@ export function buildCiFixPrompt(
   const lines = [
     `You are fixing CI failures for the following GitHub issue.`,
     ``,
-    `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
-    ``,
-    opts.issueBody,
+    ...buildIssueHeader(ctx, opts),
     ``,
     `## CI Inspection Context`,
     ``,
@@ -330,9 +329,7 @@ export function buildCiFindingsPrompt(
     `CI passed but check runs reported annotations.  Inspect them`,
     `yourself and decide whether any should be addressed.`,
     ``,
-    `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
-    ``,
-    opts.issueBody,
+    ...buildIssueHeader(ctx, opts),
     ``,
     `## CI Inspection Context`,
     ``,

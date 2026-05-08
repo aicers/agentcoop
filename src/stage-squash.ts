@@ -41,6 +41,7 @@ import {
 } from "./pr-comments.js";
 import type { SquashSubStep } from "./run-state.js";
 import {
+  buildIssueHeader,
   invokeOrResume,
   mapAgentError,
   sendFollowUp,
@@ -191,9 +192,7 @@ export function buildSquashPrompt(
   const lines = [
     `You are squashing commits for the following GitHub issue.`,
     ``,
-    `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
-    ``,
-    opts.issueBody,
+    ...buildIssueHeader(ctx, opts),
     ``,
     `## Instructions`,
     ``,

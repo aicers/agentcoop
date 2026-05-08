@@ -25,6 +25,7 @@ import { t } from "./i18n/index.js";
 import type { StageContext, StageDefinition, StageResult } from "./pipeline.js";
 import { findPrNumber as defaultFindPrNumber } from "./pr.js";
 import {
+  buildIssueHeader,
   invokeOrResume,
   mapAgentError,
   mapResponseToResult,
@@ -52,9 +53,7 @@ export function buildCreatePrPrompt(
   const lines = [
     `You are creating a pull request for the following GitHub issue.`,
     ``,
-    `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
-    ``,
-    opts.issueBody,
+    ...buildIssueHeader(ctx, opts),
     ``,
     `## Instructions`,
     ``,

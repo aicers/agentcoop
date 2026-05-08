@@ -3,6 +3,8 @@ import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
 import { PipelineEventEmitter } from "./pipeline-events.js";
 import {
   buildDocConsistencyInstructions,
+  buildIssueHeader,
+  ISSUE_BODY_INLINE_LIMIT,
   invokeOrResume,
   mapAgentError,
   mapFixOrDoneResponse,
@@ -1510,5 +1512,58 @@ describe("buildDocConsistencyInstructions", () => {
   test("indent parameter preserves blank line between paragraphs", () => {
     const indented = buildDocConsistencyInstructions("   ");
     expect(indented).toContain("\n\n");
+  });
+});
+
+describe("buildIssueHeader", () => {
+  const ctx = { owner: "octo", repo: "demo", issueNumber: 42 };
+
+  test("inlines the body when under the threshold", () => {
+    const lines = buildIssueHeader(ctx, {
+      issueTitle: "Fix widget rendering",
+      issueBody: "The widget renders incorrectly when X happens.",
+    });
+    expect(lines).toEqual([
+      "## Issue #42: Fix widget rendering",
+      "",
+      "The widget renders incorrectly when X happens.",
+    ]);
+  });
+
+  test("inlines bodies exactly at the threshold", () => {
+    const body = "x".repeat(ISSUE_BODY_INLINE_LIMIT);
+    const lines = buildIssueHeader(ctx, {
+      issueTitle: "Edge",
+      issueBody: body,
+    });
+    expect(lines).toHaveLength(3);
+    expect(lines[2]).toBe(body);
+  });
+
+  test("delegates to gh issue view when the body is over the threshold", () => {
+    const body = "x".repeat(ISSUE_BODY_INLINE_LIMIT + 1);
+    const lines = buildIssueHeader(ctx, {
+      issueTitle: "Long",
+      issueBody: body,
+    });
+    const joined = lines.join("\n");
+    expect(joined).not.toContain(body);
+    expect(joined).toContain("## Issue #42: Long");
+    expect(joined).toContain(
+      "gh issue view 42 --repo octo/demo --json body --jq .body",
+    );
+    expect(joined).toContain(String(body.length));
+    expect(joined).toMatch(/parent issue/i);
+  });
+
+  test("delegation block uses the owner/repo from the context", () => {
+    const body = "x".repeat(ISSUE_BODY_INLINE_LIMIT + 100);
+    const lines = buildIssueHeader(
+      { owner: "acme", repo: "service", issueNumber: 7 },
+      { issueTitle: "Big", issueBody: body },
+    );
+    expect(lines.join("\n")).toContain(
+      "gh issue view 7 --repo acme/service --json body --jq .body",
+    );
   });
 });

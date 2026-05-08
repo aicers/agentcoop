@@ -10,7 +10,7 @@ import type {
   TokenUsage,
 } from "./agent.js";
 import { t } from "./i18n/index.js";
-import type { StageOutcome, StageResult } from "./pipeline.js";
+import type { StageContext, StageOutcome, StageResult } from "./pipeline.js";
 import type {
   AgentPromptKind,
   PipelineEventEmitter,
@@ -605,4 +605,60 @@ export function mapFixOrDoneResponse(
     );
   }
   return mapParsedStepToResult(parsed, responseText, undefined, validKeywords);
+}
+
+/**
+ * Maximum issue body size, in characters, that is inlined into a
+ * fresh-form prompt verbatim.  Bodies larger than this are replaced
+ * with a short instruction telling the agent to fetch the body via
+ * `gh issue view`, so we don't blow up the prompt with tens of KB of
+ * pasted logs.  ~4 KB ≈ ~1500 tokens, conservative enough to cover
+ * the vast majority of real-world issue bodies.
+ */
+export const ISSUE_BODY_INLINE_LIMIT = 4096;
+
+/** Subset of {@link StageContext} used when building the issue header. */
+export type IssueHeaderContext = Pick<
+  StageContext,
+  "owner" | "repo" | "issueNumber"
+>;
+
+export interface IssueHeaderOptions {
+  issueTitle: string;
+  issueBody: string;
+}
+
+/**
+ * Build the GitHub issue header block shared by every fresh-form
+ * stage prompt.
+ *
+ * For bodies up to {@link ISSUE_BODY_INLINE_LIMIT} characters this
+ * returns the familiar three-line block (heading, blank, body).  For
+ * larger bodies it returns a delegation block that tells the agent to
+ * fetch the body itself via `gh issue view`, avoiding tens of KB of
+ * pasted logs in every fresh-form prompt.
+ *
+ * Returns an array of lines so call sites can spread it directly into
+ * their existing `lines` arrays.
+ */
+export function buildIssueHeader(
+  ctx: IssueHeaderContext,
+  opts: IssueHeaderOptions,
+): string[] {
+  const heading = `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`;
+  if (opts.issueBody.length > ISSUE_BODY_INLINE_LIMIT) {
+    const repoSlug = `${ctx.owner}/${ctx.repo}`;
+    return [
+      heading,
+      ``,
+      `The issue body is too long to inline here (${opts.issueBody.length}`,
+      `characters).  Fetch it yourself before proceeding:`,
+      ``,
+      `\`gh issue view ${ctx.issueNumber} --repo ${repoSlug} --json body --jq .body\``,
+      ``,
+      `If the issue references a parent issue, fetch that too with the`,
+      `same command and the parent's number.`,
+    ];
+  }
+  return [heading, ``, opts.issueBody];
 }
