@@ -217,12 +217,41 @@ export const defaultCodexProbe: CodexProbeRunner = (env) => {
   };
 };
 
+const NOT_LOGGED_IN_RE = /not logged in|not signed in|no credentials/i;
+
+/**
+ * Heuristic for "the `login status` subcommand is not understood by
+ * this Codex build" — distinct from "the subcommand ran and reported
+ * not-logged-in".  Triggers a fallback to the file check.
+ */
+const UNSUPPORTED_PROBE_RE =
+  /unrecognized (sub)?command|unknown (sub)?command|no such (sub)?command|invalid (sub)?command|unexpected argument|^\s*usage:/im;
+
+/**
+ * File-existence fallback for the Codex login-status probe.  Used only
+ * when the CLI-based probe is unavailable (subcommand missing /
+ * unsupported), so we do not mistakenly abort on Codex builds that
+ * have stored credentials but lack `login status`.
+ */
+export function codexAuthFileExists(baseEnv: NodeJS.ProcessEnv = process.env): {
+  exists: boolean;
+  path: string;
+} {
+  const dir = baseEnv.CODEX_HOME ?? join(homedir(), ".codex");
+  const credPath = join(dir, "auth.json");
+  return { exists: existsSync(credPath), path: credPath };
+}
+
 /**
  * Verify that Codex has stored login credentials.
  *
  * The probe MUST run with `OPENAI_API_KEY` and `CODEX_API_KEY`
  * stripped from the env, so a stale API key in the parent shell does
  * not produce a false-positive "logged in" response.
+ *
+ * If the probe itself is unavailable (e.g. a Codex build without the
+ * `login status` subcommand), fall back to checking
+ * `$CODEX_HOME/auth.json` (defaulting to `~/.codex/auth.json`).
  *
  * The probe is injectable for tests.
  */
@@ -247,13 +276,13 @@ export function precheckCodexOAuth(
         "codex CLI not found on PATH. Install Codex and run `codex login`.",
     };
   }
+
+  const combined = `${res.stdout}\n${res.stderr}`;
+  const notLoggedIn = NOT_LOGGED_IN_RE.test(combined);
+  const unsupported = UNSUPPORTED_PROBE_RE.test(combined);
+
   if (res.status === 0) {
-    const combined = `${res.stdout}\n${res.stderr}`.toLowerCase();
-    if (
-      combined.includes("not logged in") ||
-      combined.includes("not signed in") ||
-      combined.includes("no credentials")
-    ) {
+    if (notLoggedIn) {
       return {
         ok: false,
         reason:
@@ -261,6 +290,27 @@ export function precheckCodexOAuth(
       };
     }
     return { ok: true };
+  }
+
+  // Non-zero exit.  If the probe explicitly reports not-logged-in,
+  // trust it.  If it looks like the subcommand is not supported (or
+  // produced no recognizable output at all), fall back to the file
+  // check rather than aborting on a Codex build that simply lacks
+  // `login status`.
+  if (notLoggedIn) {
+    return {
+      ok: false,
+      reason:
+        "Codex OAuth credentials not found. Please run `codex login` first, then re-launch agentcoop.",
+    };
+  }
+  if (unsupported || combined.trim() === "") {
+    const fb = codexAuthFileExists(baseEnv);
+    if (fb.exists) return { ok: true };
+    return {
+      ok: false,
+      reason: `Codex OAuth credentials not found at ${fb.path}. Please run \`codex login\` first, then re-launch agentcoop.`,
+    };
   }
   return {
     ok: false,

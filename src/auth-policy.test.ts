@@ -283,4 +283,80 @@ describe("precheckCodexOAuth", () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toContain("codex CLI not found");
   });
+
+  describe("file fallback when probe unsupported", () => {
+    beforeEach(() => {
+      mkdirSync(tmpHome, { recursive: true });
+    });
+    afterEach(() => {
+      rmSync(tmpHome, { recursive: true, force: true });
+    });
+
+    test('falls back to ~/.codex/auth.json when probe reports "unrecognized subcommand"', () => {
+      const dir = join(tmpHome, ".codex");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "auth.json"), "{}");
+      const probe = vi.fn().mockReturnValue({
+        status: 2,
+        stdout: "",
+        stderr: "error: unrecognized subcommand 'login'",
+      });
+      const result = precheckCodexOAuth({}, probe);
+      expect(result.ok).toBe(true);
+    });
+
+    test("falls back to file check on usage-style help output", () => {
+      const dir = join(tmpHome, ".codex");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "auth.json"), "{}");
+      const probe = vi.fn().mockReturnValue({
+        status: 64,
+        stdout: "Usage: codex [options] <command>\n",
+        stderr: "",
+      });
+      const result = precheckCodexOAuth({}, probe);
+      expect(result.ok).toBe(true);
+    });
+
+    test("falls back and aborts when both probe is unsupported and file is missing", () => {
+      const probe = vi.fn().mockReturnValue({
+        status: 2,
+        stdout: "",
+        stderr: "unknown command 'login'",
+      });
+      const result = precheckCodexOAuth({}, probe);
+      expect(result.ok).toBe(false);
+      expect(result.reason).toContain("auth.json");
+      expect(result.reason).toContain("codex login");
+    });
+
+    test("honors CODEX_HOME override in file fallback", () => {
+      const dir = join(tmpHome, "custom-codex");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "auth.json"), "{}");
+      const probe = vi.fn().mockReturnValue({
+        status: 2,
+        stdout: "",
+        stderr: "error: unrecognized subcommand",
+      });
+      const result = precheckCodexOAuth({ CODEX_HOME: dir }, probe);
+      expect(result.ok).toBe(true);
+    });
+
+    test('does NOT fall back when probe explicitly reports "not logged in"', () => {
+      // Even if the auth file happens to exist, an explicit
+      // not-logged-in signal from the probe wins.
+      const dir = join(tmpHome, ".codex");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "auth.json"), "{}");
+      const probe = vi.fn().mockReturnValue({
+        status: 1,
+        stdout: "",
+        stderr: "not logged in",
+      });
+      const result = precheckCodexOAuth({}, probe);
+      expect(result.ok).toBe(false);
+      expect(result.reason).toContain("codex login");
+    });
+  });
 });
