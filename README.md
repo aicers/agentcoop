@@ -33,7 +33,7 @@ minimal human involvement.
 │  (streamed output)                                              │  (streamed output)                                              │
 │                                                                 │                                                                 │
 ├─────────────────────────────────────────────────────────────────┴─────────────────────────────────────────────────────────────────┤
-│ A (Claude): 12.3K in / 5.1K out                                 │ B (Codex): 8.7K in / 3.2K out                                   │
+│ A (Claude): 12.3K in / 5.1K out [API]                           │ B (Codex): 8.7K in / 3.2K out [OAuth]                           │
 ├───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ owner/repo#42: Issue title                                                                                        4m 12s (7m 30s) │
 │ Base: abc1234  │  Stage 3: Self-check (round 2)  │  Completed: self-check ×1, review ×0  │  Layout: horizontal                    │
@@ -53,7 +53,13 @@ minimal human involvement.
   current stage shows an idle hint such as
   `(idle — active in review stage)`.
 - **TokenBar** — Per-agent token usage (input/output, with cached
-  token counts when available).
+  token counts when available). Each entry ends with a coloured
+  auth-mode badge: yellow `[API]` means the run is billed
+  per-token through an API-key environment variable, green
+  `[OAuth]` means it is billed against the CLI's stored
+  subscription login. The badge is visible from session start,
+  before any tokens have been recorded, so the active billing
+  path is always explicit.
 - **StatusBar** — Issue reference with elapsed time (active and
   wall-clock), base commit SHA, current pipeline stage with loop
   count, completed loop counts per loop type, and layout indicator.
@@ -285,6 +291,30 @@ to reuse it, clean up and recreate, or halt.
 - `gh` CLI authenticated
 - Any external services the agents use (e.g., Figma Desktop MCP)
   must be running and authenticated
+
+### Auth mode (API key vs subscription)
+
+On every launch, AgentCoop asks per CLI whether to use the
+API-key environment variable in your shell or the CLI's stored
+subscription login. The prompt is shown only when an
+auth-bearing env var is actually set:
+
+- Claude: `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`
+- Codex: `OPENAI_API_KEY` or `CODEX_API_KEY`
+
+The previously saved choice is preselected, so accepting the
+default is one Enter press. Choosing the subscription option
+strips the corresponding env vars from the spawned child
+process so the CLI falls back to its stored credentials —
+which means you must already have run `claude login` and/or
+`codex login` (and on Linux AgentCoop verifies the credential
+file exists before continuing; on macOS Claude credentials
+live in the Keychain so the check is delegated to the CLI
+itself; for Codex AgentCoop runs `codex login status` with the
+API-key env vars stripped). The choice is persisted under
+`authPolicy` in `~/.agentcoop/config.json` per CLI, and the
+active mode is shown as a `[API]` / `[OAuth]` badge in the
+TokenBar throughout the run.
 
 ### CLI update check
 
