@@ -21,6 +21,7 @@ import { InputArea, type InputRequest } from "./InputArea.js";
 import { StatusBar } from "./StatusBar.js";
 import { cliDisplayName, TokenBar } from "./TokenBar.js";
 import { createTuiUserPrompt } from "./TuiUserPrompt.js";
+import { useTerminalTitle } from "./terminal-title.js";
 
 // ---- Terminal helpers --------------------------------------------------------
 
@@ -378,6 +379,15 @@ export function App({
       emitter.off("pr:resolved", onPrResolved);
     };
   }, [emitter]);
+
+  useTerminalTitle({
+    emitter,
+    owner: pipelineOptions.context.owner,
+    repo: pipelineOptions.context.repo,
+    issueNumber: pipelineOptions.context.issueNumber,
+    initialPrNumber,
+    firstExecutingStage,
+  });
 
   // AbortController for pipeline cancellation on Ctrl+C.
   const abortController = useMemo(() => new AbortController(), []);

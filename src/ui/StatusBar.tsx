@@ -10,6 +10,7 @@ import type {
   StageExitEvent,
   StageNameOverrideEvent,
 } from "../pipeline-events.js";
+import { SELF_CHECK_STAGE, shouldShowRound } from "./stage-meta.js";
 
 /**
  * Map a 1-based stage number to its translated display name.  Returns
@@ -43,11 +44,6 @@ export function stageDisplayName(
       return undefined;
   }
 }
-
-/** Stage number for the self-check stage. */
-const SELF_CHECK_STAGE = 3;
-/** Stage number for the review stage. */
-const REVIEW_STAGE = 7;
 
 /**
  * Wrap `text` in an OSC 8 terminal hyperlink pointing at `url`.
@@ -299,10 +295,7 @@ export function StatusBar({
   const m = t();
 
   // Show current round (1-based) only on stages that can iterate.
-  const showRound =
-    stage !== null &&
-    (stage.stageNumber === SELF_CHECK_STAGE ||
-      stage.stageNumber === REVIEW_STAGE);
+  const showRound = stage !== null && shouldShowRound(stage.stageNumber);
   const round = stage ? stage.iteration + 1 : 0;
 
   let stageText: string;
