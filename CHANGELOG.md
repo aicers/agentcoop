@@ -4,6 +4,20 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- The terminal tab/window title now reflects the current run as
+  `<owner>/<repo>#<issue>[ (#<pr>)] <stage label>`, matching the
+  stage and round shown in the StatusBar.  Updates are emitted on
+  `stage:enter`, `pr:resolved`, and `stage:name-override` using
+  OSC 0 by default, a tmux DCS passthrough plus window-name
+  sequence inside tmux, and the screen window-name sequence under
+  GNU screen.  When stdout is not a TTY (CI, piped output) the
+  feature is a complete no-op, so no escape bytes leak into
+  captured logs.  Closes #329.
+
 ## [0.4.0] - 2026-05-09
 
 ### Added

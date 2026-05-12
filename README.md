@@ -68,6 +68,14 @@ minimal human involvement.
   When user input is needed (BLOCKED, loop budget, step-mode), it
   presents numbered choices or a free-text field.
 
+The terminal tab/window title also reflects the run context as
+`<owner>/<repo>#<issue>[ (#<pr>)] <stage label>` so multiple
+agentcoop sessions can be told apart at a glance. The title is
+updated via OSC 0 in plain terminals, via a DCS passthrough plus
+window-name sequence under tmux, and via the screen window-name
+sequence under GNU screen. When stdout is not a TTY (CI, piped
+output) no escape bytes are written.
+
 ### Keybindings
 
 | Key | Action |
