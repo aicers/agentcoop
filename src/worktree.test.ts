@@ -13,8 +13,19 @@ vi.mock("node:fs", () => ({
   rmSync: vi.fn(),
 }));
 
+// Tracks how many `withLock` invocations are currently active so tests can
+// assert whether a given git command was issued inside or outside the lock.
+let lockDepth = 0;
+
 vi.mock("./lock.js", () => ({
-  withLock: vi.fn((_path: string, fn: () => unknown) => fn()),
+  withLock: vi.fn((_path: string, fn: () => unknown) => {
+    lockDepth += 1;
+    try {
+      return fn();
+    } finally {
+      lockDepth -= 1;
+    }
+  }),
   repoLockPath: vi.fn(
     (owner: string, repo: string) => `/mock/lock/${owner}/${repo}.lock`,
   ),
@@ -43,6 +54,7 @@ const mockRmSync = vi.mocked(rmSync);
 
 afterEach(() => {
   vi.resetAllMocks();
+  lockDepth = 0;
 });
 
 const home = homedir();
@@ -233,6 +245,46 @@ describe("bootstrapRepo", () => {
     );
     const fetchIdx = calls.findIndex((c) => c[0] === "git" && c[1] === "fetch");
     expect(configSetIdx).toBeLessThan(fetchIdx);
+  });
+
+  test("git fetch runs outside withLock (existing repo)", () => {
+    mockExistsSync.mockReturnValue(true);
+    const fetchLockDepths: number[] = [];
+    const cloneLockDepths: number[] = [];
+    mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "config" && args.length === 2)
+        return "+refs/heads/*:refs/remotes/origin/*\n";
+      if (cmd === "git" && args[0] === "fetch") {
+        fetchLockDepths.push(lockDepth);
+      }
+      if (cmd === "git" && args[0] === "clone") {
+        cloneLockDepths.push(lockDepth);
+      }
+      return "" as never;
+    }) as typeof execFileSync);
+    bootstrapRepo("org", "repo");
+    expect(fetchLockDepths).toEqual([0]);
+    expect(cloneLockDepths).toHaveLength(0);
+  });
+
+  test("git clone runs inside withLock and fetch runs outside (missing repo)", () => {
+    mockExistsSync.mockReturnValue(false);
+    const fetchLockDepths: number[] = [];
+    const cloneLockDepths: number[] = [];
+    mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "config" && args.length === 2)
+        throw new Error("key missing");
+      if (cmd === "git" && args[0] === "fetch") {
+        fetchLockDepths.push(lockDepth);
+      }
+      if (cmd === "git" && args[0] === "clone") {
+        cloneLockDepths.push(lockDepth);
+      }
+      return "" as never;
+    }) as typeof execFileSync);
+    bootstrapRepo("org", "repo");
+    expect(cloneLockDepths).toEqual([1]);
+    expect(fetchLockDepths).toEqual([0]);
   });
 
   test("replaces legacy refspec on existing bare repo", () => {
@@ -663,6 +715,66 @@ describe("prepareReviewerWorktree", () => {
       ],
       expect.objectContaining({ cwd: repoPath("org", "repo") }),
     );
+  });
+
+  test("fetch and refresh commands run outside withLock", () => {
+    // Worktree exists and is valid; refresh path succeeds.
+    mockExistsSync.mockReturnValue(true);
+    const fetchLockDepths: number[] = [];
+    const refreshLockDepths: number[] = [];
+    const worktreeAddLockDepths: number[] = [];
+    mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "rev-parse") return "true\n";
+      if (cmd === "git" && args[0] === "fetch") {
+        fetchLockDepths.push(lockDepth);
+      }
+      if (
+        cmd === "git" &&
+        (args[0] === "switch" || args[0] === "reset" || args[0] === "clean")
+      ) {
+        refreshLockDepths.push(lockDepth);
+      }
+      if (cmd === "git" && args[0] === "worktree" && args[1] === "add") {
+        worktreeAddLockDepths.push(lockDepth);
+      }
+      return "" as never;
+    }) as typeof execFileSync);
+
+    prepareReviewerWorktree(baseOpts);
+
+    expect(fetchLockDepths).toEqual([0]);
+    expect(refreshLockDepths).toEqual([0, 0, 0]);
+    // No recreate needed → no `git worktree add` and no lock acquisition.
+    expect(worktreeAddLockDepths).toHaveLength(0);
+  });
+
+  test("recreate path takes withLock around worktree add", () => {
+    mockExistsSync.mockReturnValue(true);
+    const fetchLockDepths: number[] = [];
+    const worktreeAddLockDepths: number[] = [];
+    const worktreeRemoveLockDepths: number[] = [];
+    mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "rev-parse") return "true\n";
+      if (cmd === "git" && args[0] === "switch") {
+        throw new Error("refresh failed");
+      }
+      if (cmd === "git" && args[0] === "fetch") {
+        fetchLockDepths.push(lockDepth);
+      }
+      if (cmd === "git" && args[0] === "worktree" && args[1] === "add") {
+        worktreeAddLockDepths.push(lockDepth);
+      }
+      if (cmd === "git" && args[0] === "worktree" && args[1] === "remove") {
+        worktreeRemoveLockDepths.push(lockDepth);
+      }
+      return "" as never;
+    }) as typeof execFileSync);
+
+    prepareReviewerWorktree(baseOpts);
+
+    expect(fetchLockDepths).toEqual([0]);
+    expect(worktreeRemoveLockDepths).toEqual([1]);
+    expect(worktreeAddLockDepths).toEqual([1]);
   });
 
   test("recreates reviewer worktree when existing path is invalid", () => {

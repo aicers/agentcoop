@@ -6,6 +6,31 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- Reviewer-round `git fetch` no longer runs under the shared repo
+  lock, so a slow or hung fetch in one dispatch can no longer stall
+  every sibling dispatch's review round with `Timed out waiting for
+  repo lock`.  `withLock` was originally introduced to serialise
+  `git worktree add` against the known concurrent-bare-repo issue,
+  but fetch — which uses git's own per-ref `.lock` files and
+  `packed-refs.lock` — is safe to run in parallel and does not need
+  the same lock.  The lock is now narrowed to wrap only worktree-
+  mutating commands: `git worktree add` (initial author worktree
+  and the reviewer-recreate fallback), `forceRemoveWorktreeAndBranch`
+  + recreate (the clean / conflict path), and the bootstrap
+  existence-check + `git clone --bare` so a sibling never observes
+  a half-finished bare repo.  Moved out of the lock: the
+  `git fetch --all --prune` calls in `bootstrapRepo` (both the
+  existing-repo path and the post-clone path), the `git fetch
+  origin <authorBranch>` in `prepareReviewerWorktree`, and the
+  `git switch --detach` / `git reset --hard` / `git clean -fd`
+  per-worktree refresh in `prepareReviewerWorktree` (which only
+  touches the per-issue reviewer worktree path, not shared bare-
+  repo state).  `MAX_WAIT_MS` is unchanged at 120 s — the fix is
+  structural, not a timeout bump, so the lock remains a meaningful
+  "something is stuck on worktree mutation" signal.  Closes #336.
+
 ### Added
 
 - The terminal tab/window title now reflects the current run as
