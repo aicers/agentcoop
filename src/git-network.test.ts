@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -71,10 +71,7 @@ describe("spawnWithGroupTimeout", () => {
     // dying state.
     spawnSync("/bin/sleep", ["0.2"]);
 
-    const pid = Number.parseInt(
-      spawnSync("/bin/cat", [pidFile], { encoding: "utf-8" }).stdout.trim(),
-      10,
-    );
+    const pid = Number.parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
     expect(Number.isFinite(pid)).toBe(true);
 
     // `kill -0` returns 0 if the process exists and we have permission
@@ -84,7 +81,7 @@ describe("spawnWithGroupTimeout", () => {
     });
     expect(probe.status).not.toBe(0);
 
-    spawnSync("/bin/rm", ["-f", pidFile]);
+    rmSync(pidFile, { force: true });
   });
 });
 
@@ -122,7 +119,7 @@ describe("gitNetworkExec", () => {
         }),
       ).toThrow(GitNetworkTimeoutError);
     } finally {
-      spawnSync("/bin/rm", ["-rf", dest]);
+      rmSync(dest, { recursive: true, force: true });
     }
   });
 });
