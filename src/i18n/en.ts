@@ -403,4 +403,7 @@ export const en: Messages = {
   "versionCheck.abort": "Abort",
   "worktree.haltConflict":
     "User chose to halt \u2014 worktree conflict unresolved.",
+  "worktree.gitNetworkTimeout": (args, seconds) =>
+    `git ${args} timed out after ${seconds}s \u2014 the network may be ` +
+    "unresponsive (host sleep, dead TCP). Check your connection and retry.",
 };

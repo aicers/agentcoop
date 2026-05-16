@@ -3,6 +3,7 @@ import { existsSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { gitNetworkExec } from "./git-network.js";
 
 vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
@@ -31,6 +32,12 @@ vi.mock("./lock.js", () => ({
   ),
 }));
 
+vi.mock("./git-network.js", () => ({
+  gitNetworkExec: vi.fn(() => ""),
+  DEFAULT_FETCH_TIMEOUT_MS: 90_000,
+  DEFAULT_CLONE_TIMEOUT_MS: 5 * 60_000,
+}));
+
 const {
   worktreePath,
   reviewerWorktreePath,
@@ -51,6 +58,7 @@ const {
 const mockExecFileSync = vi.mocked(execFileSync);
 const mockExistsSync = vi.mocked(existsSync);
 const mockRmSync = vi.mocked(rmSync);
+const mockGitNetworkExec = vi.mocked(gitNetworkExec);
 
 afterEach(() => {
   vi.resetAllMocks();
@@ -139,10 +147,9 @@ describe("bootstrapRepo", () => {
     mockExistsSync.mockReturnValue(false);
     const dest = bootstrapRepo("org", "repo");
     expect(dest).toBe(repoPath("org", "repo"));
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      "git",
+    expect(mockGitNetworkExec).toHaveBeenCalledWith(
       ["clone", "--bare", "https://github.com/org/repo.git", dest],
-      expect.objectContaining({ encoding: "utf-8" }),
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
   });
 
@@ -172,24 +179,29 @@ describe("bootstrapRepo", () => {
       return "" as never;
     }) as typeof execFileSync);
     bootstrapRepo("org", "repo");
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      "git",
+    expect(mockGitNetworkExec).toHaveBeenCalledWith(
       ["fetch", "--all", "--prune"],
-      expect.objectContaining({ encoding: "utf-8", cwd: dest }),
+      expect.objectContaining({ cwd: dest, timeoutMs: expect.any(Number) }),
     );
   });
 
   test("repairs missing refspec on existing bare repo before fetching", () => {
     const dest = repoPath("org", "repo");
     mockExistsSync.mockReturnValue(true);
-    const calls: string[][] = [];
+    const order: string[] = [];
     // Simulate a legacy bare repo with no refspec
     mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
-      calls.push([cmd, ...args]);
       if (cmd === "git" && args[0] === "config" && args.length === 2)
         throw new Error("key missing");
+      if (cmd === "git" && args[0] === "config" && args.length === 3) {
+        order.push("config-set");
+      }
       return "" as never;
     }) as typeof execFileSync);
+    mockGitNetworkExec.mockImplementation((args) => {
+      if (args[0] === "fetch") order.push("fetch");
+      return "";
+    });
     bootstrapRepo("org", "repo");
     // Should set the refspec before fetching
     expect(mockExecFileSync).toHaveBeenCalledWith(
@@ -197,11 +209,7 @@ describe("bootstrapRepo", () => {
       ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
       expect.objectContaining({ cwd: dest }),
     );
-    const configSetIdx = calls.findIndex(
-      (c) => c[0] === "git" && c[1] === "config" && c.length === 4,
-    );
-    const fetchIdx = calls.findIndex((c) => c[0] === "git" && c[1] === "fetch");
-    expect(configSetIdx).toBeLessThan(fetchIdx);
+    expect(order.indexOf("config-set")).toBeLessThan(order.indexOf("fetch"));
   });
 
   test("skips setting refspec when it already exists", () => {
@@ -225,26 +233,29 @@ describe("bootstrapRepo", () => {
   test("fetches after clone to populate remote-tracking refs", () => {
     const dest = repoPath("org", "repo");
     mockExistsSync.mockReturnValue(false);
-    const calls: string[][] = [];
+    const order: string[] = [];
     mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
-      calls.push([cmd, ...args]);
       if (cmd === "git" && args[0] === "config" && args.length === 2)
         throw new Error("key missing");
+      if (cmd === "git" && args[0] === "config" && args.length === 3) {
+        order.push("config-set");
+      }
       return "" as never;
     }) as typeof execFileSync);
+    mockGitNetworkExec.mockImplementation((args) => {
+      if (args[0] === "fetch") order.push("fetch");
+      if (args[0] === "clone") order.push("clone");
+      return "";
+    });
     bootstrapRepo("org", "repo");
     // A fetch must follow the refspec config set so that
     // refs/remotes/origin/* is populated for createWorktree().
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      "git",
+    expect(mockGitNetworkExec).toHaveBeenCalledWith(
       ["fetch", "--all", "--prune"],
       expect.objectContaining({ cwd: dest }),
     );
-    const configSetIdx = calls.findIndex(
-      (c) => c[0] === "git" && c[1] === "config" && c.length === 4,
-    );
-    const fetchIdx = calls.findIndex((c) => c[0] === "git" && c[1] === "fetch");
-    expect(configSetIdx).toBeLessThan(fetchIdx);
+    expect(order.indexOf("config-set")).toBeLessThan(order.indexOf("fetch"));
+    expect(order.indexOf("clone")).toBeLessThan(order.indexOf("config-set"));
   });
 
   test("git fetch runs outside withLock (existing repo)", () => {
@@ -254,14 +265,13 @@ describe("bootstrapRepo", () => {
     mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
       if (cmd === "git" && args[0] === "config" && args.length === 2)
         return "+refs/heads/*:refs/remotes/origin/*\n";
-      if (cmd === "git" && args[0] === "fetch") {
-        fetchLockDepths.push(lockDepth);
-      }
-      if (cmd === "git" && args[0] === "clone") {
-        cloneLockDepths.push(lockDepth);
-      }
       return "" as never;
     }) as typeof execFileSync);
+    mockGitNetworkExec.mockImplementation((args) => {
+      if (args[0] === "fetch") fetchLockDepths.push(lockDepth);
+      if (args[0] === "clone") cloneLockDepths.push(lockDepth);
+      return "";
+    });
     bootstrapRepo("org", "repo");
     expect(fetchLockDepths).toEqual([0]);
     expect(cloneLockDepths).toHaveLength(0);
@@ -274,14 +284,13 @@ describe("bootstrapRepo", () => {
     mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
       if (cmd === "git" && args[0] === "config" && args.length === 2)
         throw new Error("key missing");
-      if (cmd === "git" && args[0] === "fetch") {
-        fetchLockDepths.push(lockDepth);
-      }
-      if (cmd === "git" && args[0] === "clone") {
-        cloneLockDepths.push(lockDepth);
-      }
       return "" as never;
     }) as typeof execFileSync);
+    mockGitNetworkExec.mockImplementation((args) => {
+      if (args[0] === "fetch") fetchLockDepths.push(lockDepth);
+      if (args[0] === "clone") cloneLockDepths.push(lockDepth);
+      return "";
+    });
     bootstrapRepo("org", "repo");
     expect(cloneLockDepths).toEqual([1]);
     expect(fetchLockDepths).toEqual([0]);
@@ -639,10 +648,12 @@ describe("prepareReviewerWorktree", () => {
     const result = prepareReviewerWorktree(baseOpts);
 
     expect(result).toBe(reviewerWorktreePath("org", "repo", 5));
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      "git",
+    expect(mockGitNetworkExec).toHaveBeenCalledWith(
       ["fetch", "origin", "alice/issue-5"],
-      expect.objectContaining({ cwd: repoPath("org", "repo") }),
+      expect.objectContaining({
+        cwd: repoPath("org", "repo"),
+        timeoutMs: expect.any(Number),
+      }),
     );
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "git",
@@ -725,9 +736,6 @@ describe("prepareReviewerWorktree", () => {
     const worktreeAddLockDepths: number[] = [];
     mockExecFileSync.mockImplementation(((cmd: string, args: string[]) => {
       if (cmd === "git" && args[0] === "rev-parse") return "true\n";
-      if (cmd === "git" && args[0] === "fetch") {
-        fetchLockDepths.push(lockDepth);
-      }
       if (
         cmd === "git" &&
         (args[0] === "switch" || args[0] === "reset" || args[0] === "clean")
@@ -739,6 +747,10 @@ describe("prepareReviewerWorktree", () => {
       }
       return "" as never;
     }) as typeof execFileSync);
+    mockGitNetworkExec.mockImplementation((args) => {
+      if (args[0] === "fetch") fetchLockDepths.push(lockDepth);
+      return "";
+    });
 
     prepareReviewerWorktree(baseOpts);
 
@@ -758,9 +770,6 @@ describe("prepareReviewerWorktree", () => {
       if (cmd === "git" && args[0] === "switch") {
         throw new Error("refresh failed");
       }
-      if (cmd === "git" && args[0] === "fetch") {
-        fetchLockDepths.push(lockDepth);
-      }
       if (cmd === "git" && args[0] === "worktree" && args[1] === "add") {
         worktreeAddLockDepths.push(lockDepth);
       }
@@ -769,6 +778,10 @@ describe("prepareReviewerWorktree", () => {
       }
       return "" as never;
     }) as typeof execFileSync);
+    mockGitNetworkExec.mockImplementation((args) => {
+      if (args[0] === "fetch") fetchLockDepths.push(lockDepth);
+      return "";
+    });
 
     prepareReviewerWorktree(baseOpts);
 

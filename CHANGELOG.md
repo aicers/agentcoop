@@ -6,6 +6,27 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- `git fetch` and `git clone` invocations in the worktree
+  bootstrap can no longer hang indefinitely when the underlying
+  TCP connection to GitHub dies silently (most commonly after the
+  host returns from sleep).  Each network call now (1) injects
+  `GIT_SSH_COMMAND` with `ServerAliveInterval=15` /
+  `ServerAliveCountMax=4`, bounding dead-TCP detection at the SSH
+  layer to roughly 60 s, and (2) runs inside its own POSIX
+  process group with a hard timeout (90 s for fetch, 5 min for
+  clone); on expiry the whole group receives `SIGKILL` so no ssh
+  child survives the parent.  A timeout surfaces as a clear
+  user-facing error instead of stalling the pipeline.  The
+  keepalive `GIT_SSH_COMMAND` is synthesized only when none of
+  `GIT_SSH_COMMAND`, `GIT_SSH`, or `core.sshCommand` (in any git
+  config scope visible from the target `cwd`) is already
+  configured, so existing custom SSH transports (proxy commands,
+  enterprise wrappers, key selection) keep working — the
+  spawn-level timeout still bounds dead-TCP hangs in those cases.
+  Closes #337.
+
 ### Added
 
 - The terminal tab/window title now reflects the current run as
