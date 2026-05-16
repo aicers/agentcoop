@@ -2818,12 +2818,20 @@ describe("runStartup — manage custom models", () => {
 // that the join-point call site exists; these tests cover the
 // prompt's own behaviour.
 describe("promptSquashApplyPolicy", () => {
-  test("default Enter (true) → 'auto'", async () => {
+  test("bare Enter follows declared default → 'ask'", async () => {
+    mockConfirm.mockImplementationOnce(
+      async (opts: { default?: boolean }) => opts.default ?? false,
+    );
+    const policy = await promptSquashApplyPolicy();
+    expect(policy).toBe("ask");
+    // Default is No so a bare Enter keeps the human in the loop.
+    expect(mockConfirm.mock.calls[0][0]).toHaveProperty("default", false);
+  });
+
+  test("explicit yes → 'auto'", async () => {
     mockConfirm.mockResolvedValueOnce(true);
     const policy = await promptSquashApplyPolicy();
     expect(policy).toBe("auto");
-    // Default is Yes so a bare Enter picks the low-friction path.
-    expect(mockConfirm.mock.calls[0][0]).toHaveProperty("default", true);
   });
 
   test("explicit no → 'ask'", async () => {

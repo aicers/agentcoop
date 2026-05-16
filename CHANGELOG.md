@@ -6,6 +6,27 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- The terminal tab/window title now reflects the current run as
+  `<owner>/<repo>#<issue>[ (#<pr>)] <stage label>`, matching the
+  stage and round shown in the StatusBar.  Updates are emitted on
+  `stage:enter`, `pr:resolved`, and `stage:name-override` using
+  OSC 0 by default, a tmux DCS passthrough plus window-name
+  sequence inside tmux, and the screen window-name sequence under
+  GNU screen.  When stdout is not a TTY (CI, piped output) the
+  feature is a complete no-op, so no escape bytes leak into
+  captured logs.  Closes #329.
+
+### Changed
+
+- The startup prompt "When a single-commit squash is suggested, apply it
+  automatically via the agent? (No = ask each time)" now defaults to **No**.
+  A bare Enter keypress therefore selects the safer "ask each time" path,
+  keeping the human in the loop for the history-rewriting step rather than
+  silently dispatching an extra agent run.  Explicitly answering Yes still
+  yields the auto-apply behaviour.  Closes #338.
+
 ### Fixed
 
 - Reviewer-round `git fetch` no longer runs under the shared repo
@@ -31,18 +52,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   repo state).  `MAX_WAIT_MS` is unchanged at 120 s — the fix is
   structural, not a timeout bump, so the lock remains a meaningful
   "something is stuck on worktree mutation" signal.  Closes #336.
-
-### Added
-
-- The terminal tab/window title now reflects the current run as
-  `<owner>/<repo>#<issue>[ (#<pr>)] <stage label>`, matching the
-  stage and round shown in the StatusBar.  Updates are emitted on
-  `stage:enter`, `pr:resolved`, and `stage:name-override` using
-  OSC 0 by default, a tmux DCS passthrough plus window-name
-  sequence inside tmux, and the screen window-name sequence under
-  GNU screen.  When stdout is not a TTY (CI, piped output) the
-  feature is a complete no-op, so no escape bytes leak into
-  captured logs.  Closes #329.
 
 ## [0.4.0] - 2026-05-09
 

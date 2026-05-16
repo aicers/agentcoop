@@ -461,7 +461,9 @@ try {
   // point so both the fresh-start and resume branches go through
   // the same prompt.  Routed through `promptSquashApplyPolicy` so
   // the call site is a single named target — see the helper for the
-  // semantics of "not persisted" and the default-true rationale.
+  // semantics of "not persisted" and the default-false rationale
+  // (prefer asking each time over auto-applying so the human stays
+  // in the loop for the history-rewriting step).
   params.squashApplyPolicy = await promptSquashApplyPolicy();
 
   // Resolve the per-CLI auth policy at the same shared join point.

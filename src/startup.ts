@@ -133,14 +133,16 @@ function agentConfigEqual(a: AgentConfig | undefined, b: AgentConfig): boolean {
  * question on either the fresh-startup or the resume path.
  *
  * Not persisted to config or `RunState`: the right answer depends on
- * the state of the current branch / PR.  Default is "let the agent
- * handle it" so a bare Enter keypress picks the low-friction path.
+ * the state of the current branch / PR.  Default is "ask each time"
+ * so a bare Enter keypress picks the safer path that keeps the human
+ * in the loop for the history-rewriting step, rather than dispatching
+ * an extra agent run without further confirmation.
  */
 export async function promptSquashApplyPolicy(): Promise<"auto" | "ask"> {
   const m = t();
   const autoApply = await confirm({
     message: m["startup.squashApplyPolicyPrompt"],
-    default: true,
+    default: false,
   });
   return autoApply ? "auto" : "ask";
 }
