@@ -103,6 +103,14 @@ const EXEC_OPTS: ExecFileSyncOptions = { encoding: "utf-8", stdio: "pipe" };
  * Ensure a bare clone of `owner/repo` exists locally.
  * - Missing → `git clone --bare`
  * - Exists  → `git fetch --all --prune`
+ *
+ * The existence check + `git clone --bare` run under `withLock` so a
+ * sibling dispatch never observes a half-finished bare repo.  The
+ * follow-up `git fetch --all --prune` runs outside the lock — fetch is
+ * safe to run concurrently against the same bare repo (git serialises
+ * ref / packed-refs updates internally) and holding the worktree lock
+ * across a potentially slow or hung fetch would block every sibling
+ * dispatch that only needs `git worktree add`.
  */
 export function bootstrapRepo(owner: string, repo: string): string {
   const dest = repoPath(owner, repo);
@@ -113,25 +121,23 @@ export function bootstrapRepo(owner: string, repo: string): string {
       // Ensure the fetch refspec exists — bare clones (including those
       // created before this fix) lack one, making `git fetch` a no-op.
       ensureFetchRefspec(dest);
-      execFileSync("git", ["fetch", "--all", "--prune"], {
-        ...EXEC_OPTS,
-        cwd: dest,
-      });
-    } else {
-      execFileSync(
-        "git",
-        ["clone", "--bare", `https://github.com/${owner}/${repo}.git`, dest],
-        EXEC_OPTS,
-      );
-      ensureFetchRefspec(dest);
-      // After a bare clone the repo only has refs/heads/*; fetch once
-      // to populate refs/remotes/origin/* so createWorktree() can
-      // reference origin/<baseBranch>.
-      execFileSync("git", ["fetch", "--all", "--prune"], {
-        ...EXEC_OPTS,
-        cwd: dest,
-      });
+      return;
     }
+    execFileSync(
+      "git",
+      ["clone", "--bare", `https://github.com/${owner}/${repo}.git`, dest],
+      EXEC_OPTS,
+    );
+    ensureFetchRefspec(dest);
+  });
+
+  // Fetch outside the lock.  For the existing-repo path this refreshes
+  // remote-tracking refs; for the post-clone path it populates
+  // refs/remotes/origin/* so createWorktree() can reference
+  // origin/<baseBranch>.
+  execFileSync("git", ["fetch", "--all", "--prune"], {
+    ...EXEC_OPTS,
+    cwd: dest,
   });
 
   return dest;
@@ -426,6 +432,15 @@ export function createWorktree(options: {
 /**
  * Create or refresh the detached reviewer worktree on the latest
  * `origin/{authorBranch}`.
+ *
+ * The `git fetch` and the per-worktree refresh commands (`switch
+ * --detach`, `reset --hard`, `clean -fd`) run outside `withLock`:
+ * fetch is safe to run concurrently against the same bare repo, and
+ * the refresh commands only touch this issue's reviewer worktree path,
+ * not shared bare-repo state.  Only the recreate fallback (worktree
+ * remove + `git worktree add --detach`) is taken under `withLock`,
+ * since `git worktree add` on a shared bare repo is the operation
+ * that needs serialisation.
  */
 export function prepareReviewerWorktree(options: {
   owner: string;
@@ -438,38 +453,47 @@ export function prepareReviewerWorktree(options: {
   const wtPath = reviewerWorktreePath(owner, repo, issueNumber);
   const lockPath = repoLockPath(owner, repo);
 
-  withLock(lockPath, () => {
-    execFileSync("git", ["fetch", "origin", authorBranch], {
+  execFileSync("git", ["fetch", "origin", authorBranch], {
+    ...EXEC_OPTS,
+    cwd: bare,
+  });
+
+  const refresh = () => {
+    execFileSync("git", ["switch", "--detach", `origin/${authorBranch}`], {
       ...EXEC_OPTS,
-      cwd: bare,
+      cwd: wtPath,
     });
+    execFileSync("git", ["reset", "--hard", `origin/${authorBranch}`], {
+      ...EXEC_OPTS,
+      cwd: wtPath,
+    });
+    execFileSync("git", ["clean", "-fd"], {
+      ...EXEC_OPTS,
+      cwd: wtPath,
+    });
+  };
 
-    const refresh = () => {
-      execFileSync("git", ["switch", "--detach", `origin/${authorBranch}`], {
-        ...EXEC_OPTS,
-        cwd: wtPath,
-      });
-      execFileSync("git", ["reset", "--hard", `origin/${authorBranch}`], {
-        ...EXEC_OPTS,
-        cwd: wtPath,
-      });
-      execFileSync("git", ["clean", "-fd"], {
-        ...EXEC_OPTS,
-        cwd: wtPath,
-      });
-    };
-
-    if (isValidGitWorktree(wtPath)) {
-      try {
-        refresh();
-        return;
-      } catch {
+  if (isValidGitWorktree(wtPath)) {
+    try {
+      refresh();
+      return wtPath;
+    } catch {
+      withLock(lockPath, () => {
         forceRemoveDetachedWorktree(bare, wtPath);
-      }
-    } else if (existsSync(wtPath)) {
+        execFileSync(
+          "git",
+          ["worktree", "add", "--detach", wtPath, `origin/${authorBranch}`],
+          { ...EXEC_OPTS, cwd: bare },
+        );
+      });
+      return wtPath;
+    }
+  }
+
+  withLock(lockPath, () => {
+    if (existsSync(wtPath)) {
       forceRemoveDetachedWorktree(bare, wtPath);
     }
-
     execFileSync(
       "git",
       ["worktree", "add", "--detach", wtPath, `origin/${authorBranch}`],
