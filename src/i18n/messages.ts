@@ -333,6 +333,7 @@ export interface Messages {
 
   "worktree.alreadyExists": (path: string) => string;
   "worktree.haltConflict": string;
+  "worktree.gitNetworkTimeout": (args: string, seconds: number) => string;
 
   // ---- version check -----------------------------------------------------
 

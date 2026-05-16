@@ -12,6 +12,11 @@ import { existsSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ghExec } from "./gh-exec.js";
+import {
+  DEFAULT_CLONE_TIMEOUT_MS,
+  DEFAULT_FETCH_TIMEOUT_MS,
+  gitNetworkExec,
+} from "./git-network.js";
 import { t } from "./i18n/index.js";
 import { repoLockPath, withLock } from "./lock.js";
 
@@ -123,10 +128,9 @@ export function bootstrapRepo(owner: string, repo: string): string {
       ensureFetchRefspec(dest);
       return;
     }
-    execFileSync(
-      "git",
+    gitNetworkExec(
       ["clone", "--bare", `https://github.com/${owner}/${repo}.git`, dest],
-      EXEC_OPTS,
+      { timeoutMs: DEFAULT_CLONE_TIMEOUT_MS },
     );
     ensureFetchRefspec(dest);
   });
@@ -135,9 +139,9 @@ export function bootstrapRepo(owner: string, repo: string): string {
   // remote-tracking refs; for the post-clone path it populates
   // refs/remotes/origin/* so createWorktree() can reference
   // origin/<baseBranch>.
-  execFileSync("git", ["fetch", "--all", "--prune"], {
-    ...EXEC_OPTS,
+  gitNetworkExec(["fetch", "--all", "--prune"], {
     cwd: dest,
+    timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
   });
 
   return dest;
@@ -453,9 +457,9 @@ export function prepareReviewerWorktree(options: {
   const wtPath = reviewerWorktreePath(owner, repo, issueNumber);
   const lockPath = repoLockPath(owner, repo);
 
-  execFileSync("git", ["fetch", "origin", authorBranch], {
-    ...EXEC_OPTS,
+  gitNetworkExec(["fetch", "origin", authorBranch], {
     cwd: bare,
+    timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
   });
 
   const refresh = () => {

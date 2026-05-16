@@ -28,9 +28,16 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { gitNetworkExec } from "./git-network.js";
 
 vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
+}));
+
+vi.mock("./git-network.js", () => ({
+  gitNetworkExec: vi.fn(() => ""),
+  DEFAULT_FETCH_TIMEOUT_MS: 90_000,
+  DEFAULT_CLONE_TIMEOUT_MS: 5 * 60_000,
 }));
 
 const { prepareReviewerWorktree, reviewerWorktreePath } = await import(
@@ -39,6 +46,7 @@ const { prepareReviewerWorktree, reviewerWorktreePath } = await import(
 const { repoLockPath } = await import("./lock.js");
 
 const mockExecFileSync = vi.mocked(execFileSync);
+const mockGitNetworkExec = vi.mocked(gitNetworkExec);
 
 // `os.homedir()` honours $HOME on POSIX but uses USERPROFILE on Windows.
 // Skip the test on Windows — the fixture relies on overriding $HOME so
@@ -110,8 +118,11 @@ describe("prepareReviewerWorktree (#336) — sibling proceeds despite held lock"
       const issued = mockExecFileSync.mock.calls.map(
         (c) => (c[1] as string[])[0],
       );
+      const networkIssued = mockGitNetworkExec.mock.calls.map(
+        (c) => (c[0] as string[])[0],
+      );
       // Refresh-path commands ran:
-      expect(issued).toContain("fetch");
+      expect(networkIssued).toContain("fetch");
       expect(issued).toContain("switch");
       expect(issued).toContain("reset");
       expect(issued).toContain("clean");
