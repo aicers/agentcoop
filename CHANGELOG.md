@@ -17,9 +17,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `packed-refs.lock` — is safe to run in parallel and does not need
   the same lock.  The lock is now narrowed to wrap only worktree-
   mutating commands: `git worktree add` (initial author worktree
-  and the reviewer-recreate fallback), `forceRemoveWorktreeAndBranch`
-  + recreate (the clean / conflict path), and the bootstrap
-  existence-check + `git clone --bare` so a sibling never observes
+  and the reviewer-recreate fallback), the
+  `forceRemoveWorktreeAndBranch` + recreate sequence (the clean /
+  conflict path), and the bootstrap existence-check plus
+  `git clone --bare` so a sibling never observes
   a half-finished bare repo.  Moved out of the lock: the
   `git fetch --all --prune` calls in `bootstrapRepo` (both the
   existing-repo path and the post-clone path), the `git fetch
