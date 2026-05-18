@@ -23,6 +23,7 @@ import { createCodexAdapter } from "./codex-adapter.js";
 import type { NotificationSettings, PipelineSettings } from "./config.js";
 import {
   assembleCiCheckStage,
+  assembleDoneStage,
   assembleReviewStage,
   assembleSquashStage,
   loadConfig,
@@ -928,126 +929,135 @@ try {
     autoResumeAttempts: pipelineSettings.autoResumeAttempts,
   });
 
-  const doneStage = createDoneStageHandler({
-    events: emitter,
-    checkMergeable: async () => checkMergeable(owner, repo, wt.branch),
-    queryPrState: async () => queryPrState(owner, repo, wt.branch),
-    prompt: createDonePromptOptions(() => tuiPrompt),
-    rebaseOntoMain: createRebaseHandler(agentA, defaultBranch),
-    pollCiAndFix: async (ctx) => {
-      return pollCiAndFix({
-        ctx,
-        agent: agentA,
-        issueTitle,
-        issueBody,
-        // Stage 9 bypasses the engine's dispatchError prompt (the
-        // Done stage consumes pollCiAndFix inline), so without this
-        // opt-in prompt the fix-exhausted, pending-timeout, and
-        // agent-error branches would silently end the session.  Ask
-        // the user whether to keep trying — `true` resumes per the
-        // semantics in `ConfirmRetryInfo`; `false` lets cleanup run.
-        confirmRetry: async (info) => {
-          if (!tuiPrompt) return false;
-          return tuiPrompt.confirmCleanup(buildDoneConfirmRetryPrompt(info));
+  const doneStage = assembleDoneStage(
+    ({ pollTimeoutMs }) =>
+      createDoneStageHandler({
+        events: emitter,
+        checkMergeable: async () => checkMergeable(owner, repo, wt.branch),
+        queryPrState: async () => queryPrState(owner, repo, wt.branch),
+        prompt: createDonePromptOptions(() => tuiPrompt),
+        rebaseOntoMain: createRebaseHandler(agentA, defaultBranch),
+        pollCiAndFix: async (ctx) => {
+          return pollCiAndFix({
+            ctx,
+            agent: agentA,
+            issueTitle,
+            issueBody,
+            pollTimeoutMs,
+            // Stage 9 bypasses the engine's dispatchError prompt (the
+            // Done stage consumes pollCiAndFix inline), so without this
+            // opt-in prompt the fix-exhausted, pending-timeout, and
+            // agent-error branches would silently end the session.  Ask
+            // the user whether to keep trying — `true` resumes per the
+            // semantics in `ConfirmRetryInfo`; `false` lets cleanup run.
+            confirmRetry: async (info) => {
+              if (!tuiPrompt) return false;
+              return tuiPrompt.confirmCleanup(
+                buildDoneConfirmRetryPrompt(info),
+              );
+            },
+          });
         },
-      });
-    },
-    cleanup: () => {
-      removeWorktree(owner, repo, issueNumber, wt.branch);
-      removeReviewerWorktree(owner, repo, issueNumber);
-    },
-    stopServices: () => {
-      if (hasDockerComposeRunning(wt.path)) {
-        stopDockerCompose(wt.path);
-      }
-    },
-    hasRunningServices: () => hasDockerComposeRunning(wt.path),
-    getSquashMergeHint: () => {
-      if (runState.squashSubStep !== "applied_via_github") return undefined;
-      const prNum = runState.prNumber ?? findPrNumber(owner, repo, wt.branch);
-      // Read-side: silently degrade to "no comment" on transient
-      // lookup failure; this hint is purely cosmetic and the write
-      // side has its own error-propagating path.
-      let commentBody: string | undefined;
-      if (prNum !== undefined) {
-        try {
-          commentBody = findLatestCommentWithMarker(
-            owner,
-            repo,
-            prNum,
-            SQUASH_SUGGESTION_START_MARKER,
-          )?.body;
-        } catch {
-          commentBody = undefined;
-        }
-      }
-      const suggestion = parseSquashSuggestionBlock(commentBody);
-      const prUrl =
-        prNum !== undefined
-          ? `https://github.com/${owner}/${repo}/pull/${prNum}`
-          : undefined;
-      return {
-        title: suggestion?.title,
-        body: suggestion?.body,
-        prUrl,
-      };
-    },
-    onNotMerged: async (signal) => {
-      if (!tuiPrompt) return;
-      const m = t();
-
-      // Stop docker compose services.
-      if (hasDockerComposeRunning(wt.path)) {
-        const stop = await tuiPrompt.confirmCleanup(
-          m["cleanup.stopDockerCompose"],
-        );
-        if (signal?.aborted) return;
-        if (stop) stopDockerCompose(wt.path);
-      }
-
-      // Delete local worktree and branch.
-      const deleteWt = await tuiPrompt.confirmCleanup(
-        m["cleanup.deleteWorktree"],
-      );
-      if (signal?.aborted) return;
-      if (deleteWt) {
-        removeWorktree(owner, repo, issueNumber, wt.branch);
-        removeReviewerWorktree(owner, repo, issueNumber);
-      }
-
-      // Delete remote branch (only if pushed).
-      if (remoteBranchExists(owner, repo, wt.branch)) {
-        const delRemote = await tuiPrompt.confirmCleanup(
-          m["cleanup.deleteRemoteBranch"](wt.branch),
-        );
-        if (signal?.aborted) return;
-        if (delRemote) {
-          try {
-            deleteRemoteBranch(owner, repo, wt.branch);
-          } catch {
-            // Ignore — branch may already be deleted.
+        cleanup: () => {
+          removeWorktree(owner, repo, issueNumber, wt.branch);
+          removeReviewerWorktree(owner, repo, issueNumber);
+        },
+        stopServices: () => {
+          if (hasDockerComposeRunning(wt.path)) {
+            stopDockerCompose(wt.path);
           }
-        }
-      }
-
-      // Close PR (only if one exists).
-      // Refresh PR number in case it was detected during the pipeline.
-      const prNum = runState.prNumber ?? findPrNumber(owner, repo, wt.branch);
-      if (prNum !== undefined) {
-        const close = await tuiPrompt.confirmCleanup(
-          m["cleanup.closePr"](prNum),
-        );
-        if (signal?.aborted) return;
-        if (close) {
-          try {
-            closePr(owner, repo, prNum);
-          } catch {
-            // Ignore — PR may already be closed or merged.
+        },
+        hasRunningServices: () => hasDockerComposeRunning(wt.path),
+        getSquashMergeHint: () => {
+          if (runState.squashSubStep !== "applied_via_github") return undefined;
+          const prNum =
+            runState.prNumber ?? findPrNumber(owner, repo, wt.branch);
+          // Read-side: silently degrade to "no comment" on transient
+          // lookup failure; this hint is purely cosmetic and the write
+          // side has its own error-propagating path.
+          let commentBody: string | undefined;
+          if (prNum !== undefined) {
+            try {
+              commentBody = findLatestCommentWithMarker(
+                owner,
+                repo,
+                prNum,
+                SQUASH_SUGGESTION_START_MARKER,
+              )?.body;
+            } catch {
+              commentBody = undefined;
+            }
           }
-        }
-      }
-    },
-  });
+          const suggestion = parseSquashSuggestionBlock(commentBody);
+          const prUrl =
+            prNum !== undefined
+              ? `https://github.com/${owner}/${repo}/pull/${prNum}`
+              : undefined;
+          return {
+            title: suggestion?.title,
+            body: suggestion?.body,
+            prUrl,
+          };
+        },
+        onNotMerged: async (signal) => {
+          if (!tuiPrompt) return;
+          const m = t();
+
+          // Stop docker compose services.
+          if (hasDockerComposeRunning(wt.path)) {
+            const stop = await tuiPrompt.confirmCleanup(
+              m["cleanup.stopDockerCompose"],
+            );
+            if (signal?.aborted) return;
+            if (stop) stopDockerCompose(wt.path);
+          }
+
+          // Delete local worktree and branch.
+          const deleteWt = await tuiPrompt.confirmCleanup(
+            m["cleanup.deleteWorktree"],
+          );
+          if (signal?.aborted) return;
+          if (deleteWt) {
+            removeWorktree(owner, repo, issueNumber, wt.branch);
+            removeReviewerWorktree(owner, repo, issueNumber);
+          }
+
+          // Delete remote branch (only if pushed).
+          if (remoteBranchExists(owner, repo, wt.branch)) {
+            const delRemote = await tuiPrompt.confirmCleanup(
+              m["cleanup.deleteRemoteBranch"](wt.branch),
+            );
+            if (signal?.aborted) return;
+            if (delRemote) {
+              try {
+                deleteRemoteBranch(owner, repo, wt.branch);
+              } catch {
+                // Ignore — branch may already be deleted.
+              }
+            }
+          }
+
+          // Close PR (only if one exists).
+          // Refresh PR number in case it was detected during the pipeline.
+          const prNum =
+            runState.prNumber ?? findPrNumber(owner, repo, wt.branch);
+          if (prNum !== undefined) {
+            const close = await tuiPrompt.confirmCleanup(
+              m["cleanup.closePr"](prNum),
+            );
+            if (signal?.aborted) return;
+            if (close) {
+              try {
+                closePr(owner, repo, prNum);
+              } catch {
+                // Ignore — PR may already be closed or merged.
+              }
+            }
+          }
+        },
+      }),
+    pipelineSettings,
+  );
 
   // The `prompt` field is intentionally omitted here — it will be
   // supplied by the ink <App> component via TuiUserPrompt.

@@ -229,6 +229,26 @@ describe("module exports", () => {
     expect(result.name).toBe("Squash");
   });
 
+  test("assembleDoneStage passes pollTimeoutMs to handler", async () => {
+    const { assembleDoneStage, DEFAULT_PIPELINE_SETTINGS } = await import(
+      "../dist/config.js"
+    );
+    // Use a non-default value (the issue's example) to prove that Stage 9
+    // honors `ciCheckTimeoutMinutes` like Stages 7 and 8 already do.
+    const settings = {
+      ...DEFAULT_PIPELINE_SETTINGS,
+      ciCheckTimeoutMinutes: 25,
+    };
+    let receivedOpts: { pollTimeoutMs: number } | undefined;
+    const handlerStub = { name: "Done", number: 9, handler: () => {} };
+    const result = assembleDoneStage((opts: { pollTimeoutMs: number }) => {
+      receivedOpts = opts;
+      return handlerStub;
+    }, settings);
+    expect(receivedOpts).toEqual({ pollTimeoutMs: 25 * 60_000 });
+    expect(result.name).toBe("Done");
+  });
+
   test("assembleReviewStage passes pollTimeoutMs to handler and sets autoBudget", async () => {
     const { assembleReviewStage, DEFAULT_PIPELINE_SETTINGS } = await import(
       "../dist/config.js"

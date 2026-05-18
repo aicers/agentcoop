@@ -4,6 +4,18 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The Done stage (Stage 9) now honors the `ciCheckTimeoutMinutes` setting
+  when polling CI after a rebase or manual conflict resolution.  Previously
+  it always used the built-in 10-minute default, while Stages 7 and 8
+  already obeyed the setting — raising `ciCheckTimeoutMinutes` to 30
+  minutes, for example, extended the CI wait after the review and squash
+  flows but left the rebase flow capped at 10.  All three CI-polling
+  stages now share the same configured timeout.  Closes #346.
+
 ## [0.5.0] - 2026-05-17
 
 ### Added

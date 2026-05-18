@@ -323,6 +323,23 @@ export function assembleReviewStage<T>(
   };
 }
 
+/**
+ * Assembles the Done stage definition fragment from pipeline settings.
+ *
+ * Stage 9 polls CI after a rebase or manual conflict resolution and
+ * must honor the same `ciCheckTimeoutMinutes` setting that Stages 7
+ * and 8 already use.  Keeps the minutes→ms conversion in one testable
+ * place, matching the pattern used by {@link assembleSquashStage}.
+ */
+export function assembleDoneStage<T>(
+  createHandler: (opts: { pollTimeoutMs: number }) => T,
+  settings: PipelineSettings,
+): T {
+  return createHandler({
+    pollTimeoutMs: settings.ciCheckTimeoutMinutes * 60_000,
+  });
+}
+
 export function saveConfig(config: Config): void {
   const path = configPath();
   mkdirSync(dirname(path), { recursive: true });
