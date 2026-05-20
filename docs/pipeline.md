@@ -72,7 +72,11 @@ is available:
 - **Resume form** — drops the issue body and any repo header,
   keeping only stage-specific instructions and a one-line
   `issue #N` reference. Sent whenever a saved session id is
-  available.
+  available.  In Stage 7's resume-form review prompt the full
+  review-angles block is similarly replaced by a one-line
+  reminder (`Apply the same review angles from the earlier
+  review prompt.`), since the reviewer session has already
+  received the full guidance in an earlier turn.
 
 `invokeOrResume` accepts an optional `fallbackPrompt` parameter
 (via an options object) so the call site can supply both forms.
@@ -1068,7 +1072,18 @@ comment is used for state reconciliation on resume (see
 
 For follow-up reviews (round > 1), step 2 adds follow-through
 verification and reasoned-pushback handling before the review
-step:
+step.  The issue body is no longer inlined — by round 2+ the PR
+already exists, and the prompt instructs Agent B to fetch the
+body on demand before judging requirement coverage:
+
+```text
+## Issue #{number}: {title}
+
+Fetch the issue body before judging requirement coverage:
+`gh issue view {number} --repo {owner}/{repo} --json body --jq .body`
+```
+
+The instructions block then reads:
 
 ```text
 2. Read the author's response in the PR comment prefixed with

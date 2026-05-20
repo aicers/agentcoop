@@ -8,6 +8,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Stage 7 review prompts now omit content the reviewer has already
+  received in earlier turns or rounds, reducing per-invocation token
+  cost without changing review semantics.  The resume-form review
+  prompt (`buildReviewResumePrompt`, sent whenever a saved reviewer
+  session is being continued) replaces the full review-angles block
+  with a one-line `Apply the same review angles from the earlier
+  review prompt.` reminder.  The fresh-form review prompt
+  (`buildReviewPrompt`) drops the inlined issue body on round 2+ and
+  emits a `gh issue view` delegation block with explicit "Fetch
+  before judging requirement coverage" wording, mirroring the
+  existing long-issue overflow path; round 1 still inlines the body
+  verbatim because that is the first time the reviewer sees the
+  issue.  Closes #350.
 - The Done stage (Stage 9) now honors the `ciCheckTimeoutMinutes` setting
   when polling CI after a rebase or manual conflict resolution.  Previously
   it always used the built-in 10-minute default, while Stages 7 and 8

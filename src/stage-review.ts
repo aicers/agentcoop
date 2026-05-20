@@ -181,11 +181,23 @@ export function buildReviewPrompt(
   // into the prompt — the agent's cwd is already the reviewer worktree.
   void reviewerWorktreePath;
   const anglesBlock = buildReviewAnglesBlock();
+  // Round 1 inlines the issue body (first time the reviewer sees it).
+  // Round 2+ delegates the fetch to keep the prompt small while still
+  // requiring the body before requirement-coverage judgement.
+  const issueHeader =
+    round > 1
+      ? [
+          `## Issue #${ctx.issueNumber}: ${opts.issueTitle}`,
+          ``,
+          `Fetch the issue body before judging requirement coverage:`,
+          `\`gh issue view ${ctx.issueNumber} --repo ${ctx.owner}/${ctx.repo} --json body --jq .body\``,
+        ]
+      : buildIssueHeader(ctx, opts);
 
   const lines = [
     `You are reviewing a pull request for the following GitHub issue.`,
     ``,
-    ...buildIssueHeader(ctx, opts),
+    ...issueHeader,
     ``,
     `## Instructions`,
     ``,
@@ -234,15 +246,15 @@ export function buildReviewPrompt(
 }
 
 /**
- * Compact resume-form review prompt.  Re-uses the angles guidance
- * because per-round evaluation depth is what changes; only the issue
- * body is dropped.
+ * Compact resume-form review prompt.  Drops the issue body and the
+ * full review-angles block — the agent already has both from earlier
+ * turns of the same reviewer session.
  */
 export function buildReviewResumePrompt(
   ctx: StageContext,
   round: number,
 ): string {
-  const anglesBlock = buildReviewAnglesBlock();
+  const anglesReminder = `   Apply the same review angles from the earlier review prompt.`;
   const lines = [
     `Review the pull request for issue #${ctx.issueNumber} (round ${round}).`,
     ``,
@@ -264,7 +276,7 @@ export function buildReviewResumePrompt(
       `     or does not address the concern, keep the item open.`,
       `   - Only carry forward items that remain genuinely unresolved.`,
       `3. Review the updated diff against the issue.`,
-      anglesBlock,
+      anglesReminder,
       `4. Post your follow-up review as a PR comment prefixed with`,
       `   \`**[Reviewer Round ${round}]**\`. Include any still-unresolved`,
       `   prior items and any new findings from this round. Be`,
@@ -275,7 +287,7 @@ export function buildReviewResumePrompt(
   } else {
     lines.push(
       `2. Review the diff against the issue.`,
-      anglesBlock,
+      anglesReminder,
       `3. Post your review as a PR comment prefixed with`,
       `   \`**[Reviewer Round ${round}]**\`. Be specific. Cite file paths and`,
       `   line numbers when they help; for broader concerns, explain`,

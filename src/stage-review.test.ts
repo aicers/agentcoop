@@ -10,6 +10,7 @@ import {
   buildResumeUnresolvedSummaryPrompt,
   buildResumeVerdictPrompt,
   buildReviewPrompt,
+  buildReviewResumePrompt,
   buildReviewVerdictPrompt,
   buildUnresolvedSummaryPrompt,
   createReviewStageHandler,
@@ -231,6 +232,64 @@ describe("buildReviewPrompt", () => {
     for (const prompt of [round1, round2]) {
       expect(prompt).toContain("independent judgment");
       expect(prompt).toContain("not a mechanical checklist");
+    }
+  });
+
+  test("round 1 inlines the issue body", () => {
+    const prompt = buildReviewPrompt(BASE_CTX, makeOpts(), 1);
+    expect(prompt).toContain("The widget is broken.");
+    expect(prompt).not.toContain("gh issue view 42");
+  });
+
+  test("round 2+ omits the issue body and delegates the fetch", () => {
+    const prompt = buildReviewPrompt(
+      { ...BASE_CTX, iteration: 1 },
+      makeOpts(),
+      2,
+    );
+    expect(prompt).not.toContain("The widget is broken.");
+    expect(prompt).toContain("Issue #42: Fix the widget");
+    expect(prompt).toContain("before judging requirement coverage");
+    expect(prompt).toContain(
+      "gh issue view 42 --repo org/repo --json body --jq .body",
+    );
+  });
+});
+
+describe("buildReviewResumePrompt", () => {
+  test("round 1 omits the full angles block and uses a one-line reminder", () => {
+    const prompt = buildReviewResumePrompt(BASE_CTX, 1);
+    expect(prompt).toContain(
+      "Apply the same review angles from the earlier review prompt.",
+    );
+    // Distinctive phrases from the full angles block must NOT appear.
+    expect(prompt).not.toContain("implemented in a surprising way");
+    expect(prompt).not.toContain("edge cases and failure paths");
+    expect(prompt).not.toContain("over-engineering");
+    expect(prompt).not.toContain("input validation, injection");
+    expect(prompt).not.toContain("guidance, not a limit");
+  });
+
+  test("round 2+ omits the full angles block and uses a one-line reminder", () => {
+    const prompt = buildReviewResumePrompt(BASE_CTX, 2);
+    expect(prompt).toContain(
+      "Apply the same review angles from the earlier review prompt.",
+    );
+    expect(prompt).not.toContain("implemented in a surprising way");
+    expect(prompt).not.toContain("edge cases and failure paths");
+    expect(prompt).not.toContain("over-engineering");
+    expect(prompt).not.toContain("input validation, injection");
+    expect(prompt).not.toContain("guidance, not a limit");
+    // Round 2+ structural cues should still be present.
+    expect(prompt).toContain("[Author Round 1]");
+    expect(prompt).toContain("[Reviewer Round 2]");
+  });
+
+  test("does not inline the issue body in either round", () => {
+    const round1 = buildReviewResumePrompt(BASE_CTX, 1);
+    const round2 = buildReviewResumePrompt(BASE_CTX, 2);
+    for (const prompt of [round1, round2]) {
+      expect(prompt).not.toContain("The widget is broken.");
     }
   });
 });
