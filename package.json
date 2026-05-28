@@ -27,7 +27,7 @@
     "vitest": "^4.1.7"
   },
   "dependencies": {
-    "@inquirer/prompts": "^8.4.3",
+    "@inquirer/prompts": "^8.5.0",
     "ink": "^7.0.2",
     "ink-text-input": "^6.0.0",
     "react": "^19.2.6",
