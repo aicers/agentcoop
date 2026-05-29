@@ -28,7 +28,7 @@
   },
   "dependencies": {
     "@inquirer/prompts": "^8.5.0",
-    "ink": "^7.0.2",
+    "ink": "^7.0.4",
     "ink-text-input": "^6.0.0",
     "react": "^19.2.6",
     "string-width": "^8.2.1",
