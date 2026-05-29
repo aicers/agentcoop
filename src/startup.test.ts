@@ -58,7 +58,7 @@ const { runStartup, selectTarget, modelDisplayName, promptSquashApplyPolicy } =
 // ---------------------------------------------------------------------------
 
 const CLAUDE_TEST_MODELS = [
-  { name: "Claude Opus 4.6", value: "opus" },
+  { name: "Claude Opus 4.8", value: "opus" },
   { name: "Claude Sonnet 4.6", value: "sonnet" },
 ];
 
@@ -69,7 +69,7 @@ const CODEX_TEST_MODELS = [
 ];
 
 const MODEL_DISPLAY_NAMES: Record<string, string> = {
-  opus: "Claude Opus 4.6",
+  opus: "Claude Opus 4.8",
   sonnet: "Claude Sonnet 4.6",
   "gpt-5.5": "GPT-5.5",
   "gpt-5.4": "GPT-5.4",
@@ -738,7 +738,7 @@ describe("modelDisplayName", () => {
       contextWindow: "1m",
       effortLevel: "max",
     });
-    expect(name).toBe("Claude Opus 4.6 (1M) / Max");
+    expect(name).toBe("Claude Opus 4.8 (1M) / Max");
   });
 
   test("shows Max label for explicit Opus ID with max effort", () => {
@@ -1766,7 +1766,7 @@ describe("runStartup — quick-start", () => {
 
     const logs = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
     expect(logs).toContain("Found saved configuration:");
-    expect(logs).toContain("Agent A (author): Claude Opus 4.6 (1M) / High");
+    expect(logs).toContain("Agent A (author): Claude Opus 4.8 (1M) / High");
     expect(logs).toContain("Agent B (reviewer): GPT-5.5 / Extra High");
     expect(logs).toContain("Mode: auto");
     expect(logs).toContain("Language: English");

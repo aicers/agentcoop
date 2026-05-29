@@ -6,6 +6,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Claude Opus 4.8 (`claude-opus-4-8`) is now the default Opus model.
+  The `opus` alias display name was bumped from `Claude Opus 4.7` to
+  `Claude Opus 4.8`; the alias value is unchanged, so the Claude CLI
+  continues to resolve it to the latest Opus and the full Opus effort
+  range (`low`/`medium`/`high`/`xhigh`/`max`) remains available.
+  Closes #355.
+
 ### Changed
 
 - Stage 7 review prompts now omit content the reviewer has already

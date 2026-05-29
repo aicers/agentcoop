@@ -169,7 +169,7 @@ export function getModels(cli: CliType): ModelEntry[] {
  * Return `true` when the model value refers to a Claude Opus variant.
  *
  * Recognises the short alias (`"opus"`) and explicit IDs that follow
- * the `claude-opus-*` naming convention (e.g. `claude-opus-4-7`).
+ * the `claude-opus-*` naming convention (e.g. `claude-opus-4-8`).
  */
 export function isOpusModel(value: string): boolean {
   return value === "opus" || value.startsWith("claude-opus-");
