@@ -324,4 +324,42 @@ describe("checkMergeable", () => {
     // 1 initial + 5 retries = 6 total
     expect(query).toHaveBeenCalledTimes(6);
   });
+
+  test("throws immediately when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const query = vi.fn().mockReturnValue("UNKNOWN");
+    await expect(
+      checkMergeable("o", "r", "b", {
+        queryMergeable: query,
+        delay: noDelay,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow();
+    // Aborted before the first query — no retry loop ran.
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  test("stops the retry loop mid-backoff on abort", async () => {
+    const controller = new AbortController();
+    const query = vi.fn().mockReturnValue("UNKNOWN");
+    // Abort during the first backoff, then defer to the real abortable
+    // delay so the wait rejects as soon as the signal fires.
+    const { abortableDelay } = await import("./abortable-delay.js");
+    const delay = vi.fn().mockImplementation((ms: number) => {
+      controller.abort();
+      return abortableDelay(ms, controller.signal);
+    });
+    await expect(
+      checkMergeable("o", "r", "b", {
+        queryMergeable: query,
+        delay,
+        maxRetries: 5,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow();
+    // Queried once, slept once, then aborted — never queried again.
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(delay).toHaveBeenCalledTimes(1);
+  });
 });

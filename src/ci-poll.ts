@@ -7,6 +7,7 @@
  * across multiple stage handlers.
  */
 
+import { abortableDelay } from "./abortable-delay.js";
 import type { AgentAdapter } from "./agent.js";
 import type {
   BuildCiInspectionContextFn,
@@ -39,10 +40,6 @@ const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const DEFAULT_POLL_TIMEOUT_MS = 600_000; // 10 minutes
 const DEFAULT_MAX_FIX_ATTEMPTS = 3;
 const DEFAULT_EMPTY_RUNS_GRACE_PERIOD_MS = 60_000; // 1 minute
-
-function defaultDelay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 // ---- public types ------------------------------------------------------------
 
@@ -79,8 +76,12 @@ export interface CiPollOptions {
    * Default 60 000 (1 min).
    */
   emptyRunsGracePeriodMs?: number;
-  /** Injected for testability. Defaults to a real delay function. */
-  delay?: (ms: number) => Promise<void>;
+  /**
+   * Injected for testability.  Defaults to {@link abortableDelay}, which
+   * rejects early when `ctx.signal` aborts so a pending wait does not
+   * delay cancellation.
+   */
+  delay?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Pipeline event emitter for diagnostic events. */
   events?: PipelineEventEmitter;
   /**
@@ -158,14 +159,20 @@ async function waitForCi(
   getCiStatus: GetCiStatusFn,
   pollInterval: number,
   pollTimeout: number,
-  delay: (ms: number) => Promise<void>,
+  delay: (ms: number, signal?: AbortSignal) => Promise<void>,
   commitSha?: string,
   emptyRunsGracePeriod?: number,
   onStatus?: (verdict: string) => void,
+  signal?: AbortSignal,
 ): Promise<{ timedOut: boolean; ciStatus: CiStatus }> {
   const startTime = Date.now();
 
   while (true) {
+    // Bail out promptly on Ctrl+C instead of finishing the poll loop.
+    // The thrown abort propagates out so the pipeline unwinds through
+    // its normal cancelled path rather than reporting a CI failure.
+    signal?.throwIfAborted();
+
     let ciStatus: CiStatus;
     try {
       ciStatus = getCiStatus(owner, repo, branch, commitSha);
@@ -184,7 +191,7 @@ async function waitForCi(
           },
         };
       }
-      await delay(pollInterval);
+      await delay(pollInterval, signal);
       continue;
     }
 
@@ -211,7 +218,7 @@ async function waitForCi(
       return { timedOut: true, ciStatus };
     }
 
-    await delay(pollInterval);
+    await delay(pollInterval, signal);
   }
 }
 
@@ -232,9 +239,10 @@ export async function pollCiAndFix(
   const pollInterval = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const pollTimeout = options.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS;
   const maxFix = options.maxFixAttempts ?? DEFAULT_MAX_FIX_ATTEMPTS;
-  const delay = options.delay ?? defaultDelay;
+  const delay = options.delay ?? abortableDelay;
 
   const { ctx, agent, issueTitle, issueBody } = options;
+  const signal = ctx.signal;
   const readHeadSha = options.getHeadSha ?? defaultGetHeadSha;
   const emptyGrace =
     options.emptyRunsGracePeriodMs ?? DEFAULT_EMPTY_RUNS_GRACE_PERIOD_MS;
@@ -259,6 +267,11 @@ export async function pollCiAndFix(
     options.initialAgentASessionId ?? ctx.savedAgentASessionId;
 
   while (true) {
+    // Stop before starting another poll/fix iteration once the user
+    // has pressed Ctrl+C.  This guarantees no new agent invocation is
+    // started after abort, even if the CI verdict has since flipped.
+    signal?.throwIfAborted();
+
     // Read HEAD SHA from the worktree so we only consider CI runs
     // triggered by the most recent push (initial or fix).
     const commitSha = readHeadSha(ctx.worktreePath);
@@ -281,6 +294,7 @@ export async function pollCiAndFix(
           sha: commitSha,
           verdict,
         }),
+      signal,
     );
 
     // Close the polling session for this SHA.  Every `start` gets

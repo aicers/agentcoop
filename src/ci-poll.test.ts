@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { abortableDelay } from "./abortable-delay.js";
 import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
 import type { CiInspectionContext, CiRun, CiStatus, CiVerdict } from "./ci.js";
 import { type CiPollOptions, pollCiAndFix } from "./ci-poll.js";
@@ -1593,5 +1594,64 @@ describe("pollCiAndFix", () => {
       { action: "status", sha: "abc123", verdict: "pass" },
       { action: "done", sha: "abc123", verdict: "pass" },
     ]);
+  });
+
+  // -- cancellation -----------------------------------------------------------
+
+  describe("cancellation", () => {
+    test("exits immediately when the signal is already aborted", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      const ctx: StageContext = { ...BASE_CTX, signal: controller.signal };
+      const getCiStatus = vi
+        .fn()
+        .mockReturnValue(makeCiStatus("fail", [makeCiRun()]));
+      const opts = makeOpts({ ctx, getCiStatus });
+
+      await expect(pollCiAndFix(opts)).rejects.toThrow();
+      // Aborted before the first poll — no CI lookup, no agent run.
+      expect(getCiStatus).not.toHaveBeenCalled();
+      expect(opts.agent.invoke).not.toHaveBeenCalled();
+      expect(opts.agent.resume).not.toHaveBeenCalled();
+    });
+
+    test("stops mid-wait without polling again", async () => {
+      const controller = new AbortController();
+      const ctx: StageContext = { ...BASE_CTX, signal: controller.signal };
+      const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pending"));
+      // Abort while sleeping, then defer to the real abortable delay so
+      // the wait rejects as soon as the signal fires (no wall-clock wait).
+      const delay = vi.fn().mockImplementation((ms: number) => {
+        controller.abort();
+        return abortableDelay(ms, controller.signal);
+      });
+
+      await expect(
+        pollCiAndFix(makeOpts({ ctx, getCiStatus, delay })),
+      ).rejects.toThrow();
+      // Polled once, slept once, then aborted — never polled a 2nd time.
+      expect(getCiStatus).toHaveBeenCalledTimes(1);
+      expect(delay).toHaveBeenCalledTimes(1);
+    });
+
+    test("does not start a fix agent after abort even if CI flips to fail", async () => {
+      const controller = new AbortController();
+      const ctx: StageContext = { ...BASE_CTX, signal: controller.signal };
+      // First poll is pending; once aborted, CI would flip to fail — but
+      // the loop must not re-poll or invoke the agent.
+      const getCiStatus = vi
+        .fn()
+        .mockReturnValueOnce(makeCiStatus("pending"))
+        .mockReturnValue(makeCiStatus("fail", [makeCiRun()]));
+      const delay = vi.fn().mockImplementation((ms: number) => {
+        controller.abort();
+        return abortableDelay(ms, controller.signal);
+      });
+      const opts = makeOpts({ ctx, getCiStatus, delay });
+
+      await expect(pollCiAndFix(opts)).rejects.toThrow();
+      expect(opts.agent.invoke).not.toHaveBeenCalled();
+      expect(opts.agent.resume).not.toHaveBeenCalled();
+    });
   });
 });

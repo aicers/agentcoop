@@ -4,6 +4,25 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Ctrl+C now cancels the pipeline promptly while it is waiting on CI.
+  The CI polling and merge-readiness retry loops previously slept on a
+  plain `setTimeout` that ignored the abort signal, so cancellation
+  could be delayed until a poll interval elapsed, the poll timeout
+  expired (up to 10 minutes), or the CI verdict changed on its own.  A
+  new abort-aware delay helper rejects as soon as the signal fires, and
+  the affected loops (`waitForCi` and `pollCiAndFix` in `ci-poll.ts`,
+  the Stage 5 CI-check poll loop, and `checkMergeable`'s backoff) now
+  check the signal each iteration and around the delay.  As a result,
+  `pollCiAndFix` no longer starts a new agent invocation after the user
+  has requested cancellation, and the Done stage now forwards the abort
+  signal into `checkMergeable`.  Cancellation unwinds through the
+  pipeline's normal cancelled path rather than being reported as a CI
+  failure or timeout.  Closes #365.
+
 ## [0.6.0] - 2026-05-29
 
 ### Added

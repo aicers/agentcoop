@@ -16,6 +16,7 @@
  * long the stage waits for a pending CI run.
  */
 
+import { abortableDelay } from "./abortable-delay.js";
 import type { AgentAdapter } from "./agent.js";
 import type {
   BuildCiInspectionContextFn,
@@ -43,10 +44,6 @@ import { getHeadSha as defaultGetHeadSha } from "./worktree.js";
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const DEFAULT_POLL_TIMEOUT_MS = 600_000; // 10 minutes
 const DEFAULT_EMPTY_RUNS_GRACE_PERIOD_MS = 60_000; // 1 minute
-
-function defaultDelay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 // ---- public types ----------------------------------------------------------
 
@@ -78,8 +75,12 @@ export interface CiCheckStageOptions {
    * After this period, an empty "pass" is accepted.  Default 60 000.
    */
   emptyRunsGracePeriodMs?: number;
-  /** Injected for testability. Defaults to a real delay function. */
-  delay?: (ms: number) => Promise<void>;
+  /**
+   * Injected for testability.  Defaults to {@link abortableDelay}, which
+   * rejects early when `ctx.signal` aborts so a pending wait does not
+   * delay cancellation.
+   */
+  delay?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
 // ---- prompt body helpers ---------------------------------------------------
@@ -420,7 +421,7 @@ export function createCiCheckStageHandler(
   const pollTimeout = opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS;
   const emptyGrace =
     opts.emptyRunsGracePeriodMs ?? DEFAULT_EMPTY_RUNS_GRACE_PERIOD_MS;
-  const delay = opts.delay ?? defaultDelay;
+  const delay = opts.delay ?? abortableDelay;
 
   return {
     name: t()["stage.ciCheck"],
@@ -431,9 +432,16 @@ export function createCiCheckStageHandler(
 
       const startTime = Date.now();
 
+      const signal = ctx.signal;
       let ciStatus: CiStatus;
       let commitSha: string | undefined;
       while (true) {
+        // Bail out promptly on Ctrl+C instead of finishing the poll
+        // loop.  The thrown abort propagates out to the engine, which
+        // unwinds through its normal cancelled path rather than
+        // reporting a CI failure or timeout.
+        signal?.throwIfAborted();
+
         commitSha = readHeadSha(ctx.worktreePath);
 
         try {
@@ -450,7 +458,7 @@ export function createCiCheckStageHandler(
               message: t()["ci.pendingTimeout"](Math.round(pollTimeout / 1000)),
             };
           }
-          await delay(pollInterval);
+          await delay(pollInterval, signal);
           continue;
         }
 
@@ -472,7 +480,7 @@ export function createCiCheckStageHandler(
           };
         }
 
-        await delay(pollInterval);
+        await delay(pollInterval, signal);
       }
 
       const ref = commitSha ?? ctx.branch;

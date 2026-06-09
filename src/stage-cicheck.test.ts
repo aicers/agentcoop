@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { abortableDelay } from "./abortable-delay.js";
 import type { AgentAdapter, AgentResult, AgentStream } from "./agent.js";
 import type { CiInspectionContext, CiRun, CiStatus, CiVerdict } from "./ci.js";
 import type { StageContext } from "./pipeline.js";
@@ -850,5 +851,44 @@ describe("buildCiFindingsPrompt", () => {
     // 200 check-run IDs should still be small compared to inlining
     // 200 alert payloads.
     expect(prompt.length).toBeLessThan(8000);
+  });
+});
+
+// ---- cancellation ----------------------------------------------------------
+
+describe("createCiCheckStageHandler cancellation", () => {
+  test("exits immediately when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const ctx: StageContext = { ...BASE_CTX, signal: controller.signal };
+    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pending"));
+    const opts = makeOpts({ getCiStatus });
+    const stage = createCiCheckStageHandler(opts);
+
+    await expect(stage.handler(ctx)).rejects.toThrow();
+    // Aborted before the first poll — no CI lookup, no agent run.
+    expect(getCiStatus).not.toHaveBeenCalled();
+    expect(opts.agent.invoke).not.toHaveBeenCalled();
+  });
+
+  test("stops mid-wait without polling again", async () => {
+    const controller = new AbortController();
+    const ctx: StageContext = { ...BASE_CTX, signal: controller.signal };
+    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pending"));
+    // Abort while sleeping, then defer to the real abortable delay so
+    // the wait rejects as soon as the signal fires (no wall-clock wait).
+    const delay = vi.fn().mockImplementation((ms: number) => {
+      controller.abort();
+      return abortableDelay(ms, controller.signal);
+    });
+    const opts = makeOpts({ getCiStatus, delay });
+    const stage = createCiCheckStageHandler(opts);
+
+    await expect(stage.handler(ctx)).rejects.toThrow();
+    // Polled once, slept once, then aborted — never polled a 2nd time
+    // and never reported a CI failure or timeout.
+    expect(getCiStatus).toHaveBeenCalledTimes(1);
+    expect(delay).toHaveBeenCalledTimes(1);
+    expect(opts.agent.invoke).not.toHaveBeenCalled();
   });
 });
