@@ -6,6 +6,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Claude Fable 5 (`claude-fable-5`) is now a selectable default Claude
+  model, listed above Opus as the new top-tier model in the agent setup
+  picker.  Fable supports the full effort range
+  (`low`/`medium`/`high`/`xhigh`/`max`) and the extended 1M context
+  window, matching Opus.  Effort-level gating is now driven by a
+  `supportsExtendedEffort` predicate covering both Opus and Fable rather
+  than being hard-coded to Opus.  Closes #370.
+
 ### Fixed
 
 - Pressing Ctrl+C now cancels the pipeline promptly while it is waiting

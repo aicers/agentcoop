@@ -12,8 +12,8 @@ import {
   getDefaultModels,
   getModelDisplayName,
   getModels,
-  isOpusModel,
   setCustomModels,
+  supportsExtendedEffort,
 } from "./models.js";
 
 export interface TargetResult {
@@ -75,14 +75,16 @@ const CLAUDE_EFFORT_LEVELS = [
   { name: "High", value: "high" },
 ];
 
-const CLAUDE_OPUS_EFFORT_LEVELS = [
+const CLAUDE_EXTENDED_EFFORT_LEVELS = [
   ...CLAUDE_EFFORT_LEVELS,
   { name: "Extra high", value: "xhigh" },
   { name: "Max", value: "max" },
 ];
 
 function claudeEffortChoices(model: string) {
-  return isOpusModel(model) ? CLAUDE_OPUS_EFFORT_LEVELS : CLAUDE_EFFORT_LEVELS;
+  return supportsExtendedEffort(model)
+    ? CLAUDE_EXTENDED_EFFORT_LEVELS
+    : CLAUDE_EFFORT_LEVELS;
 }
 
 const CODEX_REASONING_LEVELS = [
