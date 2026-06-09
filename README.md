@@ -421,7 +421,8 @@ to register a model not in the default list. You are prompted for a
 model identifier (the `--model` CLI argument) and an optional display
 name. The entry is saved under `customModels` and appears in the
 model picker on subsequent runs. Default models are defined in
-`models.json` at the repository root.
+`models.json` at the repository root; the Claude defaults are
+Claude Fable 5, Claude Opus 4.8, and Claude Sonnet 4.6.
 
 ## Notifications
 

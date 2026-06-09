@@ -176,6 +176,17 @@ export function isOpusModel(value: string): boolean {
 }
 
 /**
+ * Return `true` when the model supports the extended effort levels
+ * (`xhigh` / `max`) in addition to the baseline `low`/`medium`/`high`.
+ *
+ * This covers Opus variants (see {@link isOpusModel}) as well as Fable
+ * (`claude-fable-*`), which verifies as supporting the full effort set.
+ */
+export function supportsExtendedEffort(value: string): boolean {
+  return isOpusModel(value) || value.startsWith("claude-fable-");
+}
+
+/**
  * Look up the display name for a model value, falling back to the raw
  * value when not found.
  */

@@ -39,14 +39,15 @@ vi.mock("./github.js", () => ({
 const mockGetDefaultModels = vi.fn();
 const mockGetModels = vi.fn();
 const mockGetModelDisplayName = vi.fn();
-const mockIsOpusModel = vi.fn();
+const mockSupportsExtendedEffort = vi.fn();
 const mockSetCustomModels = vi.fn();
 
 vi.mock("./models.js", () => ({
   getDefaultModels: (...args: unknown[]) => mockGetDefaultModels(...args),
   getModels: (...args: unknown[]) => mockGetModels(...args),
   getModelDisplayName: (...args: unknown[]) => mockGetModelDisplayName(...args),
-  isOpusModel: (...args: unknown[]) => mockIsOpusModel(...args),
+  supportsExtendedEffort: (...args: unknown[]) =>
+    mockSupportsExtendedEffort(...args),
   setCustomModels: (...args: unknown[]) => mockSetCustomModels(...args),
 }));
 
@@ -86,8 +87,11 @@ function setupModelMocks() {
   mockGetModelDisplayName.mockImplementation(
     (_cli: string, value: string) => MODEL_DISPLAY_NAMES[value] ?? value,
   );
-  mockIsOpusModel.mockImplementation(
-    (value: string) => value === "opus" || value.startsWith("claude-opus-"),
+  mockSupportsExtendedEffort.mockImplementation(
+    (value: string) =>
+      value === "opus" ||
+      value.startsWith("claude-opus-") ||
+      value.startsWith("claude-fable-"),
   );
 }
 
@@ -724,6 +728,35 @@ describe("runStartup — effort level choices", () => {
     expect(agentAValues).toContain("max");
     expect(agentAValues).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(result.agentA.effortLevel).toBe("max");
+  });
+
+  test("offers max effort for Fable (claude-fable-5)", async () => {
+    setupHappyPath();
+    mockSelect
+      .mockReset()
+      .mockResolvedValueOnce("aicers") // owner
+      .mockResolvedValueOnce("claude") // agent A CLI
+      .mockResolvedValueOnce("claude-fable-5") // agent A model — Fable
+      .mockResolvedValueOnce("1m") // agent A context window
+      .mockResolvedValueOnce("max") // agent A effort
+      .mockResolvedValueOnce("codex") // agent B CLI
+      .mockResolvedValueOnce("gpt-5.4") // agent B model
+      .mockResolvedValueOnce("high") // agent B effort
+      .mockResolvedValueOnce("auto") // execution mode
+      .mockResolvedValueOnce("en"); // language
+    mockConfirm.mockResolvedValueOnce(true);
+
+    const result = await runStartup();
+
+    // Effort prompt for Fable should include the full extended set
+    // index: 0=owner, 1=CLI, 2=model, 3=context, 4=effort
+    const agentAEffortCall = mockSelect.mock.calls[4][0];
+    const agentAValues = agentAEffortCall.choices.map(
+      (c: { value: string }) => c.value,
+    );
+    expect(agentAValues).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(result.agentA.effortLevel).toBe("max");
+    expect(result.agentA.contextWindow).toBe("1m");
   });
 });
 

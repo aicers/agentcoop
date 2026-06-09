@@ -790,6 +790,17 @@ describe("buildClaudeArgs", () => {
     expect(args).toContain("opus[1m]");
   });
 
+  test("passes Fable model through with the 1m suffix", () => {
+    const args = buildClaudeArgs({
+      model: "claude-fable-5",
+      contextWindow: "1m",
+    });
+
+    const modelIndex = args.indexOf("--model");
+    expect(modelIndex).toBeGreaterThanOrEqual(0);
+    expect(args[modelIndex + 1]).toBe("claude-fable-5[1m]");
+  });
+
   test("does not modify model when contextWindow is 200k", () => {
     const args = buildClaudeArgs({
       model: "opus",

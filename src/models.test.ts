@@ -9,6 +9,7 @@ import {
   loadModelsFile,
   ModelsLoadError,
   setCustomModels,
+  supportsExtendedEffort,
 } from "./models.js";
 
 const tmpDir = join(import.meta.dirname, "..", ".tmp-test-models");
@@ -284,6 +285,35 @@ describe("isOpusModel", () => {
     expect(isOpusModel("opus-extra")).toBe(false);
     expect(isOpusModel("my-opus")).toBe(false);
     expect(isOpusModel("claude-opus")).toBe(false);
+  });
+
+  test("does not classify Fable as Opus", () => {
+    expect(isOpusModel("claude-fable-5")).toBe(false);
+  });
+});
+
+// ---- supportsExtendedEffort -------------------------------------------------
+
+describe("supportsExtendedEffort", () => {
+  test("recognises Opus variants", () => {
+    expect(supportsExtendedEffort("opus")).toBe(true);
+    expect(supportsExtendedEffort("claude-opus-4-8")).toBe(true);
+  });
+
+  test("recognises Fable variants", () => {
+    expect(supportsExtendedEffort("claude-fable-5")).toBe(true);
+  });
+
+  test("rejects models without extended effort", () => {
+    expect(supportsExtendedEffort("sonnet")).toBe(false);
+    expect(supportsExtendedEffort("haiku")).toBe(false);
+    expect(supportsExtendedEffort("claude-sonnet-4-6")).toBe(false);
+    expect(supportsExtendedEffort("gpt-5.5")).toBe(false);
+  });
+
+  test("rejects partial matches", () => {
+    expect(supportsExtendedEffort("claude-fable")).toBe(false);
+    expect(supportsExtendedEffort("my-fable")).toBe(false);
   });
 });
 
