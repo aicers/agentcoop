@@ -733,6 +733,42 @@ describe("createCiCheckStageHandler", () => {
       .calls[0][0] as string;
     expect(invokedPrompt).toContain("Ignore the unused variable warnings");
   });
+
+  // -- cancellation -----------------------------------------------------------
+
+  test("exits before polling when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pending"));
+    const delay = vi.fn().mockResolvedValue(undefined);
+    const stage = createCiCheckStageHandler(makeOpts({ getCiStatus, delay }));
+
+    await expect(
+      stage.handler({ ...BASE_CTX, signal: controller.signal }),
+    ).rejects.toBe(controller.signal.reason);
+    // Aborted at the top of the poll loop — no CI poll, no delay.
+    expect(getCiStatus).not.toHaveBeenCalled();
+    expect(delay).not.toHaveBeenCalled();
+  });
+
+  test("stops mid-wait without a second poll", async () => {
+    const controller = new AbortController();
+    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pending"));
+    // Mirror abortableDelay: aborting during the wait rejects with the
+    // signal's reason rather than sleeping out the poll interval.
+    const delay = vi.fn().mockImplementation((_ms, signal: AbortSignal) => {
+      controller.abort();
+      return Promise.reject(signal.reason);
+    });
+    const stage = createCiCheckStageHandler(makeOpts({ getCiStatus, delay }));
+
+    await expect(
+      stage.handler({ ...BASE_CTX, signal: controller.signal }),
+    ).rejects.toBe(controller.signal.reason);
+    // One pending poll, one interrupted wait, then bail — no re-poll.
+    expect(getCiStatus).toHaveBeenCalledTimes(1);
+    expect(delay).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---- buildCiFindingsPrompt --------------------------------------------------

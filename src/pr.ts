@@ -4,6 +4,7 @@
  * Wraps `gh` CLI commands to query PR metadata.
  */
 
+import { abortableDelay } from "./abortable-delay.js";
 import { ghExec } from "./gh-exec.js";
 
 /**
@@ -85,18 +86,24 @@ export interface CheckMergeableOptions {
   maxRetries?: number;
   /** Initial backoff delay in ms (doubles each retry). Default 2 000. */
   initialDelayMs?: number;
-  /** Injected for testability.  Defaults to a real `setTimeout` delay. */
-  delay?: (ms: number) => Promise<void>;
+  /**
+   * Abort signal for cancellation.  When it fires while the retry loop
+   * is backing off, the loop stops promptly rather than waiting out the
+   * remaining delay.
+   */
+  signal?: AbortSignal;
+  /**
+   * Injected for testability.  Defaults to {@link abortableDelay}, which
+   * rejects promptly when `signal` fires instead of waiting out the
+   * backoff.
+   */
+  delay?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Injected for testability.  Defaults to `gh pr view`. */
   queryMergeable?: (
     owner: string,
     repo: string,
     branch: string,
   ) => MergeableState;
-}
-
-function defaultDelay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -192,18 +199,22 @@ export async function checkMergeable(
 ): Promise<MergeableState> {
   const maxRetries = options.maxRetries ?? 5;
   const initialDelay = options.initialDelayMs ?? 2_000;
-  const delay = options.delay ?? defaultDelay;
+  const delay = options.delay ?? abortableDelay;
   const query = options.queryMergeable ?? queryMergeableState;
+  const signal = options.signal;
 
   let backoff = initialDelay;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // Stop promptly on Ctrl+C rather than running out the backoff.
+    signal?.throwIfAborted();
+
     const state = query(owner, repo, branch);
     if (state !== "UNKNOWN") {
       return state;
     }
     if (attempt < maxRetries) {
-      await delay(backoff);
+      await delay(backoff, signal);
       backoff *= 2;
     }
   }
