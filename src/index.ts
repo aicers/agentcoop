@@ -933,7 +933,8 @@ try {
     ({ pollTimeoutMs }) =>
       createDoneStageHandler({
         events: emitter,
-        checkMergeable: async () => checkMergeable(owner, repo, wt.branch),
+        checkMergeable: async (ctx) =>
+          checkMergeable(owner, repo, wt.branch, { signal: ctx.signal }),
         queryPrState: async () => queryPrState(owner, repo, wt.branch),
         prompt: createDonePromptOptions(() => tuiPrompt),
         rebaseOntoMain: createRebaseHandler(agentA, defaultBranch),

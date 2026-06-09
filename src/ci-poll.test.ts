@@ -197,6 +197,54 @@ describe("pollCiAndFix", () => {
     vi.restoreAllMocks();
   });
 
+  // -- cancellation -----------------------------------------------------------
+
+  test("exits before polling or invoking the agent when already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const getCiStatus = vi
+      .fn()
+      .mockReturnValue(
+        makeCiStatus("fail", [makeCiRun({ conclusion: "failure" })]),
+      );
+    const delay = vi.fn().mockResolvedValue(undefined);
+    const opts = makeOpts({
+      ctx: { ...BASE_CTX, signal: controller.signal },
+      getCiStatus,
+      delay,
+    });
+
+    await expect(pollCiAndFix(opts)).rejects.toBe(controller.signal.reason);
+    // Aborted at the top of the loop — no CI poll, no delay, no agent.
+    expect(getCiStatus).not.toHaveBeenCalled();
+    expect(delay).not.toHaveBeenCalled();
+    expect(opts.agent.invoke).not.toHaveBeenCalled();
+    expect(opts.agent.resume).not.toHaveBeenCalled();
+  });
+
+  test("stops mid-wait without a second poll or any agent invocation", async () => {
+    const controller = new AbortController();
+    const getCiStatus = vi.fn().mockReturnValue(makeCiStatus("pending"));
+    // Mirror abortableDelay's contract: aborting during the wait rejects
+    // with the signal's reason instead of sleeping out the interval.
+    const delay = vi.fn().mockImplementation((_ms, signal: AbortSignal) => {
+      controller.abort();
+      return Promise.reject(signal.reason);
+    });
+    const opts = makeOpts({
+      ctx: { ...BASE_CTX, signal: controller.signal },
+      getCiStatus,
+      delay,
+    });
+
+    await expect(pollCiAndFix(opts)).rejects.toBe(controller.signal.reason);
+    // One pending poll, one interrupted wait, then bail — no re-poll.
+    expect(getCiStatus).toHaveBeenCalledTimes(1);
+    expect(delay).toHaveBeenCalledTimes(1);
+    expect(opts.agent.invoke).not.toHaveBeenCalled();
+    expect(opts.agent.resume).not.toHaveBeenCalled();
+  });
+
   // -- CI fails then fix succeeds ---------------------------------------------
 
   test("invokes agent with pointer-only context on CI failure, passes on next poll", async () => {
