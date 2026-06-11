@@ -285,7 +285,8 @@ export function useAgentLines(
   useEffect(() => {
     const handler = (ev: PipelineVerdictEvent) => {
       if (ev.agent !== agent) return;
-      pushDiagnostic.current(`Reviewer verdict parsed as "${ev.keyword}"`);
+      const label = ev.agent === "a" ? "Agent A" : "Agent B";
+      pushDiagnostic.current(`${label} verdict parsed as "${ev.keyword}"`);
     };
     emitter.on("pipeline:verdict", handler);
     return () => {

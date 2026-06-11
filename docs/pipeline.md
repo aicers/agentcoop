@@ -451,6 +451,9 @@ Based on your self-check above, decide what to do next.
 **Fix-or-done verdict follow-up:**
 
 ```text
+If any background tasks you started (test suites, etc.) are still
+running, wait for them to finish before replying.
+
 Reply with exactly one keyword (no commentary):
 FIXED if you found and fixed issues,
 DONE if everything looks good and no changes were needed.
@@ -978,6 +981,9 @@ If everything is verified and passing, you are done.
 **Test plan verdict follow-up:**
 
 ```text
+If any background tasks you started (test suites, etc.) are still
+running, wait for them to finish before replying.
+
 Reply with exactly one keyword (no commentary):
 FIXED if you found and fixed issues,
 DONE if everything is verified and passing with no changes needed.
@@ -1839,8 +1845,11 @@ the rebase (`git rebase --abort`) and report failure.
 **Verdict follow-up:**
 
 ```text
-You have finished the rebase attempt.
-Respond with exactly one of the following keywords:
+Before answering: if any background tasks you started (test suites,
+etc.) are still running, wait for them to finish — and complete any
+remaining step such as the force-push — before you reply.
+
+Then respond with exactly one of the following keywords:
 
 - COMPLETED — if the rebase succeeded and was force-pushed
 - BLOCKED — if you could not resolve conflicts or tests failed

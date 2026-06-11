@@ -3836,10 +3836,10 @@ describe("renderDiagnosticRow", () => {
     const row = renderDiagnosticRow({
       kind: "diagnostic",
       timestamp: "01:03:15",
-      message: 'Reviewer verdict parsed as "APPROVED"',
+      message: 'Agent B verdict parsed as "APPROVED"',
     });
     expect(row).toBe(
-      '[01:03:15] Pipeline: Reviewer verdict parsed as "APPROVED"',
+      '[01:03:15] Pipeline: Agent B verdict parsed as "APPROVED"',
     );
   });
 
