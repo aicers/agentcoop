@@ -147,6 +147,9 @@ export const TEST_PLAN_VERDICT_KEYWORDS = ["FIXED", "DONE"] as const;
 
 export function buildTestPlanVerdictPrompt(): string {
   return [
+    `If any background tasks you started (test suites, etc.) are still`,
+    `running, wait for them to finish before replying.`,
+    ``,
     `Reply with exactly one keyword (no commentary):`,
     `FIXED if you found and fixed issues,`,
     `DONE if everything is verified and passing with no changes needed.`,

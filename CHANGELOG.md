@@ -4,6 +4,24 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The verdict follow-up no longer coerces an agent into a false `BLOCKED`
+  (or premature `DONE`) when harness-tracked background tasks it started
+  (test suites, etc.) are still running.  The verdict turn is a resumed
+  live session, so the rebase (`COMPLETED`/`BLOCKED`), self-check, and
+  test-plan (`FIXED`/`DONE`) verdict prompts now instruct the agent to
+  wait for any background tasks to finish — and, for rebase, to complete
+  any remaining step such as the force-push — before replying.  No new
+  keywords, parser states, or pipeline control-flow are introduced.
+  Closes #374.
+- The TUI verdict diagnostic now names the agent ("Agent A" / "Agent B")
+  using the event's `agent` field instead of unconditionally labelling
+  every `pipeline:verdict` event "Reviewer", matching the run-log sink.
+  Part of #374.
+
 ## [0.7.0] - 2026-06-10
 
 ### Added

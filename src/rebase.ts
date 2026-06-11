@@ -84,8 +84,11 @@ export function buildRebasePrompt(
 
 export function buildRebaseVerdictPrompt(): string {
   return [
-    `You have finished the rebase attempt.`,
-    `Respond with exactly one of the following keywords:`,
+    `Before answering: if any background tasks you started (test suites,`,
+    `etc.) are still running, wait for them to finish — and complete any`,
+    `remaining step such as the force-push — before you reply.`,
+    ``,
+    `Then respond with exactly one of the following keywords:`,
     ``,
     `- COMPLETED — if the rebase succeeded and was force-pushed`,
     `- BLOCKED — if you could not resolve conflicts or tests failed`,

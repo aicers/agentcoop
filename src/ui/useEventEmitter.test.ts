@@ -147,7 +147,8 @@ function createLineAccumulator(
 
   on<PipelineVerdictEvent>("pipeline:verdict", (ev) => {
     if (ev.agent !== agent) return;
-    pushDiagnostic(`Reviewer verdict parsed as "${ev.keyword}"`);
+    const label = ev.agent === "a" ? "Agent A" : "Agent B";
+    pushDiagnostic(`${label} verdict parsed as "${ev.keyword}"`);
   });
 
   on<PipelineLoopEvent>("pipeline:loop", (ev) => {
@@ -476,7 +477,7 @@ describe("diagnostic event routing", () => {
     expect(diagnostics(accA.getLines())).toEqual([]);
     const bDiags = diagnostics(accB.getLines());
     expect(bDiags).toHaveLength(1);
-    expect(bDiags[0].message).toBe('Reviewer verdict parsed as "APPROVED"');
+    expect(bDiags[0].message).toBe('Agent B verdict parsed as "APPROVED"');
 
     accA.cleanup();
     accB.cleanup();
@@ -771,7 +772,7 @@ describe("diagnostic event routing", () => {
     expect(lines[0]).toBe("partial");
     expect(lines[1]).toMatchObject({
       kind: "diagnostic",
-      message: 'Reviewer verdict parsed as "APPROVED"',
+      message: 'Agent A verdict parsed as "APPROVED"',
     });
     expect(acc.getBuffer()).toBe("");
 

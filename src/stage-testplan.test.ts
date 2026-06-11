@@ -185,6 +185,12 @@ describe("buildTestPlanVerdictPrompt", () => {
     expect(prompt).toContain("FIXED");
     expect(prompt).toContain("DONE");
   });
+
+  test("instructs the agent to wait for background tasks", () => {
+    const prompt = buildTestPlanVerdictPrompt();
+    expect(prompt).toContain("background tasks");
+    expect(prompt).toContain("wait for them to finish");
+  });
 });
 
 // ---- TEST_PLAN_VERDICT_KEYWORDS --------------------------------------------

@@ -71,6 +71,12 @@ describe("buildRebaseVerdictPrompt", () => {
     expect(prompt).not.toContain("git fetch");
     expect(prompt).not.toContain("git rebase");
   });
+
+  test("instructs the agent to wait for background tasks", () => {
+    const prompt = buildRebaseVerdictPrompt();
+    expect(prompt).toContain("background tasks");
+    expect(prompt).toContain("wait for them to finish");
+  });
 });
 
 // ---- createRebaseHandler ---------------------------------------------------
